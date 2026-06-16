@@ -15,17 +15,19 @@ export const DocsLayout = ({ tree, children }: DocsLayoutProps) => (
     }}
     tree={tree}
   >
-    <div className="mb-6 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-gray-900 text-sm">
-      <span className="font-medium text-amber-800">Public preview:</span> Eve is currently a preview
-      and subject to the{" "}
-      <a
-        className="font-medium underline underline-offset-2"
-        href="https://vercel.com/docs/release-phases/public-beta-agreement"
-      >
-        Vercel beta terms
-      </a>
-      ; the framework, APIs, documentation, and behavior may change before general availability.
-    </div>
+    <aside className="mx-auto w-full max-w-[900px] px-4 pt-6 md:px-6 md:pt-8 xl:px-8 xl:pt-10 [grid-column:main]">
+      <div className="border-amber-600 border-l pl-4 text-gray-900 text-sm leading-6">
+        <span className="font-medium text-gray-1000">Public preview.</span> Eve is currently a
+        preview and subject to the{" "}
+        <a
+          className="font-medium text-gray-1000 underline decoration-gray-600/40 underline-offset-4 transition-colors hover:decoration-gray-1000"
+          href="https://vercel.com/docs/release-phases/public-beta-agreement"
+        >
+          Vercel beta terms
+        </a>
+        ; the framework, APIs, documentation, and behavior may change before general availability.
+      </div>
+    </aside>
     {children}
   </PackageDocsLayout>
 );
