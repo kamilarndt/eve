@@ -1,4 +1,9 @@
 import type * as Vercel from "#compiled/@vercel/sandbox/index.js";
+import type {
+  ResolvedSandboxCredentials,
+  SandboxCredentialMap,
+} from "#public/sandbox/credentials.js";
+import type { SandboxNetworkPolicy } from "#shared/sandbox-network-policy.js";
 
 type VercelCreateOptions = NonNullable<Parameters<typeof Vercel.Sandbox.create>[0]>;
 
@@ -38,7 +43,36 @@ type VercelSandboxAuthorCreateOptions<T> = T extends unknown
  * snapshot, force a template rebuild (e.g. by changing the sandbox
  * definition so its template key changes).
  */
-export type VercelSandboxCreateOptions = VercelSandboxAuthorCreateOptions<VercelCreateOptions>;
+/**
+ * Static network policy or a per-step builder receiving brokered credentials.
+ */
+export type VercelSandboxNetworkPolicy<C extends SandboxCredentialMap> =
+  | SandboxNetworkPolicy
+  | ((credentials: ResolvedSandboxCredentials<C>) => SandboxNetworkPolicy);
+
+/**
+ * Options accepted by `vercel(opts)`.
+ *
+ * The Vercel SDK create options remain available, while `credentials` and a
+ * function-form `networkPolicy` opt into Eve-managed credential brokering.
+ */
+export type VercelSandboxCreateOptions<C extends SandboxCredentialMap = Record<string, never>> =
+  Omit<VercelSandboxAuthorCreateOptions<VercelCreateOptions>, "networkPolicy"> & {
+    /**
+     * Non-interactive credentials resolved for the active principal on every
+     * step. Tokens are injected by the Vercel Sandbox firewall and never enter
+     * the sandbox filesystem or environment.
+     */
+    readonly credentials?: C;
+    /**
+     * Static policy, or a builder called with the resolved credentials.
+     *
+     * A function-form policy requires at least one credential. Unavailable
+     * credentials are represented by an empty token so stale credentials are
+     * replaced while the authored egress restrictions remain in force.
+     */
+    readonly networkPolicy?: VercelSandboxNetworkPolicy<NoInfer<C>>;
+  };
 
 /**
  * Options accepted by the Vercel backend's `bootstrap({ use })` hook.
