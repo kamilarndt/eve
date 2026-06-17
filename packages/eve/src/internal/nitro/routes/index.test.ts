@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildHomePageResponse } from "#internal/nitro/routes/index.js";
 
@@ -7,6 +7,10 @@ function buildResponseForRequest(url: string, headers?: Record<string, string>):
 }
 
 describe("buildHomePageResponse", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("returns a barebones HTML response", () => {
     const response = buildResponseForRequest("https://my-agent.example.com/");
 
@@ -48,6 +52,28 @@ describe("buildHomePageResponse", () => {
 
     expect(body).toContain("eve dev https://public.example");
     expect(body).not.toContain("internal-edge");
+  });
+
+  it("hints at `vercel link` on Vercel preview and production deployments", async () => {
+    for (const environment of ["preview", "production"]) {
+      vi.stubEnv("VERCEL_ENV", environment);
+      const body = await buildResponseForRequest("https://my-agent.example.com/").text();
+
+      expect(body, environment).toContain("vercel link");
+      expect(body, environment).toContain("VERCEL_OIDC_TOKEN");
+      expect(body, environment).not.toContain("{{REMOTE_HINT}}");
+    }
+  });
+
+  it("omits the `vercel link` hint when not a Vercel deployment", async () => {
+    // `eve dev` leaves VERCEL_ENV unset; `vercel dev` reports "development".
+    for (const environment of [undefined, "development"] as const) {
+      vi.stubEnv("VERCEL_ENV", environment);
+      const body = await buildResponseForRequest("https://my-agent.example.com/").text();
+
+      expect(body, String(environment)).not.toContain("vercel link");
+      expect(body, String(environment)).not.toContain("{{REMOTE_HINT}}");
+    }
   });
 
   it("escapes HTML metacharacters from the host", async () => {

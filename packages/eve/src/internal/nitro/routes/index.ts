@@ -9,6 +9,23 @@ const EVE_DOCS_URL = "https://beta.eve.dev/docs";
 
 const DEPLOYMENT_URL_PLACEHOLDER = "{{DEPLOYMENT_URL}}";
 
+const REMOTE_HINT_PLACEHOLDER = "{{REMOTE_HINT}}";
+
+/**
+ * Note shown only when the visitor reached a deployed (non-local) URL.
+ *
+ * Connecting the TUI to a remote eve goes through the Vercel OIDC auth
+ * chain: without it the connection fails with "Authorization is required
+ * for this route." `eve dev` reads that token from a linked project (the
+ * `.vercel` directory written by `vercel link`) or from `VERCEL_OIDC_TOKEN`,
+ * so a fresh clone — or any directory that was never linked — has to link
+ * first.
+ */
+const REMOTE_HINT_HTML =
+  '<p class="hint">Connecting to a deployed agent? Run ' +
+  '<span class="hint-cmd mono">vercel link</span> in your project first to ' +
+  'authenticate (or set <span class="hint-cmd mono">VERCEL_OIDC_TOKEN</span>).</p>';
+
 /**
  * Barebones HTML served at `GET /`.
  *
@@ -162,6 +179,14 @@ const HOME_PAGE_HTML_TEMPLATE = `<!doctype html>
     flex-shrink: 0;
   }
   .terminal-cmd { color: var(--fg); }
+  .hint {
+    margin: 1rem auto 0;
+    max-width: 28rem;
+    color: var(--faint);
+    font-size: 0.75rem;
+    text-align: center;
+  }
+  .hint-cmd { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -176,6 +201,7 @@ const HOME_PAGE_HTML_TEMPLATE = `<!doctype html>
     <span class="terminal-prompt" aria-hidden="true">$</span>
     <span class="terminal-cmd">eve dev ${DEPLOYMENT_URL_PLACEHOLDER}</span>
   </div>
+  ${REMOTE_HINT_PLACEHOLDER}
 </main>
 </body>
 </html>
@@ -223,16 +249,26 @@ function resolveDeploymentUrl(request: Request): string {
 }
 
 /**
+ * Reports whether the page is being served from a Vercel preview or
+ * production deployment.
+ */
+function isVercelHostedDeployment(): boolean {
+  const environment = process.env.VERCEL_ENV;
+  return environment === "preview" || environment === "production";
+}
+
+/**
  * Builds the barebones home page response for one request. Exposed
  * for tests so callers can supply a real {@link Request}; production
  * traffic flows through the Nitro {@link H3Event} default export.
  */
 export function buildHomePageResponse(request: Request): Response {
   const deploymentUrl = resolveDeploymentUrl(request);
+  const remoteHint = isVercelHostedDeployment() ? REMOTE_HINT_HTML : "";
   const html = HOME_PAGE_HTML_TEMPLATE.replace(
     DEPLOYMENT_URL_PLACEHOLDER,
     escapeHtml(deploymentUrl),
-  );
+  ).replace(REMOTE_HINT_PLACEHOLDER, remoteHint);
 
   return new Response(html, {
     headers: {
