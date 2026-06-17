@@ -40,6 +40,7 @@ import { devBootPhase } from "#internal/dev-boot-progress.js";
 
 const MAX_ALLOWED_DEVELOPMENT_SERVER_PORT = 65_535;
 const WORKFLOW_LOCAL_BASE_URL_ENV = "WORKFLOW_LOCAL_BASE_URL";
+const WORKFLOW_LOCAL_DATA_DIR_ENV = "WORKFLOW_LOCAL_DATA_DIR";
 const PORT_ENV = "PORT";
 const DEVELOPMENT_PROCESS_ID_FILE = "dev-process.pid";
 const DEVELOPMENT_SERVER_METADATA_FILE = "dev-server.json";
@@ -338,12 +339,14 @@ function resolveDevelopmentServerPorts(input: {
   return ports as [number, ...number[]];
 }
 
-function installWorkflowLocalQueueEnvironment(serverUrl: string): () => void {
+function installWorkflowLocalQueueEnvironment(appRoot: string, serverUrl: string): () => void {
   const previousWorkflowLocalBaseUrl = process.env[WORKFLOW_LOCAL_BASE_URL_ENV];
+  const previousWorkflowLocalDataDir = process.env[WORKFLOW_LOCAL_DATA_DIR_ENV];
   const previousPort = process.env[PORT_ENV];
   const url = new URL(normalizeDevelopmentServerClientUrl(serverUrl));
 
   process.env[WORKFLOW_LOCAL_BASE_URL_ENV] = url.origin;
+  process.env[WORKFLOW_LOCAL_DATA_DIR_ENV] = join(appRoot, ".workflow-data");
   if (url.port) {
     process.env[PORT_ENV] = url.port;
   }
@@ -353,6 +356,12 @@ function installWorkflowLocalQueueEnvironment(serverUrl: string): () => void {
       delete process.env[WORKFLOW_LOCAL_BASE_URL_ENV];
     } else {
       process.env[WORKFLOW_LOCAL_BASE_URL_ENV] = previousWorkflowLocalBaseUrl;
+    }
+
+    if (previousWorkflowLocalDataDir === undefined) {
+      delete process.env[WORKFLOW_LOCAL_DATA_DIR_ENV];
+    } else {
+      process.env[WORKFLOW_LOCAL_DATA_DIR_ENV] = previousWorkflowLocalDataDir;
     }
 
     if (previousPort === undefined) {
@@ -534,7 +543,10 @@ export async function startDevelopmentServer(
 
     const serverUrl = normalizeDevelopmentServerClientUrl(server.url);
     await writeDevelopmentServerMetadata(preparedHost.appRoot, serverUrl);
-    restoreWorkflowLocalQueueEnvironment = installWorkflowLocalQueueEnvironment(serverUrl);
+    restoreWorkflowLocalQueueEnvironment = installWorkflowLocalQueueEnvironment(
+      preparedHost.appRoot,
+      serverUrl,
+    );
     await devBootPhase(
       "building dev bundle",
       async () => {

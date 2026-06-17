@@ -10,8 +10,9 @@ export function createClientUrl(
   routePath: string,
   searchParams?: Readonly<Record<string, string>>,
 ): string {
-  const normalizedRoute = routePath.startsWith("/") ? routePath : `/${routePath}`;
-  const search = formatSearch(searchParams);
+  const route = splitRoutePath(routePath);
+  const normalizedRoute = route.pathname.startsWith("/") ? route.pathname : `/${route.pathname}`;
+  const search = formatSearch(route.search, searchParams);
 
   if (isAbsoluteUrl(host)) {
     const url = new URL(host);
@@ -34,10 +35,31 @@ function trimTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
-function formatSearch(searchParams: Readonly<Record<string, string>> | undefined): string {
-  if (!searchParams || Object.keys(searchParams).length === 0) {
-    return "";
+function splitRoutePath(routePath: string): { readonly pathname: string; readonly search: string } {
+  const hashIndex = routePath.indexOf("#");
+  const withoutHash = hashIndex === -1 ? routePath : routePath.slice(0, hashIndex);
+  const searchIndex = withoutHash.indexOf("?");
+  if (searchIndex === -1) {
+    return { pathname: withoutHash, search: "" };
+  }
+  return {
+    pathname: withoutHash.slice(0, searchIndex),
+    search: withoutHash.slice(searchIndex),
+  };
+}
+
+function formatSearch(
+  routeSearch: string,
+  searchParams: Readonly<Record<string, string>> | undefined,
+): string {
+  const params = new URLSearchParams(routeSearch);
+
+  if (searchParams !== undefined) {
+    for (const [key, value] of Object.entries(searchParams)) {
+      params.set(key, value);
+    }
   }
 
-  return `?${new URLSearchParams(searchParams).toString()}`;
+  const formatted = params.toString();
+  return formatted.length > 0 ? `?${formatted}` : "";
 }

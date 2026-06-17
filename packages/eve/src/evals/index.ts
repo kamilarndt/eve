@@ -26,6 +26,7 @@ export type {
   AssertionResult,
   AssertionSeverity,
   AutoevalsJudges,
+  EveEvalAuthorizationInput,
   EveEvalContext,
   EveEvalDerivedFacts,
   EveEvalJudgeConfig,
