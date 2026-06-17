@@ -205,23 +205,26 @@ To narrow a caught error, use `isConnectionAuthorizationRequiredError(err)` and 
 
 ### Handling a revoked token mid-call
 
-`getToken` only runs _before_ a tool call, so a grant revoked while a tool is mid-flight first surfaces as a downstream `401` inside your `execute`. A plain throw there is only a tool error, so the model sees a failure and the cached bearer sticks around. Instead, map a provider `401` to `ctx.requireAuth()` (or rethrow `ConnectionAuthorizationRequiredError`). eve then evicts the rejected token from its per-step cache and re-runs the consent flow with a fresh one, exactly as it does for a connection whose server rejects the bearer.
+`getToken` only runs _before_ a tool call, so a grant revoked while a tool is mid-flight first surfaces as a downstream `401` inside your `execute`. A plain throw there is only a tool error, so the model sees a failure and the cached bearer sticks around. Instead, map a provider `401` to `ctx.requireAuth()` for a tool's declared `auth`, or `ctx.requireAuth(provider)` for an inline provider. eve then evicts the rejected token from its per-step cache and re-runs the consent flow with a fresh one, exactly as it does for a connection whose server rejects the bearer.
 
 ```ts title="agent/tools/list_issues.ts"
+import { connect } from "@vercel/connect/eve";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
+
+const linearAuth = connect("oauth/linear");
 
 export default defineTool({
   description: "List open Linear issues.",
   inputSchema: z.object({}),
   async execute(_input, ctx) {
-    const { token } = await ctx.getToken();
+    const { token } = await ctx.getToken(linearAuth);
     const res = await fetch("https://api.linear.app/graphql", {
       headers: { authorization: `Bearer ${token}` },
     });
     // The grant was revoked since getToken ran: re-challenge instead of
     // returning a dead-token error to the model.
-    if (res.status === 401) ctx.requireAuth();
+    if (res.status === 401) ctx.requireAuth(linearAuth);
     return await res.json();
   },
 });

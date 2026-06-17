@@ -11,6 +11,8 @@ export {
   isDisabledToolSentinel,
   isEnableWorkflowToolSentinel,
   type NeedsApprovalContext,
+  type ToolAuthProvider,
+  type ToolAuthScopeOptions,
   type ToolDefinition,
   type ToolContext,
   type ToolModelOutput,

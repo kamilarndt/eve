@@ -56,13 +56,15 @@ A few non-`define*` helpers round out the set: `disableTool` and `ExperimentalWo
 
 `ctx` is passed to your tool `execute`, hook handlers, and channel event handlers. It is live only while authored code is running, so reaching for it at module top level throws. See [Session context](../guides/session-context) for the full model.
 
-| Member                     | Use                                                                           |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| `ctx.session`              | Current session, turn, auth, and optional parent lineage (read-only)          |
-| `ctx.getSandbox()`         | Live sandbox handle for the current agent                                     |
-| `ctx.getSkill(identifier)` | Handle for a named skill visible to the current agent                         |
-| `ctx.getToken()`           | Resolve the bearer token for a tool's declared `auth` (throws without `auth`) |
-| `ctx.requireAuth()`        | Force the tool's authorization flow before proceeding                         |
+| Member                      | Use                                                                           |
+| --------------------------- | ----------------------------------------------------------------------------- |
+| `ctx.session`               | Current session, turn, auth, and optional parent lineage (read-only)          |
+| `ctx.getSandbox()`          | Live sandbox handle for the current agent                                     |
+| `ctx.getSkill(identifier)`  | Handle for a named skill visible to the current agent                         |
+| `ctx.getToken()`            | Resolve the bearer token for a tool's declared `auth` (throws without `auth`) |
+| `ctx.getToken(provider)`    | Resolve a bearer token for an inline auth provider such as `connect("...")`   |
+| `ctx.requireAuth()`         | Force the tool's declared authorization flow before proceeding                |
+| `ctx.requireAuth(provider)` | Re-challenge an inline provider, commonly after a downstream `401`            |
 
 ## Imports at a glance
 

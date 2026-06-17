@@ -6,6 +6,7 @@ import type { SessionContext } from "#public/definitions/callback-context.js";
 import type { JsonObject } from "#shared/json.js";
 import type {
   AuthorizationDefinition,
+  ConnectionAuthorizationContext,
   NonInteractiveAuthorizationDefinition,
   TokenResult,
 } from "#runtime/connections/types.js";
@@ -50,13 +51,29 @@ export type ToolAuthDefinition =
     })
   | AuthorizationDefinition;
 
+export type ToolAuthProvider = ToolAuthDefinition;
+
+/**
+ * Controls how an inline tool auth provider is scoped and presented.
+ *
+ * The scope keys token caches, callback URLs, pending authorization state,
+ * and authorization completion. When omitted, eve derives a stable
+ * tool-qualified scope from the provider metadata.
+ */
+export interface ToolAuthScopeOptions {
+  readonly connection?: ConnectionAuthorizationContext;
+  readonly displayName?: string;
+  readonly scope?: string;
+}
+
 /**
  * Authored tool context. Passed as the last argument to
  * {@link ToolDefinition.execute}.
  *
- * Extends {@link SessionContext} with token accessors. {@link getToken} and
- * {@link requireAuth} only do useful work when the tool declares `auth`;
- * calling them on a tool without `auth` throws.
+ * Extends {@link SessionContext} with token accessors. Without arguments,
+ * {@link getToken} and {@link requireAuth} use the tool's declared `auth`;
+ * calling them on a tool without `auth` throws. Passing a provider resolves
+ * that provider inline, which lets one tool use multiple credentials.
  */
 export type ToolContext = SessionContext & {
   /**
@@ -72,6 +89,12 @@ export type ToolContext = SessionContext & {
    */
   getToken(): Promise<TokenResult>;
   /**
+   * Resolves the bearer token for an inline provider. This accepts the same
+   * auth shapes as a tool's top-level `auth` field, including
+   * `connect("...")` from `@vercel/connect/eve`.
+   */
+  getToken(provider: ToolAuthProvider, options?: ToolAuthScopeOptions): Promise<TokenResult>;
+  /**
    * Signals that the caller must complete this tool's authorization flow
    * before proceeding. Throws `ConnectionAuthorizationRequiredError`, which
    * the runtime converts into a consent prompt (for interactive strategies)
@@ -79,6 +102,12 @@ export type ToolContext = SessionContext & {
    * authorization without resolving a token first.
    */
   requireAuth(): never;
+  /**
+   * Signals that the caller must complete authorization for an inline
+   * provider before proceeding. Use this after a downstream `401` rejects a
+   * token returned by {@link getToken}.
+   */
+  requireAuth(provider: ToolAuthProvider, options?: ToolAuthScopeOptions): never;
 };
 
 /**
