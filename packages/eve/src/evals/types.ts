@@ -196,6 +196,16 @@ export interface EveEvalSession {
 }
 
 /**
+ * One expected connection authorization callback for {@link EveEvalContext.authorize}.
+ */
+export interface EveEvalAuthorizationInput {
+  /** Provider-scoped authorization name from the `authorization.required` stream event. */
+  readonly name: string;
+  /** Query params to deliver to the framework callback route. Defaults to `{ code: "authorized" }`. */
+  readonly params?: Readonly<Record<string, string>>;
+}
+
+/**
  * One completed eval-driver turn.
  */
 export interface EveEvalTurn {
@@ -278,6 +288,15 @@ export interface EveEvalContext extends EveEvalSession {
   sleep(ms?: number): Promise<void>;
   /** Create an additional independent session against the same target. */
   newSession(): EveEvalSession;
+  /**
+   * Send one turn that is expected to emit connection authorization requests,
+   * complete those callbacks through their real `webhookUrl`s, and then read
+   * the resumed turn to a normal boundary.
+   */
+  authorize(
+    input: SendTurnInput,
+    authorizations: readonly EveEvalAuthorizationInput[],
+  ): Promise<EveEvalTurn>;
 
   // Run-level assertions (lazy: evaluated against the final run; default gate).
   completed(): AssertionHandle;

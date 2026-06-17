@@ -195,6 +195,7 @@ describe("startDevelopmentServer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.WORKFLOW_LOCAL_BASE_URL;
+    delete process.env.WORKFLOW_LOCAL_DATA_DIR;
     delete process.env.PORT;
     delete process.env.EVE_DEVELOPMENT_SANDBOX_RUN_ID;
     mocks.files.clear();
@@ -216,6 +217,7 @@ describe("startDevelopmentServer", () => {
 
   afterEach(() => {
     delete process.env.WORKFLOW_LOCAL_BASE_URL;
+    delete process.env.WORKFLOW_LOCAL_DATA_DIR;
     delete process.env.PORT;
     delete process.env.EVE_DEVELOPMENT_SANDBOX_RUN_ID;
     mocks.files.clear();
@@ -243,6 +245,7 @@ describe("startDevelopmentServer", () => {
     });
     expect(mocks.pruneLocalSandboxTemplatesInBackground).toHaveBeenCalledWith("/tmp/eve-test");
     expect(process.env.WORKFLOW_LOCAL_BASE_URL).toBe("http://127.0.0.1:42123");
+    expect(process.env.WORKFLOW_LOCAL_DATA_DIR).toBe("/tmp/eve-test/.workflow-data");
     expect(process.env.PORT).toBe("42123");
 
     await server.close();
@@ -253,6 +256,7 @@ describe("startDevelopmentServer", () => {
       log: expect.any(Function),
     });
     expect(process.env.WORKFLOW_LOCAL_BASE_URL).toBeUndefined();
+    expect(process.env.WORKFLOW_LOCAL_DATA_DIR).toBeUndefined();
     expect(process.env.PORT).toBeUndefined();
     expect(process.env.EVE_DEVELOPMENT_SANDBOX_RUN_ID).toBeUndefined();
   });

@@ -54,6 +54,10 @@ export function createEvalContext(deps: {
     expectInputRequests: (filter) => primary().expectInputRequests(filter),
     respond: (...responses) => primary().respond(...responses),
     respondAll: (optionId) => primary().respondAll(optionId),
+    authorize: (input, authorizations) => {
+      lastPrompt = promptText(input);
+      return primary().authorize(input, authorizations, deps.target);
+    },
     send: (input) => {
       lastPrompt = promptText(input);
       return primary().send(input);

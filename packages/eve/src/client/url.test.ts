@@ -24,4 +24,13 @@ describe("createClientUrl", () => {
       "/api/eve/v1/session/123/stream?startIndex=4",
     );
   });
+
+  it("preserves query strings already present in route paths", () => {
+    expect(createClientUrl("https://agent.example.com", "/eve/v1/callback/tok?code=abc")).toBe(
+      "https://agent.example.com/eve/v1/callback/tok?code=abc",
+    );
+    expect(createClientUrl("/api", "/eve/v1/callback/tok?code=abc", { state: "xyz" })).toBe(
+      "/api/eve/v1/callback/tok?code=abc&state=xyz",
+    );
+  });
 });

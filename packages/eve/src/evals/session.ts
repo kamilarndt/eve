@@ -1,11 +1,16 @@
 import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import { createTextWithFileContent } from "#client/file-parts.js";
 import type { Client } from "#client/client.js";
 import type { ClientSession } from "#client/session.js";
 import type { SendTurnInput, SendTurnPayload, SessionState } from "#client/types.js";
-import type { HandleMessageStreamEvent, TurnFailureStreamEvent } from "#protocol/message.js";
+import type {
+  AuthorizationRequiredStreamEvent,
+  HandleMessageStreamEvent,
+  TurnFailureStreamEvent,
+} from "#protocol/message.js";
 import { isCurrentTurnBoundaryEvent, isTurnFailureEvent } from "#protocol/message.js";
 import {
   deriveResultStatus,
@@ -16,11 +21,16 @@ import { extractCompletedResult } from "#client/output-schema.js";
 import type { InputRequest, InputResponse } from "#runtime/input/types.js";
 import { deriveRunFacts } from "#evals/runner/derive-run-facts.js";
 import type {
+  EveEvalAuthorizationInput,
   EveEvalSession,
   EveEvalSessionResult,
+  EveEvalTargetHandle,
   EveEvalToolCall,
   EveEvalTurn,
 } from "#evals/types.js";
+
+const AUTH_CALLBACK_RETRY_INTERVAL_MS = 100;
+const AUTH_CALLBACK_TIMEOUT_MS = 10_000;
 
 /**
  * Error thrown by {@link EveEvalTurn.expectOk} when a turn failed.
@@ -112,6 +122,85 @@ export class EvalSessionDriver implements EveEvalSession {
         requestId: request.requestId,
       })),
     );
+  }
+
+  async authorize(
+    input: SendTurnInput,
+    authorizations: readonly EveEvalAuthorizationInput[],
+    target: Pick<EveEvalTargetHandle, "fetch" | "url">,
+  ): Promise<EveEvalTurn> {
+    if (authorizations.length === 0) {
+      throw new Error("authorize() requires at least one expected authorization.");
+    }
+
+    const pending = buildExpectedAuthorizationMap(authorizations);
+    const response = await this.#session.send(attachSignal(input, this.#signal));
+    const events: HandleMessageStreamEvent[] = [];
+    let callbacksStarted = false;
+    let callbacksDone = false;
+    let callbacksPromise: Promise<void> | undefined;
+    const iterator = response[Symbol.asyncIterator]();
+    let nextEvent = iterator.next();
+
+    const recordTurn = (): EveEvalTurn =>
+      this.#recordTurn({
+        data: extractCompletedResult(events),
+        events,
+        inputRequests: extractInputRequests(events),
+        message: extractCompletedMessage(events),
+        sessionId: response.sessionId,
+        status: deriveResultStatus(events),
+      });
+
+    try {
+      while (true) {
+        const result = await raceEventAndCallbacks(nextEvent, callbacksPromise, callbacksDone);
+
+        if (result.kind === "callbacks") {
+          callbacksDone = true;
+          continue;
+        }
+
+        const { value, done } = result.next;
+        if (done === true) break;
+        nextEvent = iterator.next();
+        events.push(value);
+
+        if (!callbacksStarted && value.type === "authorization.required") {
+          recordAuthorizationEvent(pending, value);
+          if (allExpectedAuthorizationsReady(pending)) {
+            callbacksStarted = true;
+            callbacksPromise = completeExpectedAuthorizations(pending, target);
+          }
+        }
+      }
+    } catch (error) {
+      if (events.length > 0) {
+        recordTurn();
+      }
+      throw error;
+    }
+
+    if (!callbacksStarted) {
+      recordTurn();
+      const failure = events.find(isTurnFailureEvent);
+      if (failure !== undefined) {
+        throw new Error(
+          `Expected authorization.required events for ${authorizationNames(
+            authorizations,
+          )}, but the turn failed before they were all observed: ${failure.type}: ${failure.data.code} ${failure.data.message}`,
+        );
+      }
+      throw new Error(
+        `Expected authorization.required events for ${authorizationNames(
+          authorizations,
+        )}, but the turn ended before they were all observed.`,
+      );
+    }
+
+    await callbacksPromise;
+
+    return recordTurn();
   }
 
   async send(input: SendTurnInput): Promise<EveEvalTurn> {
@@ -206,6 +295,139 @@ export class EvalSessionDriver implements EveEvalSession {
     this.#lastTurn = turn;
     return turn;
   }
+}
+
+interface PendingAuthorizationExpectation {
+  readonly input: EveEvalAuthorizationInput;
+  event?: AuthorizationRequiredStreamEvent;
+}
+
+function buildExpectedAuthorizationMap(
+  authorizations: readonly EveEvalAuthorizationInput[],
+): Map<string, PendingAuthorizationExpectation> {
+  const pending = new Map<string, PendingAuthorizationExpectation>();
+  for (const input of authorizations) {
+    if (pending.has(input.name)) {
+      throw new Error(`authorize() received duplicate authorization name "${input.name}".`);
+    }
+    pending.set(input.name, { input });
+  }
+  return pending;
+}
+
+function recordAuthorizationEvent(
+  pending: Map<string, PendingAuthorizationExpectation>,
+  event: AuthorizationRequiredStreamEvent,
+): void {
+  const entry = pending.get(event.data.name);
+  if (entry === undefined) return;
+  entry.event = event;
+}
+
+function allExpectedAuthorizationsReady(
+  pending: Map<string, PendingAuthorizationExpectation>,
+): boolean {
+  return [...pending.values()].every((entry) => entry.event !== undefined);
+}
+
+async function raceEventAndCallbacks(
+  nextEvent: Promise<IteratorResult<HandleMessageStreamEvent>>,
+  callbacksPromise: Promise<void> | undefined,
+  callbacksDone: boolean,
+): Promise<
+  | { readonly kind: "event"; readonly next: IteratorResult<HandleMessageStreamEvent> }
+  | { readonly kind: "callbacks" }
+> {
+  if (callbacksPromise === undefined || callbacksDone) {
+    return { kind: "event", next: await nextEvent };
+  }
+
+  return await Promise.race([
+    nextEvent.then((next) => ({ kind: "event", next }) as const),
+    callbacksPromise.then(() => ({ kind: "callbacks" }) as const),
+  ]);
+}
+
+async function completeExpectedAuthorizations(
+  pending: Map<string, PendingAuthorizationExpectation>,
+  target: Pick<EveEvalTargetHandle, "fetch" | "url">,
+): Promise<void> {
+  await Promise.all(
+    [...pending.values()].map((entry) => completeExpectedAuthorizationEvent(entry, target)),
+  );
+}
+
+async function completeExpectedAuthorizationEvent(
+  entry: PendingAuthorizationExpectation,
+  target: Pick<EveEvalTargetHandle, "fetch" | "url">,
+): Promise<void> {
+  const event = entry.event;
+  if (event === undefined) {
+    throw new Error(`Missing authorization.required event for "${entry.input.name}".`);
+  }
+
+  const webhookUrl = event.data.webhookUrl;
+  if (webhookUrl === undefined) {
+    throw new Error(`authorization.required for "${entry.input.name}" did not include webhookUrl.`);
+  }
+
+  await completeExpectedAuthorization(entry, target, webhookUrl);
+}
+
+async function completeExpectedAuthorization(
+  entry: PendingAuthorizationExpectation,
+  target: Pick<EveEvalTargetHandle, "fetch" | "url">,
+  webhookUrl: string,
+): Promise<void> {
+  const callbackPath = callbackPathFromWebhookUrl(webhookUrl, target.url, entry.input.params);
+  const deadline = Date.now() + AUTH_CALLBACK_TIMEOUT_MS;
+
+  while (true) {
+    const response = await target.fetch(callbackPath, { method: "GET" });
+    if (response.ok) return;
+
+    const body = await response.text().catch(() => "");
+    if (!shouldRetryAuthorizationCallback(response, body) || Date.now() >= deadline) {
+      throw new Error(
+        `Authorization callback for "${entry.input.name}" failed: ${response.status} ${response.statusText}` +
+          (body.trim().length > 0 ? `, ${body.trim()}` : ""),
+      );
+    }
+
+    await sleep(AUTH_CALLBACK_RETRY_INTERVAL_MS);
+  }
+}
+
+function shouldRetryAuthorizationCallback(response: Response, body: string): boolean {
+  return response.status === 404 && body.includes("Connection callback not pending");
+}
+
+function authorizationNames(authorizations: readonly EveEvalAuthorizationInput[]): string {
+  return authorizations.map((entry) => JSON.stringify(entry.name)).join(", ");
+}
+
+function callbackPathFromWebhookUrl(
+  webhookUrl: string,
+  targetUrl: string,
+  params: Readonly<Record<string, string>> | undefined,
+): string {
+  const callback = new URL(webhookUrl);
+  for (const [key, value] of Object.entries(params ?? { code: "authorized" })) {
+    callback.searchParams.set(key, value);
+  }
+
+  const base = new URL(targetUrl);
+  const basePath = trimTrailingSlash(base.pathname);
+  let pathname = callback.pathname;
+  if (basePath.length > 0 && pathname.startsWith(`${basePath}/`)) {
+    pathname = pathname.slice(basePath.length);
+  }
+
+  return `${pathname}${callback.search}`;
+}
+
+function trimTrailingSlash(value: string): string {
+  return value === "/" || !value.endsWith("/") ? (value === "/" ? "" : value) : value.slice(0, -1);
 }
 
 class EvalTurn implements EveEvalTurn {
