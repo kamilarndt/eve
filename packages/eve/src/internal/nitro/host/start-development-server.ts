@@ -251,11 +251,16 @@ async function formatDevelopmentServerConnectCommand(
   return [packageManager, ...eveDevArguments(packageManager), serverUrl].join(" ");
 }
 
-async function writeDevelopmentServerMetadata(appRoot: string, serverUrl: string): Promise<void> {
+export async function writeDevelopmentServerMetadata(
+  appRoot: string,
+  serverUrl: string,
+  additional: Readonly<Record<string, unknown>> = {},
+): Promise<void> {
   await writeFile(
     resolveDevelopmentServerMetadataPath(appRoot),
     `${JSON.stringify(
       {
+        ...additional,
         pid: process.pid,
         updatedAt: new Date().toISOString(),
         url: normalizeDevelopmentServerClientUrl(serverUrl),
@@ -267,7 +272,7 @@ async function writeDevelopmentServerMetadata(appRoot: string, serverUrl: string
   );
 }
 
-async function writeDevelopmentProcessId(appRoot: string): Promise<() => Promise<void>> {
+export async function acquireDevelopmentServerLease(appRoot: string): Promise<() => Promise<void>> {
   const processIdPath = resolveDevelopmentProcessIdPath(appRoot);
   const metadataPath = resolveDevelopmentServerMetadataPath(appRoot);
   const activeProcess = await readActiveDevelopmentProcess(appRoot);
@@ -465,8 +470,11 @@ async function listenForDevelopmentServer(input: {
 export async function startDevelopmentServer(
   rootDir: string,
   options: {
+    developmentLease?: "self" | "external";
     host?: string;
     port?: number;
+    runtimeDebugging?: boolean;
+    writeDevelopmentServerMetadata?: boolean;
   } = {},
 ): Promise<DevelopmentServerHandle> {
   // Marks this process tree as an `eve dev` session so runtime features
@@ -485,7 +493,9 @@ export async function startDevelopmentServer(
 
   try {
     const preparedHost = await prepareApplicationHost(rootDir, { dev: true });
-    removeDevelopmentProcessId = await writeDevelopmentProcessId(preparedHost.appRoot);
+    if (options.developmentLease !== "external") {
+      removeDevelopmentProcessId = await acquireDevelopmentServerLease(preparedHost.appRoot);
+    }
     pruneDevelopmentRuntimeArtifactsSnapshotsInBackground(preparedHost.appRoot);
     const compiledArtifactsSource = resolveNitroCompiledArtifactsSource(
       createNitroArtifactsConfig({
@@ -499,6 +509,13 @@ export async function startDevelopmentServer(
     });
     pruneLocalSandboxTemplatesInBackground(preparedHost.appRoot);
     nitro = await createApplicationNitro(preparedHost, true);
+    if (options.runtimeDebugging === true) {
+      // Nitro's default dev runner handles requests in a worker. The Node
+      // inspector opened by `eve dev --inspect*` attaches to this parent
+      // process, so debug sessions must execute runtime code in-process for
+      // authored tool breakpoints to pause reliably.
+      nitro.options.devServer.runner = "self";
+    }
     devServer = createDevServer(nitro);
     guardDevelopmentServerWebSocketUpgrades(nitro, devServer);
     const hostname =
@@ -517,7 +534,9 @@ export async function startDevelopmentServer(
     }
 
     const serverUrl = normalizeDevelopmentServerClientUrl(server.url);
-    await writeDevelopmentServerMetadata(preparedHost.appRoot, serverUrl);
+    if (options.writeDevelopmentServerMetadata !== false) {
+      await writeDevelopmentServerMetadata(preparedHost.appRoot, serverUrl);
+    }
     restoreWorkflowLocalQueueEnvironment = installWorkflowLocalQueueEnvironment(serverUrl);
     await prepare(nitro);
     await buildNitro(nitro);

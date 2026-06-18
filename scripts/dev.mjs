@@ -17,6 +17,31 @@ let isShuttingDown = false;
 let pendingChildren = commands.length;
 let processExitCode = 0;
 
+await runPreparation();
+
+async function runPreparation() {
+  await new Promise((resolve, reject) => {
+    const child = spawn("pnpm", ["--filter", "eve", "run", "build:devtools-ui"], {
+      env: process.env,
+      stdio: "inherit",
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(
+        new Error(
+          signal === null
+            ? `DevTools UI build exited with code ${String(code)}.`
+            : `DevTools UI build exited due to signal ${signal}.`,
+        ),
+      );
+    });
+  });
+}
+
 // Each command fans out into a tree (pnpm → shell → tsc/eve), so a signal to
 // the direct child alone orphans the watchers underneath it. Killing the
 // child's process group reaches the whole tree.

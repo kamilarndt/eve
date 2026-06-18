@@ -10,6 +10,9 @@ const require = createRequire(import.meta.url);
 const packageJson = require("../package.json");
 const packageNodeEngine = packageJson.engines?.node;
 const bootstrapPackageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const NO_DEVTOOLS_CLI_FLAG = "--no-devtools";
+const NETWORK_INSPECTION_CLI_FLAG = "--inspect-network";
+const NETWORK_INSPECTION_NODE_ARG = "--experimental-network-inspection";
 let semverPromise;
 
 if (typeof packageNodeEngine !== "string") {
@@ -235,6 +238,49 @@ async function runCommand(command, args, options) {
   });
 }
 
+async function relaunchProcess(command, args, options) {
+  return await new Promise((resolveProcess, rejectProcess) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+      stdio: "inherit",
+    });
+
+    child.once("error", rejectProcess);
+    child.once("exit", (code, signal) => {
+      if (signal) {
+        rejectProcess(new Error(`Command "${command}" exited due to signal ${signal}.`));
+        return;
+      }
+
+      resolveProcess(code ?? 1);
+    });
+  });
+}
+
+function shouldUseDevTools(argv) {
+  if (
+    argv[0] !== "dev" ||
+    argv.some((arg) => arg === "--url" || arg.startsWith("--url=") || /^https?:\/\//.test(arg))
+  ) {
+    return false;
+  }
+  if (argv.includes(NO_DEVTOOLS_CLI_FLAG)) {
+    return false;
+  }
+
+  return true;
+}
+
+function shouldRelaunchWithNetworkInspection(argv, execArgv = process.execArgv) {
+  return (
+    argv[0] === "dev" &&
+    argv.includes(NETWORK_INSPECTION_CLI_FLAG) &&
+    !shouldUseDevTools(argv) &&
+    !execArgv.includes(NETWORK_INSPECTION_NODE_ARG)
+  );
+}
+
 /**
  * Ensures the compiled CLI entrypoint exists before the workspace bin is executed.
  */
@@ -305,6 +351,30 @@ export async function runEveCli(argv = process.argv.slice(2), overrides = {}, de
     options,
     dependencies,
   );
+
+  const execArgv = dependencies.execArgv ?? process.execArgv;
+  const env = dependencies.env ?? process.env;
+  if (shouldRelaunchWithNetworkInspection(argv, execArgv)) {
+    const runRelaunchedProcess = dependencies.relaunchProcess ?? relaunchProcess;
+    const exitCode = await runRelaunchedProcess(
+      process.execPath,
+      [
+        ...execArgv,
+        NETWORK_INSPECTION_NODE_ARG,
+        dependencies.cliBinPath ?? fileURLToPath(import.meta.url),
+        ...argv,
+      ],
+      {
+        cwd: process.cwd(),
+        env,
+      },
+    );
+
+    if (exitCode !== 0) {
+      process.exitCode = exitCode;
+    }
+    return;
+  }
 
   const cliEntrypointPath = await ensureBuiltCli(options, dependencies);
   const importModule = dependencies.importModule ?? ((specifier) => import(specifier));

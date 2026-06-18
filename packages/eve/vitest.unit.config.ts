@@ -25,6 +25,10 @@ export default defineConfig({
         find: /^#(.+)\.js$/,
         replacement: new URL("./src/$1.ts", import.meta.url).pathname,
       },
+      {
+        find: "@ui",
+        replacement: new URL("./devtools-ui/src", import.meta.url).pathname,
+      },
     ],
   },
   test: {
@@ -37,7 +41,7 @@ export default defineConfig({
       "test/scenarios/**",
       "test/vercel/**",
     ],
-    include: ["src/**/*.test.ts", "test/**/*.test.ts"],
+    include: ["devtools-ui/src/**/*.test.ts", "src/**/*.test.ts", "test/**/*.test.ts"],
     setupFiles: ["./src/internal/testing/unit-guard.ts", "./test/setup/mock-ai-gateway.ts"],
     testTimeout: 5_000,
   },

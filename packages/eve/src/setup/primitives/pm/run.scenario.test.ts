@@ -98,9 +98,10 @@ describe("runPackageManagerInstall (real pnpm)", () => {
       lines.join("\n"),
     ).resolves.toBe(true);
 
-    await expect(pathExists(join(nestedRoot, "node_modules", "scratch-local-dep"))).resolves.toBe(
-      true,
-    );
+    expect(
+      await pathExists(join(nestedRoot, "node_modules", "scratch-local-dep")),
+      lines.join("\n"),
+    ).toBe(true);
     await expect(pathExists(join(nestedRoot, "pnpm-lock.yaml"))).resolves.toBe(true);
     await expect(pathExists(join(root, "ancestor-preinstall-ran"))).resolves.toBe(false);
   });

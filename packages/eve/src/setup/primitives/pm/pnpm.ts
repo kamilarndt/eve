@@ -7,7 +7,13 @@ import { pathExists } from "../../path-exists.js";
 import type { PackageManagerStrategy } from "./types.js";
 
 export const PNPM_WORKSPACE_PATH = "pnpm-workspace.yaml";
-export const PNPM_WORKSPACE_MEMBERSHIP_ARGUMENTS = ["list", "--depth", "-1", "--json"] as const;
+export const PNPM_WORKSPACE_MEMBERSHIP_ARGUMENTS = [
+  "list",
+  "--recursive",
+  "--depth",
+  "-1",
+  "--json",
+] as const;
 // eve@0.6.0-beta.13 through 0.7.0 imported `oxc-parser` at runtime while
 // declaring it only as a devDependency. Fixed releases use their own manifest.
 export const PNPM_WORKSPACE_CONTENT = [
@@ -112,7 +118,7 @@ export function hasAncestorPnpmWorkspace(projectRoot: string): boolean {
 }
 
 /**
- * Reads `pnpm list --depth -1 --json` and answers whether the ancestor
+ * Reads `pnpm list --recursive --depth -1 --json` and answers whether the ancestor
  * workspace explicitly includes `projectRoot`. `undefined` means the output
  * was not trustworthy enough to choose an install mode.
  */

@@ -282,17 +282,17 @@ describe("runCli", () => {
       error: vi.fn(),
       log: vi.fn(),
     };
-    const startHost = vi.fn(async () => {
+    const startDevToolsSupervisor = vi.fn(async () => {
       throw new Error("dev started");
     });
 
     await expect(
       runCli([], logger, {
-        startHost,
+        startDevToolsSupervisor,
       }),
     ).rejects.toThrow("dev started");
 
-    expect(startHost).toHaveBeenCalledOnce();
+    expect(startDevToolsSupervisor).toHaveBeenCalledOnce();
   });
 
   it("throws on unsupported commands", async () => {

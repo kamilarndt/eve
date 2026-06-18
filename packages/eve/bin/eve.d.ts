@@ -24,6 +24,10 @@ export interface BootstrapCommandOptions {
   cwd: string;
 }
 
+export interface BootstrapProcessOptions extends BootstrapCommandOptions {
+  env: NodeJS.ProcessEnv;
+}
+
 export interface BootstrapBuildDependencies {
   exists?: (path: string) => Promise<boolean>;
   getLatestBuildInputMtimeMs?: (input: { packageRoot: string }) => Promise<number>;
@@ -47,6 +51,16 @@ export interface BootstrapSemverModule {
 }
 
 export interface BootstrapDependencies extends BootstrapBuildDependencies {
+  /**
+   * Absolute path to the eve bin wrapper used when tests exercise relaunching.
+   */
+  cliBinPath?: string;
+
+  /**
+   * Node.js exec args used by tests to exercise startup-only Node flags.
+   */
+  execArgv?: readonly string[];
+
   importBootstrapModule?: (specifier: string) => Promise<BootstrapSemverModule>;
 
   importModule?: (specifier: string) => Promise<BootstrapCliModule>;
@@ -60,6 +74,12 @@ export interface BootstrapDependencies extends BootstrapBuildDependencies {
    * Node.js engine range used by tests to exercise non-default package contracts.
    */
   nodeEngineRequirement?: string;
+
+  relaunchProcess?: (
+    command: string,
+    args: readonly string[],
+    options: BootstrapProcessOptions,
+  ) => Promise<number>;
 }
 
 /**

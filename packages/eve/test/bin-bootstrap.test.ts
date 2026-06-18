@@ -19,6 +19,15 @@ const workspaceBuildInputPaths = new Set([
   `${bootstrapOptions.packageRoot}/tsconfig.json`,
 ]);
 
+function createSupportedSemverImport() {
+  return vi.fn(async () => ({
+    default: {
+      satisfies: vi.fn((version: string) => /^v24\.\d+\.\d+$/u.test(version)),
+      validRange: vi.fn((range: string | undefined) => range ?? null),
+    },
+  }));
+}
+
 describe("eve CLI bootstrap", () => {
   it("fails before bootstrapping when Node.js is older than 24", async () => {
     const exists = vi.fn(async () => true);
@@ -108,6 +117,94 @@ describe("eve CLI bootstrap", () => {
     expect(runCommand).not.toHaveBeenCalled();
     expect(importModule).toHaveBeenCalledWith("file:///workspace/packages/eve/dist/src/cli/run.js");
     expect(runCli).toHaveBeenCalledWith(["info"]);
+  });
+
+  it("relaunches dev network inspection with the required Node startup flag", async () => {
+    const exists = vi.fn(async () => true);
+    const importBootstrapModule = createSupportedSemverImport();
+    const importModule = vi.fn(async () => ({
+      runCli: vi.fn(async () => {}),
+    }));
+    const relaunchProcess = vi.fn(async () => 0);
+
+    await runEveCli(["dev", "--no-devtools", "--inspect-network"], bootstrapOptions, {
+      cliBinPath: "/workspace/packages/eve/bin/eve.js",
+      execArgv: ["--trace-warnings"],
+      exists,
+      importBootstrapModule,
+      importModule,
+      relaunchProcess,
+    });
+
+    expect(relaunchProcess).toHaveBeenCalledWith(
+      process.execPath,
+      [
+        "--trace-warnings",
+        "--experimental-network-inspection",
+        "/workspace/packages/eve/bin/eve.js",
+        "dev",
+        "--no-devtools",
+        "--inspect-network",
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+      },
+    );
+    expect(exists).not.toHaveBeenCalled();
+    expect(importModule).not.toHaveBeenCalled();
+  });
+
+  it("does not relaunch dev network inspection when Node already has the startup flag", async () => {
+    const runCli = vi.fn(async () => {});
+    const exists = vi.fn(async () => true);
+    const getLatestBuildInputMtimeMs = vi.fn(async () => 100);
+    const getPathMtimeMs = vi.fn(async () => 200);
+    const importBootstrapModule = createSupportedSemverImport();
+    const importModule = vi.fn(async () => ({
+      runCli,
+    }));
+    const relaunchProcess = vi.fn(async () => 0);
+
+    await runEveCli(["dev", "--inspect-network"], bootstrapOptions, {
+      execArgv: ["--experimental-network-inspection"],
+      exists,
+      getLatestBuildInputMtimeMs,
+      getPathMtimeMs,
+      importBootstrapModule,
+      importModule,
+      relaunchProcess,
+    });
+
+    expect(relaunchProcess).not.toHaveBeenCalled();
+    expect(importModule).toHaveBeenCalledWith("file:///workspace/packages/eve/dist/src/cli/run.js");
+    expect(runCli).toHaveBeenCalledWith(["dev", "--inspect-network"]);
+  });
+
+  it("does not relaunch DevTools network inspection in the supervisor process", async () => {
+    const runCli = vi.fn(async () => {});
+    const exists = vi.fn(async () => true);
+    const getLatestBuildInputMtimeMs = vi.fn(async () => 100);
+    const getPathMtimeMs = vi.fn(async () => 200);
+    const importBootstrapModule = createSupportedSemverImport();
+    const importModule = vi.fn(async () => ({
+      runCli,
+    }));
+    const relaunchProcess = vi.fn(async () => 0);
+
+    await runEveCli(["dev", "--devtools", "--inspect-network"], bootstrapOptions, {
+      execArgv: [],
+      exists,
+      getLatestBuildInputMtimeMs,
+      getPathMtimeMs,
+      importBootstrapModule,
+      importModule,
+      relaunchProcess,
+    });
+
+    expect(relaunchProcess).not.toHaveBeenCalled();
+    expect(importModule).toHaveBeenCalledWith("file:///workspace/packages/eve/dist/src/cli/run.js");
+    expect(runCli).toHaveBeenCalledWith(["dev", "--devtools", "--inspect-network"]);
   });
 
   it("builds the CLI before importing when output is missing", async () => {

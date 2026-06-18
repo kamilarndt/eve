@@ -15,6 +15,7 @@ export default defineDynamic({
             message: z.string(),
           }),
           async execute(input) {
+            console.log("dynamic-echo yes!", input.message);
             return {
               echoed: input.message,
               token: DYNAMIC_ECHO_TOKEN,

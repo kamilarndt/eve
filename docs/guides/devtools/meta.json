@@ -1,0 +1,4 @@
+{
+  "title": "DevTools",
+  "pages": ["overview", "discovery-and-auth", "endpoints", "events", "debugger"]
+}

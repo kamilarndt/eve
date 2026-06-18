@@ -99,6 +99,12 @@ Pass a bare URL as the only argument and the UI connects to that server instead 
 | `--port <port>`                     | number | `$PORT`, then 3000 | Port to listen on                                                                         |
 | `-u, --url <url>`                   | string | none               | Connect to an existing server URL instead of starting one                                 |
 | `--no-ui`                           | flag   | UI on              | Start the server without an interactive UI                                                |
+| `--inspect [target]`                | string | `127.0.0.1:9229`   | Open the Node inspector for local runtime debugging                                       |
+| `--inspect-wait [target]`           | string | `127.0.0.1:9229`   | Open the Node inspector and wait for a debugger before startup                            |
+| `--inspect-brk [target]`            | string | `127.0.0.1:9229`   | Open the Node inspector, wait for a debugger, then pause before startup                   |
+| `--inspect-network`                 | flag   | off                | Show local runtime network requests in Chrome DevTools                                    |
+| `--devtools`                        | flag   | on                 | Start the local browser DevTools                                                          |
+| `--no-devtools`                     | flag   | off                | Disable local DevTools and use the legacy development path                                |
 | `--name <name>`                     | string | app folder name    | Title shown in the terminal UI                                                            |
 | `--input <text>`                    | string | none               | Pre-fill the prompt input after launching the UI (editable, not auto-submitted)           |
 | `--tools <mode>`                    | enum   | `auto-collapsed`   | Tool-call rendering: `full` \| `collapsed` \| `auto-collapsed` \| `hidden`                |
@@ -112,6 +118,43 @@ Pass a bare URL as the only argument and the UI connects to that server instead 
 Local dev writes the active server process ID to `.eve/dev-process.pid`. If another `eve dev` starts for the same agent while that process is still running, eve exits with a message that includes the command to stop the existing server.
 
 Local dev keeps immutable runtime source snapshots under `.eve/dev-runtime/snapshots/` so in-flight sessions hold a consistent code revision while new prompts pick up rebuilds. On startup, `eve dev` prunes stale runtime snapshots and old local sandbox templates in the background. For manual cleanup, stop `eve dev` and delete `.eve/dev-runtime/snapshots/` or `.eve/sandbox-cache/local/templates/`.
+
+### Local runtime debugging
+
+Use `eve dev --inspect` to attach VS Code or Chrome DevTools to the local Eve runtime process. The default target is `127.0.0.1:9229`; pass a port (`--inspect=9230`), host and port (`--inspect=127.0.0.1:9230`), or `--inspect=0` to ask Node for an available port. Inspector flags are local-only and cannot be combined with `--url`.
+
+`--inspect-wait` prints the WebSocket URL and waits for a debugger before the server starts. `--inspect-brk` does the same, then triggers one early `debugger` pause before startup.
+
+Use `eve dev --inspect-network` to also enable Chrome DevTools' Network panel for requests made by the local Eve runtime process. When no other inspector flag is present, it opens the default inspector target as if `--inspect` was passed. Combine it with a specific target when needed, for example `eve dev --inspect=9230 --inspect-network`. Network inspection covers requests from the local Eve Node process; sandbox containers, subprocesses, and remote `--url` targets are outside that inspector session.
+
+VS Code attach configuration:
+
+```json
+{
+  "type": "node",
+  "request": "attach",
+  "name": "Attach to eve dev",
+  "address": "127.0.0.1",
+  "port": 9229,
+  "sourceMaps": true,
+  "resolveSourceMapLocations": [
+    "${workspaceFolder}/.eve/nitro/**/*.mjs",
+    "${workspaceFolder}/node_modules/.cache/eve/authored-modules/**/*.mjs",
+    "${workspaceFolder}/.eve/dev-runtime/snapshots/**/node_modules/.cache/eve/authored-modules/**/*.mjs"
+  ],
+  "skipFiles": ["<node_internals>/**"]
+}
+```
+
+Eve stores runtime-authored bundles under `node_modules/.cache`, which VS Code excludes from source-map resolution by default. The scoped `resolveSourceMapLocations` entries allow those bundles and immutable dev snapshots without enabling source maps for every dependency.
+
+Chrome DevTools can attach through `chrome://inspect`. Breakpoints in authored TypeScript files such as `agent/tools/get_weather.ts` resolve through source maps rewritten from the immutable dev snapshot back to the live workspace file. A breakpoint pauses the whole local Eve process, including the active turn, HTTP handling, rebuild work, and TUI streaming until you resume execution. If you edit a tool while a turn is in flight, that turn may continue on its old snapshot; start a new prompt after rebuild to debug the newest code.
+
+### DevTools backend
+
+`eve dev` starts the local browser DevTools by default. After an interactive local runtime is ready, Eve opens the complete capability-bearing URL in the default browser. It also prints that URL, writes owner-readable discovery metadata to `.eve/devtools/current.json`, and exposes a loopback `/api/v1` surface for health, bootstrap, runs, sources, logs, events, and debugger relay access. Headless launches from `--no-ui`, non-TTY terminals, and framework integrations do not open a browser.
+
+The browser UI and coding agents interact with the same runtime through this versioned API. Use `--no-devtools` to opt out. See [DevTools](../guides/devtools/overview) for the browser workflow, discovery, authentication, endpoint, SSE, and debugger details.
 
 ## `eve link`
 
