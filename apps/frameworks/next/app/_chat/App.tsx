@@ -80,13 +80,15 @@ export function App() {
   const voiceTurnIdsRef = useRef(new Set<string>());
   const agent = useEveAgent({
     onEvent(event) {
-      if (
-        event.type === "message.received" &&
-        pendingVoiceMessagesRef.current[0] === event.data.message
-      ) {
-        pendingVoiceMessagesRef.current.shift();
-        rememberBounded(voiceTurnIdsRef.current, event.data.turnId, MAX_TRACKED_VOICE_TURNS);
-        return;
+      if (event.type === "message.received") {
+        // Correlate by matching the transcript anywhere in the pending queue so
+        // interleaved typed messages cannot shift the wrong entry off the head.
+        const pendingIndex = pendingVoiceMessagesRef.current.indexOf(event.data.message);
+        if (pendingIndex !== -1) {
+          pendingVoiceMessagesRef.current.splice(pendingIndex, 1);
+          rememberBounded(voiceTurnIdsRef.current, event.data.turnId, MAX_TRACKED_VOICE_TURNS);
+          return;
+        }
       }
 
       if (
