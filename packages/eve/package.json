@@ -281,7 +281,8 @@
     "generate:web-template": "node src/setup/build.ts --write",
     "check:web-template": "node src/setup/build.ts --check",
     "test:tui": "pnpm run build:js && tsc -p tsconfig.tui.json --noEmit && node test/tui-client/run-all.mjs",
-    "test:vercel": "vitest run --config vitest.vercel.config.ts"
+    "test:vercel": "vitest run --config vitest.vercel.config.ts",
+    "tui:example": "tsx src/tui/example.tsx"
   },
   "dependencies": {
     "nitro": "3.0.260610-beta"
@@ -301,6 +302,7 @@
     "@sveltejs/kit": "^2.0.0",
     "@types/json-schema": "7.0.15",
     "@types/react": "catalog:",
+    "@types/react-reconciler": "0.33.0",
     "@types/react-test-renderer": "19.1.0",
     "@vercel/detect-agent": "1.2.3",
     "@vercel/eve-catalog": "workspace:*",
@@ -326,6 +328,7 @@
     "next": "catalog:",
     "picocolors": "catalog:",
     "react": "catalog:",
+    "react-reconciler": "0.33.0",
     "react-test-renderer": "19.2.6",
     "semver": "7.8.4",
     "svelte": "^5.0.0",
@@ -333,6 +336,7 @@
     "vite": "^8.0.0",
     "vitest": "catalog:",
     "vue": "^3.5.0",
+    "yoga-layout": "3.2.1",
     "zod": "catalog:",
     "zod-validation-error": "5.0.0"
   },
@@ -346,9 +350,11 @@
     "next": "^16.0.0",
     "nuxt": "^4.0.0",
     "react": "^19.0.0",
+    "react-reconciler": "^0.33.0",
     "svelte": "^5.0.0",
     "vite": "^8.0.0",
-    "vue": "^3.5.0"
+    "vue": "^3.5.0",
+    "yoga-layout": "^3.2.0"
   },
   "peerDependenciesMeta": {
     "@opentelemetry/api": {
@@ -373,6 +379,12 @@
       "optional": true
     },
     "react": {
+      "optional": true
+    },
+    "react-reconciler": {
+      "optional": true
+    },
+    "yoga-layout": {
       "optional": true
     },
     "svelte": {

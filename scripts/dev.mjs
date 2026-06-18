@@ -1,16 +1,36 @@
 import { spawn } from "node:child_process";
 
-const commands = [
-  {
-    args: ["--filter", "eve", "run", "dev"],
-    label: "eve",
-  },
-  {
-    // Port 0 asks the OS to allocate an available port atomically.
-    args: ["--filter", "weather-agent", "run", "dev", "--no-ui", "--port", "0"],
-    label: "weather-agent",
-  },
-];
+// `--v1` (a.k.a. `--tui`): dogfood the React/cell TUI. The weather fixture's
+// `eve dev` (which auto-builds the CLI via tsgo on start) runs with the
+// interactive TUI attached and *sole* control of the terminal — so, unlike the
+// default headless watch+server combo, it is NOT multiplexed with a build log
+// (an interactive TUI can't share stdout with another process's output).
+const tuiMode = process.argv.includes("--v1") || process.argv.includes("--tui");
+
+const commands = tuiMode
+  ? [
+      {
+        // Port 0 asks the OS to allocate an available port atomically; no
+        // `--no-ui`, so `eve dev` brings up the React TUI.
+        args: ["--filter", "weather-agent", "run", "dev", "--port", "0"],
+        label: "weather-agent (tui)",
+      },
+    ]
+  : [
+      {
+        args: ["--filter", "eve", "run", "dev"],
+        label: "eve",
+      },
+      {
+        // Port 0 asks the OS to allocate an available port atomically.
+        args: ["--filter", "weather-agent", "run", "dev", "--no-ui", "--port", "0"],
+        label: "weather-agent",
+      },
+    ];
+
+if (tuiMode) {
+  process.stderr.write("[dev] starting the weather fixture with the React TUI (eve dev)…\n");
+}
 
 const childProcesses = [];
 let isShuttingDown = false;

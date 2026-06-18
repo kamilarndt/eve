@@ -80,5 +80,19 @@ export async function runDevelopmentTui(input: RunDevelopmentTuiInput): Promise<
   if (initialInput !== undefined) options.initialInput = initialInput;
   if (onBootProgress !== undefined) options.onBootProgress = onBootProgress;
 
+  // The React/cell renderer is the only renderer. Loaded lazily so importing
+  // `eve` (or any non-`eve dev` command) never pulls in React/Yoga (yoga-layout
+  // compiles WASM at import). Setting `options.renderer` is what `createRenderer`
+  // returns verbatim — the runner itself is renderer-agnostic.
+  const { ReactRenderer } = await import("#tui/react-renderer.js");
+  options.renderer = new ReactRenderer({
+    tools: display.tools,
+    reasoning: display.reasoning,
+    subagents: display.subagents,
+    connectionAuth: display.connectionAuth,
+    logs: display.logs,
+    captureForeignOutput: true,
+  });
+
   await new EveTUIRunner(options).run();
 }

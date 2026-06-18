@@ -11,8 +11,10 @@
     "noEmitOnError": true,
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
-    "customConditions": ["eve-source"]
+    "customConditions": ["eve-source"],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react"
   },
-  "include": ["src/**/*.ts", "bin/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "bin/**/*.ts", "test/**/*.ts"],
   "exclude": ["test/tui-client/**/*.ts"]
 }

@@ -14,5 +14,4 @@ export {
   formatChangeDetectedLogLine,
   MockScreen,
   MockUserInput,
-  TerminalRenderer,
 } from "../../../dist/src/cli/dev/tui/test/index.js";

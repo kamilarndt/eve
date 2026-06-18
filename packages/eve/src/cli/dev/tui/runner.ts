@@ -67,7 +67,7 @@ import type {
   TerminalPartDisplayMode,
   TuiDisplayOptions,
 } from "./types.js";
-import { TerminalRenderer, type TerminalInput, type TerminalOutput } from "./terminal-renderer.js";
+import type { TerminalInput, TerminalOutput } from "./terminal-io.js";
 import {
   createVercelStatusTracker,
   type VercelStatusEffect,
@@ -1399,24 +1399,14 @@ export class EveTUIRunner {
 }
 
 function createRenderer(options: EveTUIRunnerOptions): AgentTUIRenderer {
+  // The renderer is always injected: `tui.ts` constructs the React renderer
+  // (lazily, to keep React/Yoga off the import path until `eve dev` runs) and
+  // tests pass a fake/real renderer directly. The legacy `TerminalRenderer` has
+  // been removed, so a missing renderer is a programmer error.
   if (options.renderer) {
     return options.renderer;
   }
-
-  // `TerminalRenderer` defaults every omitted field, so explicit `undefined`s
-  // are equivalent to leaving them out. Omitted input/output fall back to the
-  // real process stdio.
-  return new TerminalRenderer({
-    tools: options.tools,
-    reasoning: options.reasoning,
-    subagents: options.subagents,
-    connectionAuth: options.connectionAuth,
-    assistantResponseStats: options.assistantResponseStats,
-    contextSize: options.contextSize,
-    logs: options.logs,
-    input: options.userInput,
-    output: options.screen,
-  });
+  throw new Error("EveTUIRunner requires options.renderer (the TUI renderer to drive).");
 }
 
 function formatAgentUpdateNotice(

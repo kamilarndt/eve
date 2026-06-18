@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { TerminalInput, TerminalOutput } from "../terminal-renderer.js";
+import type { TerminalInput, TerminalOutput } from "../terminal-io.js";
 
 const ansiControlSequencePattern = new RegExp(
   `^${String.fromCharCode(27)}\\[([0-9?;]*)([ -/]*)([@-~])`,

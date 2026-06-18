@@ -148,6 +148,13 @@ const EXTERNAL_PACKAGES = new Set([
   "next",
   "nitro",
   "react",
+  // The optional React/cell TUI renderer (behind `EVE_TUI=react`). Both are CJS
+  // (react-reconciler) / WASM-loading (yoga-layout) packages that must resolve
+  // from node_modules at runtime — bundling react-reconciler's CJS into the ESM
+  // dist breaks with "require is not defined". Externalized like `react`; lazily
+  // imported, so the default path never loads them.
+  "react-reconciler",
+  "yoga-layout",
   "svelte",
   "vite",
   "vue",
