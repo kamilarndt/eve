@@ -303,4 +303,35 @@ describe("useEveVoice", () => {
     expect(realtimeState.connect).toHaveBeenCalledTimes(1);
     expect(realtimeState.startAudioCapture).toHaveBeenCalledTimes(1);
   });
+
+  it("releases the microphone when a realtime error surfaces after connecting", async () => {
+    const stop = vi.fn();
+    const getUserMedia = vi.fn(async () => ({ getTracks: () => [{ stop }] }));
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
+
+    const { useEveVoice } = await import("#react/voice.js");
+    let voice: ReturnType<typeof useEveVoice> | undefined;
+    function TestComponent() {
+      voice = useEveVoice({ voiceSessionId: "voice-1" });
+      return null;
+    }
+
+    act(() => {
+      create(createElement(TestComponent));
+    });
+
+    await act(async () => {
+      await voice!.start();
+    });
+
+    expect(realtimeState.startAudioCapture).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+
+    act(() => {
+      realtimeOptions[0].onError(new Error("socket dropped"));
+    });
+
+    expect(realtimeState.stopAudioCapture).toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
 });

@@ -249,6 +249,7 @@ export function useEveVoice(options: UseEveVoiceOptions = {}): UseEveVoiceResult
   const mediaStreamRef = useRef<StoppableMediaStream | null>(null);
   const lastErrorRef = useRef<Error | undefined>(undefined);
   const startingRef = useRef(false);
+  const stopAudioCaptureRef = useRef<(() => void) | undefined>(undefined);
 
   const model = useMemo(() => resolveRealtimeModel(options.model), [options.model]);
   const setupUrl = useMemo(() => voiceSession.setupUrl, [voiceSession]);
@@ -269,6 +270,19 @@ export function useEveVoice(options: UseEveVoiceOptions = {}): UseEveVoiceResult
       options.onError?.(nextError);
     },
     [options.onError],
+  );
+
+  const handleRealtimeError = useCallback(
+    (nextError: Error) => {
+      // A realtime/transport failure leaves the session unusable — including one
+      // that surfaces after a successful connect — so release the microphone.
+      // Per-turn failures go through handleError directly and keep the mic open.
+      stopAudioCaptureRef.current?.();
+      mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
+      mediaStreamRef.current = null;
+      handleError(nextError);
+    },
+    [handleError],
   );
 
   const speakEveReply = useCallback((text: string) => {
@@ -394,12 +408,13 @@ export function useEveVoice(options: UseEveVoiceOptions = {}): UseEveVoiceResult
   const realtime = experimental_useRealtime({
     api: { token: setupUrl },
     model,
-    onError: handleError,
+    onError: handleRealtimeError,
     onEvent: handleEvent,
     sessionConfig,
   });
   requestResponseRef.current = realtime.requestResponse;
   sendEventRef.current = realtime.sendEvent;
+  stopAudioCaptureRef.current = realtime.stopAudioCapture;
 
   const stop = useCallback(() => {
     realtime.stopAudioCapture();
