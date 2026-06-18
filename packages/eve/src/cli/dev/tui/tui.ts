@@ -48,6 +48,27 @@ async function resolveClientOptions(
 }
 
 /**
+ * Translate a renderer dynamic-import failure into an actionable error.
+ *
+ * react, react-reconciler, and yoga-layout are optional peer dependencies, so a
+ * published install may lack them. The lazy `import("#tui/react-renderer.js")`
+ * statically pulls them in, so a missing one rejects the import() with
+ * ERR_MODULE_NOT_FOUND; surface install guidance rather than a raw
+ * module-resolution stack trace. Unrelated errors pass through unchanged.
+ */
+export function translateRendererImportError(error: unknown): Error {
+  if ((error as NodeJS.ErrnoException | undefined)?.code === "ERR_MODULE_NOT_FOUND") {
+    return new Error(
+      "`eve dev` requires the optional peer dependencies react, react-reconciler, and " +
+        "yoga-layout, which are not installed. Add them with your package manager, e.g. " +
+        "`npm install react react-reconciler yoga-layout`.",
+      { cause: error },
+    );
+  }
+  return error instanceof Error ? error : new Error(String(error));
+}
+
+/**
  * Runs the `eve dev` terminal UI against the given server URL until the
  * user exits.
  *
@@ -84,7 +105,12 @@ export async function runDevelopmentTui(input: RunDevelopmentTuiInput): Promise<
   // `eve` (or any non-`eve dev` command) never pulls in React/Yoga (yoga-layout
   // compiles WASM at import). Setting `options.renderer` is what `createRenderer`
   // returns verbatim — the runner itself is renderer-agnostic.
-  const { ReactRenderer } = await import("#tui/react-renderer.js");
+  let ReactRenderer: typeof import("#tui/react-renderer.js").ReactRenderer;
+  try {
+    ({ ReactRenderer } = await import("#tui/react-renderer.js"));
+  } catch (error) {
+    throw translateRendererImportError(error);
+  }
   options.renderer = new ReactRenderer({
     tools: display.tools,
     reasoning: display.reasoning,
