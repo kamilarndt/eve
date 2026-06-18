@@ -9,7 +9,6 @@ export interface EveVoiceSetupResult {
 }
 
 export interface EveVoiceTurnResult {
-  readonly continuationToken: string;
   readonly sessionId: string;
   readonly streamIndex: number;
   readonly text: string;
@@ -118,7 +117,6 @@ export class EveVoiceSession {
       throw new Error(typeof data.error === "string" ? data.error : "Eve voice turn failed.");
     }
     if (
-      typeof data.continuationToken !== "string" ||
       typeof data.sessionId !== "string" ||
       typeof data.streamIndex !== "number" ||
       typeof data.text !== "string" ||
@@ -134,7 +132,6 @@ export class EveVoiceSession {
     };
 
     return {
-      continuationToken: data.continuationToken,
       sessionId: data.sessionId,
       streamIndex: data.streamIndex,
       text: data.text,
