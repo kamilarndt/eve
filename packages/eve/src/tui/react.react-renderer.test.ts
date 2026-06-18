@@ -67,6 +67,26 @@ describe("ReactRenderer adapts the runner contract to the store", () => {
     shared.setState(() => ({ mode: "prompt", blocks: [] }));
   });
 
+  it("resets the store on construction so it never inherits prior state (finding #9)", () => {
+    // Simulate state left behind by a previous renderer instance.
+    shared.setState((s) => ({
+      ...s,
+      mode: "streaming",
+      blocks: [{} as never],
+      logs: "none",
+    }));
+    expect(shared.getState().blocks).toHaveLength(1);
+
+    // Constructing a new renderer must reset the shared store (resetShared runs
+    // before the React tree mounts, so the stale block is never rendered).
+    new ReactRenderer({ input: fakeInput(), output: fakeOutput(), logs: "all" });
+
+    const s = shared.getState();
+    expect(s.mode).toBe("prompt");
+    expect(s.blocks).toEqual([]);
+    expect(s.logs).toBe("all");
+  });
+
   it("readPrompt resolves the typed line and echoes a user block", async () => {
     const input = fakeInput();
     const renderer = new ReactRenderer({ input, output: fakeOutput() });

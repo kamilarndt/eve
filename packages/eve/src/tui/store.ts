@@ -84,20 +84,20 @@ export interface SetupFlowState {
 export interface PendingApproval {
   request: AgentTUIToolApprovalRequest;
   cursor: number;
-  resolve: (response: AgentTUIToolApprovalResponse) => void;
 }
 
 /**
  * A pending input question. `request` is the raw payload; `text`/`cursor` back
  * the freeform editor, `optionCursor` indexes `request.options` for select.
- * `resolve(undefined)` is the cancel path (matches `readInputQuestion`'s type).
+ *
+ * Resolution is driven by the renderer's key consumer (`readInputQuestion`'s
+ * promise closure), not by a stored callback — this is pure render state.
  */
 export interface PendingQuestion {
   request: AgentTUIInputQuestion;
   text: string;
   cursor: number;
   optionCursor: number;
-  resolve: (response: AgentTUIInputQuestionResponse | undefined) => void;
 }
 
 /** The TUI state slice, grown across phases. P3 adds the transcript, header,
@@ -157,8 +157,22 @@ export function createStore<T>(initial: T): Store<T> {
   };
 }
 
-/** The process-wide UI store. */
-export const shared: Store<TuiState> = createStore<TuiState>({ mode: "prompt", blocks: [] });
+/** A fresh, valid baseline UI state — a new value each call so distinct stores
+ * never share a `blocks` array. */
+function freshState(): TuiState {
+  return { mode: "prompt", blocks: [] };
+}
+
+/** The process-wide UI store. eve runs a single TUI renderer at a time; each
+ * newly constructed renderer calls {@link resetShared} so it never inherits a
+ * prior instance's transcript, mode, or pending modal. */
+export const shared: Store<TuiState> = createStore<TuiState>(freshState());
+
+/** Reset the shared store to a clean slate for a new renderer, applying `patch`
+ * over the baseline (e.g. the initial `/loglevel` mode). */
+export function resetShared(patch: Partial<TuiState> = {}): void {
+  shared.setState(() => ({ ...freshState(), ...patch }));
+}
 
 /** Subscribe to a slice of the shared store; re-renders only when the selected
  * value changes (`Object.is`). */

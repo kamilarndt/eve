@@ -67,7 +67,7 @@ import { glyph } from "./components/primitives.js";
 import type { SetupFlowQuestion, SetupFlowState } from "./store.js";
 import { createInput, type Input, type InputStream } from "./input.js";
 import { render, type RenderHandle } from "./runtime.js";
-import { shared } from "./store.js";
+import { resetShared, shared } from "./store.js";
 import { StreamFold } from "./stream-fold.js";
 
 export interface ReactRendererOptions {
@@ -202,7 +202,9 @@ export class ReactRenderer implements AgentTUIRenderer {
     this.#fold = new StreamFold({ reasoning: this.#reasoning });
 
     // Seed the log display mode so the transcript filter has a value to read.
-    shared.setState((s) => ({ ...s, logs: options.logs ?? "all" }));
+    // Reset (not merge) so a new renderer never inherits a prior instance's
+    // transcript/mode — eve runs one TUI renderer at a time.
+    resetShared({ logs: options.logs ?? "all" });
 
     // Capture the real stdout writer up front, then (optionally) patch stdout/
     // stderr for foreign-output capture. Frames go to an explicit `output` when
@@ -346,7 +348,7 @@ export class ReactRenderer implements AgentTUIRenderer {
         shared.setState((s) => ({
           ...s,
           mode: "approval",
-          approval: { request, cursor, resolve: () => {} },
+          approval: { request, cursor },
         }));
         this.#render();
       };
@@ -395,7 +397,6 @@ export class ReactRenderer implements AgentTUIRenderer {
             text: line.text,
             cursor: line.cursor,
             optionCursor,
-            resolve: () => {},
           },
         }));
         this.#render();
