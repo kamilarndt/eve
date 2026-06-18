@@ -81,6 +81,15 @@ const hostConfig = {
   removeChildFromContainer: (container: ElementNode, child: HostNode) =>
     removeChild(container, child),
   clearContainer: (container: ElementNode) => {
+    // Detach and free each child's Yoga node too; clearing only the JS array
+    // leaves the children attached to the container's Yoga node, where they get
+    // laid out as phantoms and leak native memory.
+    for (const child of container.children) {
+      if (child.kind === "element") {
+        container.yoga.removeChild(child.yoga);
+        child.yoga.freeRecursive();
+      }
+    }
     container.children = [];
   },
 

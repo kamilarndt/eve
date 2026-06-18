@@ -117,7 +117,25 @@ function yogaIndexOf(parent: ElementNode, domIndex: number): number {
   return count;
 }
 
+/**
+ * Detach a child that already lives under `parent` (from both the children
+ * array and Yoga) so it can be re-inserted at a new position. react-reconciler
+ * performs a keyed move by calling appendChild/insertBefore on the SAME existing
+ * instance — without a prior removeChild — so the node is still owned, and
+ * Yoga's `insertChild` aborts with "Child already has a owner" unless we detach
+ * first. No-op for a brand-new child.
+ */
+function detachIfPresent(parent: ElementNode, child: HostNode): void {
+  const existing = parent.children.indexOf(child);
+  if (existing < 0) return;
+  parent.children.splice(existing, 1);
+  if (parent.type !== "eve-text" && child.kind === "element") {
+    parent.yoga.removeChild(child.yoga);
+  }
+}
+
 export function appendChild(parent: ElementNode, child: HostNode): void {
+  detachIfPresent(parent, child);
   child.parent = parent;
   parent.children.push(child);
   if (parent.type !== "eve-text" && child.kind === "element") {
@@ -126,6 +144,7 @@ export function appendChild(parent: ElementNode, child: HostNode): void {
 }
 
 export function insertBefore(parent: ElementNode, child: HostNode, before: HostNode): void {
+  detachIfPresent(parent, child);
   const index = parent.children.indexOf(before);
   const at = index < 0 ? parent.children.length : index;
   child.parent = parent;
@@ -141,5 +160,9 @@ export function removeChild(parent: ElementNode, child: HostNode): void {
   child.parent = undefined;
   if (parent.type !== "eve-text" && child.kind === "element") {
     parent.yoga.removeChild(child.yoga);
+    // react-reconciler calls removeChild only for genuine deletions (keyed moves
+    // go through insertBefore on the existing instance), so the detached subtree
+    // is discarded for good — free its Yoga nodes to avoid leaking native memory.
+    child.yoga.freeRecursive();
   }
 }
