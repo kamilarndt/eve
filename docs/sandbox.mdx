@@ -209,41 +209,7 @@ Domain-level allow-lists and credential brokering are supported by `vercel()` an
 
 Secrets never enter the sandbox. Instead, the network policy's per-domain `transform` injects credentials at the firewall, so a header can authenticate egress to a host while the secret stays out of the sandbox process entirely.
 
-With the Vercel backend, `vercel()` resolves authorization strategies for every runtime step and passes the results to a function-form policy:
-
-```ts title="agent/sandbox.ts"
-import { defineSandbox } from "eve/sandbox";
-import { vercel } from "eve/sandbox/vercel";
-
-export default defineSandbox({
-  backend: vercel({
-    credentials: {
-      service: {
-        async getToken() {
-          return { token: process.env.EXAMPLE_API_TOKEN! };
-        },
-      },
-    },
-    networkPolicy: ({ service }) => ({
-      allow: {
-        "api.example.com": [
-          {
-            transform: [
-              {
-                headers: {
-                  authorization: `Bearer ${service.token}`,
-                },
-              },
-            ],
-          },
-        ],
-      },
-    }),
-  }),
-});
-```
-
-The strategy uses the same authorization contract as connections and authored tools. It may be a static `getToken` strategy, a per-user strategy with `principalType: "user"`, or a full interactive strategy such as Vercel Connect:
+With the Vercel backend, attach authorization directly to the route that needs it and choose an explicit credential resolution mode:
 
 ```ts title="agent/sandbox.ts"
 import { connect } from "@vercel/connect/eve";
@@ -252,33 +218,47 @@ import { vercel } from "eve/sandbox/vercel";
 
 export default defineSandbox({
   backend: vercel({
-    credentials: {
-      service: { ...connect("example-service"), displayName: "Example Service" },
-    },
-    networkPolicy: ({ service }) => ({
+    credentialResolution: "on-request",
+    authProxyBaseUrl: "https://eve-tunnel.example.com",
+    networkPolicy: {
       allow: {
-        "api.example.com": [
+        "api.github.com": [
           {
-            transform: [
+            auth: connect("github"),
+            transform: ({ token }) => [
               {
-                headers: {
-                  authorization: `Bearer ${service.token}`,
-                },
+                headers: { authorization: `Bearer ${token}` },
+              },
+            ],
+          },
+        ],
+        "registry.internal": [
+          {
+            auth: connect("registry"),
+            credentialResolution: "eager",
+            transform: ({ token }) => [
+              {
+                headers: { authorization: `Bearer ${token}` },
               },
             ],
           },
         ],
       },
-    }),
+    },
   }),
 });
 ```
 
-When an interactive `getToken` reports that authorization is required, eve keeps the already-created sandbox on the empty-token policy, emits the normal `authorization.required` challenge, and durably parks the calling tool. After the callback completes, the tool is replayed, eve reattaches to the same sandbox, resolves the credential, and replaces the policy on the live sandbox before returning it to authored code.
+`auth` uses the same authorization contract as connections and authored tools: a static `getToken`, a per-user strategy, or an interactive strategy such as Vercel Connect. When any rule has `auth`, the backend-level `credentialResolution` is required. A rule may override it. Native Vercel `match` filters remain available on both authenticated and unauthenticated rules.
 
-Eve resolves credentials when authored code first accesses the sandbox during a step, applies the resulting policy, and replaces every brokered token with an empty value when the step ends or fails. If a non-interactive credential fails to resolve, that credential is represented by an empty token while the authored egress restrictions remain active. A failed cleanup fails the step rather than being ignored. Brokered credentials are unavailable during template bootstrap.
+- `"eager"` resolves all eager rules before Eve returns the sandbox to authored code.
+- `"on-request"` resolves only a rule actually reached by an awaited sandbox process. Unused rules never prompt.
 
-This managed form belongs specifically to `vercel()`; a generic sandbox backend is not required to implement it. Do not also set `networkPolicy` through `onSession` or `setNetworkPolicy` when using managed brokering. Vercel network policy updates replace the entire policy, so doing this removes the brokered transforms and disables Vercel Connect credential injection for sandbox egress.
+On-request resolution uses Vercel's `forwardURL` firewall capability. The authenticated proxy writes a demand marker into the originating sandbox and returns HTTP 428. Eve terminates the blocked awaited command, resolves only the demanded rules, then replays the command. Missing interactive credentials park and resume through Eve's normal callback lifecycle. Replay can repeat effects performed before the blocked request, so commands should be safe to retry. Detached or otherwise un-awaited processes do not support demand-triggered consent.
+
+Both modes require Vercel Pro or Enterprise because firewall transformations are not available on Hobby. On-request mode additionally uses a beta Vercel capability and requires a public HTTPS Eve endpoint. Vercel deployments derive that endpoint automatically; local development must set `authProxyBaseUrl` to a public HTTPS tunnel or deployment. Eve also uses this origin for interactive authorization callbacks, avoiding protected immutable deployment URLs when an explicit public origin is configured.
+
+Eve removes resolved tokens after every step. Unresolved eager routes remain closed, while unresolved on-request routes revert to their trigger rules. Managed policies reject authored `forwardURL` rules and reject policy replacement through `onSession({ use })` or `sandbox.setNetworkPolicy()`; a second policy writer would otherwise remove Eve's transforms and triggers. Brokered credentials are unavailable during template bootstrap.
 
 You can also construct transforms directly on Vercel Sandbox or microsandbox:
 

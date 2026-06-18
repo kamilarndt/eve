@@ -161,12 +161,17 @@ export async function completeScopedAuthorization(input: ScopedAuthorization): P
  */
 export async function startScopedAuthorization(
   input: ScopedAuthorization,
+  callbackBaseUrl?: string,
 ): Promise<AuthorizationSignal | undefined> {
   const { scope, authorization, connection } = input;
   if (!supportsInteractiveAuthorization(authorization)) return undefined;
 
-  const hookUrl = getHookUrl(scope);
-  if (hookUrl === undefined) return undefined;
+  const generatedHookUrl = getHookUrl(scope);
+  if (generatedHookUrl === undefined) return undefined;
+  const hookUrl =
+    callbackBaseUrl === undefined
+      ? generatedHookUrl
+      : rebaseAuthorizationHookUrl(generatedHookUrl, callbackBaseUrl);
 
   const interactive = authorization as InteractiveAuthorizationDefinition<JsonValue>;
   const principal = resolveConnectionPrincipal(scope, interactive);
@@ -183,6 +188,15 @@ export async function startScopedAuthorization(
       resume,
     },
   ]);
+}
+
+function rebaseAuthorizationHookUrl(hookUrl: string, callbackBaseUrl: string): string {
+  const generated = new URL(hookUrl);
+  const rebased = new URL(callbackBaseUrl);
+  rebased.pathname = `${rebased.pathname.replace(/\/$/, "")}${generated.pathname}`;
+  rebased.search = generated.search;
+  rebased.hash = generated.hash;
+  return rebased.toString();
 }
 
 /**

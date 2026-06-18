@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Add step-scoped credential brokering to the Vercel Sandbox backend, including interactive per-user authorization. Sandboxes remain on an empty-token policy while authorization is pending, then receive the credentialed policy on the resumed step.
+Add route-level Vercel Sandbox authorization with an explicit eager or on-request credential-resolution mode. On-request rules prompt only when an awaited process reaches them, then park, activate, and replay through Eve's authorization lifecycle.

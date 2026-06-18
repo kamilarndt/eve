@@ -1,6 +1,5 @@
 import { createVercelSandbox } from "#execution/sandbox/bindings/vercel.js";
 import type { SandboxBackend } from "#public/definitions/sandbox-backend.js";
-import type { SandboxCredentialMap } from "#public/sandbox/credentials.js";
 import type {
   VercelSandboxBootstrapUseOptions,
   VercelSandboxCreateOptions,
@@ -29,19 +28,17 @@ import type {
  *
  * `bootstrap({ use })` applies its options to the template via
  * `sandbox.update(...)`; those settings persist into the snapshot.
- * `onSession({ use })` applies its options to the live session via the
- * SDK's `update` under the hood. A brokered function-form
- * `networkPolicy` remains framework-owned and is re-applied after
- * `onSession({ use })`.
+ * `onSession({ use })` applies its options to the live session via the SDK's
+ * `update` under the hood. Network-policy replacement is rejected when the
+ * factory policy contains Eve-managed authenticated rules.
  *
- * A `credentials` map paired with a function-form `networkPolicy` resolves
- * credentials for the active principal on every step and injects them through
- * the Vercel Sandbox firewall. Interactive strategies use eve's authorization
- * pause/resume flow while the live sandbox remains on an empty-token policy.
- * Brokered credentials are replaced with empty values after the step completes.
+ * Route-level `auth` rules resolve credentials for the active principal and
+ * inject them through the Vercel Sandbox firewall. `credentialResolution`
+ * selects eager or demand-driven resolution. Credentials are removed after
+ * each step.
  */
-export function vercel<C extends SandboxCredentialMap = Record<string, never>>(
-  opts?: VercelSandboxCreateOptions<C>,
+export function vercel(
+  opts?: VercelSandboxCreateOptions,
 ): SandboxBackend<VercelSandboxBootstrapUseOptions, VercelSandboxSessionUseOptions> {
   return createVercelSandbox({ createOptions: opts });
 }

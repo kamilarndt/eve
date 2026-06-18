@@ -8,6 +8,8 @@ import {
   EVE_DEV_RUNTIME_ARTIFACTS_ROUTE_PATH,
   EVE_HEALTH_ROUTE_PATH,
   EVE_INFO_ROUTE_PATH,
+  EVE_SANDBOX_EGRESS_FORWARD_ROUTE_PATTERN,
+  EVE_SANDBOX_EGRESS_ROUTE_PATTERN,
 } from "#protocol/routes.js";
 import {
   normalizeEsmImportSpecifier,
@@ -339,6 +341,14 @@ export async function configureNitroRoutes(
         route: EVE_HEALTH_ROUTE_PATH,
       });
     }
+    registerHandler(nitro, {
+      handlerPath: resolvePackageSourceFilePath("src/internal/nitro/routes/sandbox-egress.ts"),
+      route: EVE_SANDBOX_EGRESS_ROUTE_PATTERN,
+    });
+    registerHandler(nitro, {
+      handlerPath: resolvePackageSourceFilePath("src/internal/nitro/routes/sandbox-egress.ts"),
+      route: EVE_SANDBOX_EGRESS_FORWARD_ROUTE_PATTERN,
+    });
 
     // The agent info endpoint needs `appRoot` baked at build time (used by
     // the disk-source fallback in dev) and runs request-time auth, so it

@@ -2,13 +2,9 @@ import { Readable } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ContextContainer, contextStorage } from "#context/container.js";
-import { AuthKey, SessionIdKey } from "#context/keys.js";
-import { isSandboxAuthorizationInterrupt } from "#execution/sandbox/authorization-interrupt.js";
 import { SandboxTemplateNotProvisionedError } from "#public/definitions/sandbox-backend.js";
 import { vercel } from "#public/sandbox/backends/vercel.js";
 import { createVercelSandbox } from "#execution/sandbox/bindings/vercel.js";
-import { CallbackBaseUrlKey } from "#harness/authorization.js";
 
 function createMockCommandResult() {
   return {
@@ -127,6 +123,118 @@ afterEach(() => {
 });
 
 describe("createVercelSandbox", () => {
+  it("activates name-qualified on-request triggers without resolving unused credentials", async () => {
+    const getToken = vi.fn(async () => ({ token: "unused" }));
+    const sessionSandbox = createMockSandbox({ name: "session-key" });
+    const sandboxModule = {
+      Sandbox: {
+        create: vi.fn(),
+        get: vi.fn().mockResolvedValue(sessionSandbox),
+      },
+    };
+    const backend = createTestVercelSandbox({
+      createOptions: {
+        authProxyBaseUrl: "https://eve.example.com",
+        credentialResolution: "on-request",
+        networkPolicy: {
+          allow: {
+            "api.example.com": [
+              {
+                auth: { getToken },
+                transform: ({ token }) => [
+                  {
+                    headers: { authorization: `Bearer ${token}` },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      loadSandboxModule: async () => sandboxModule as never,
+    });
+
+    await backend.create({
+      runtimeContext: { appRoot: "/tmp/test-app-root" },
+      sessionKey: "session-key",
+      templateKey: null,
+    });
+
+    expect(sessionSandbox.update).toHaveBeenNthCalledWith(1, {
+      networkPolicy: { allow: {}, subnets: undefined },
+    });
+    expect(sessionSandbox.update).toHaveBeenNthCalledWith(2, {
+      networkPolicy: {
+        allow: {
+          "api.example.com": [
+            {
+              forwardURL: "https://eve.example.com/eve/v1/sandbox/egress/r0-0/session-key",
+            },
+          ],
+        },
+        subnets: undefined,
+      },
+    });
+    expect(getToken).not.toHaveBeenCalled();
+  });
+
+  it("activates eager route credentials and clears them on dispose", async () => {
+    const sessionSandbox = createMockSandbox({ name: "session-key" });
+    const sandboxModule = {
+      Sandbox: {
+        create: vi.fn(),
+        get: vi.fn().mockResolvedValue(sessionSandbox),
+      },
+    };
+    const backend = createTestVercelSandbox({
+      createOptions: {
+        credentialResolution: "eager",
+        networkPolicy: {
+          allow: {
+            "api.example.com": [
+              {
+                auth: { getToken: async () => ({ token: "step-token" }) },
+                transform: ({ token }) => [
+                  {
+                    headers: { authorization: `Bearer ${token}` },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
+      loadSandboxModule: async () => sandboxModule as never,
+    });
+
+    const handle = await backend.create({
+      runtimeContext: { appRoot: "/tmp/test-app-root" },
+      sessionKey: "session-key",
+      templateKey: null,
+    });
+
+    expect(sessionSandbox.update).toHaveBeenNthCalledWith(1, {
+      networkPolicy: { allow: {}, subnets: undefined },
+    });
+    expect(sessionSandbox.update).toHaveBeenNthCalledWith(2, {
+      networkPolicy: {
+        allow: {
+          "api.example.com": [
+            {
+              transform: [{ headers: { authorization: "Bearer step-token" } }],
+            },
+          ],
+        },
+        subnets: undefined,
+      },
+    });
+
+    await handle.dispose();
+    expect(sessionSandbox.update).toHaveBeenLastCalledWith({
+      networkPolicy: { allow: {}, subnets: undefined },
+    });
+  });
+
   it("creates fresh Vercel sandboxes through the SDK with the eve image", async () => {
     const templateSandbox = createMockSandbox({ name: "template-key" });
     const fetch = vi.fn();
@@ -1062,428 +1170,6 @@ describe("createVercelSandbox", () => {
     }
   });
 
-  it("applies brokered credentials for the step and clears them on dispose", async () => {
-    const sessionSandbox = createMockSandbox({ name: "session-key" });
-    const sandboxModule = {
-      Sandbox: {
-        create: vi.fn(),
-        get: vi.fn().mockResolvedValue(sessionSandbox),
-      },
-    };
-    const getToken = vi.fn(async () => ({ token: "step-token" }));
-    const backend = createTestVercelSandbox({
-      createOptions: {
-        credentials: {
-          service: { getToken },
-        },
-        networkPolicy: ({ service }) => ({
-          allow: {
-            "api.example.com": [
-              {
-                transform: [
-                  {
-                    headers: {
-                      authorization: `Bearer ${service!.token}`,
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      },
-      loadSandboxModule: async () => sandboxModule as never,
-    });
-
-    const handle = await backend.create({
-      runtimeContext: { appRoot: "/tmp/test-app-root" },
-      sessionKey: "session-key",
-      templateKey: null,
-    });
-
-    expect(getToken).toHaveBeenCalledTimes(1);
-    expect(sessionSandbox.update).toHaveBeenNthCalledWith(1, {
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer ",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-    expect(sessionSandbox.update).toHaveBeenLastCalledWith({
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer step-token",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-
-    await handle.useSessionFn({ networkPolicy: "allow-all" });
-    expect(sessionSandbox.update).toHaveBeenNthCalledWith(3, {
-      networkPolicy: "allow-all",
-    });
-    expect(sessionSandbox.update).toHaveBeenNthCalledWith(4, {
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer step-token",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-
-    await handle.dispose();
-    expect(sessionSandbox.update).toHaveBeenLastCalledWith({
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer ",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-  });
-
-  it("creates template-backed sessions with empty credentials before activation", async () => {
-    const templateSandbox = createMockSandbox({
-      name: "template-key",
-      snapshotId: "template-snapshot",
-    });
-    const sessionSandbox = createMockSandbox({ name: "session-key" });
-    const sandboxModule = {
-      Sandbox: {
-        create: vi.fn().mockResolvedValue(sessionSandbox),
-        get: vi.fn().mockResolvedValueOnce(templateSandbox).mockResolvedValueOnce(null),
-      },
-    };
-    const backend = createTestVercelSandbox({
-      createOptions: {
-        credentials: {
-          service: {
-            getToken: async () => ({ token: "step-token" }),
-          },
-        },
-        networkPolicy: ({ service }) => ({
-          allow: {
-            "api.example.com": [
-              {
-                transform: [
-                  {
-                    headers: {
-                      authorization: `Bearer ${service!.token}`,
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      },
-      loadSandboxModule: async () => sandboxModule as never,
-    });
-
-    await backend.prewarm({
-      runtimeContext: { appRoot: "/tmp/test-app-root" },
-      seedFiles: [],
-      templateKey: "template-key",
-    });
-    await backend.create({
-      runtimeContext: { appRoot: "/tmp/test-app-root" },
-      sessionKey: "session-key",
-      templateKey: "template-key",
-    });
-
-    expect(sandboxModule.Sandbox.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        networkPolicy: {
-          allow: {
-            "api.example.com": [
-              {
-                transform: [
-                  {
-                    headers: {
-                      authorization: "Bearer ",
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        },
-      }),
-    );
-    expect(sessionSandbox.update).toHaveBeenCalledWith({
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer step-token",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-  });
-
-  it("keeps a live sandbox on the empty policy while interactive authorization is pending", async () => {
-    const sessionSandbox = createMockSandbox({ name: "session-key" });
-    const sandboxModule = {
-      Sandbox: {
-        create: vi.fn(),
-        get: vi.fn().mockResolvedValue(sessionSandbox),
-      },
-    };
-    const startAuthorization = vi.fn(async () => ({
-      challenge: { url: "https://example.com/authorize" },
-    }));
-    const backend = createTestVercelSandbox({
-      createOptions: {
-        credentials: {
-          service: {
-            completeAuthorization: async () => ({ token: "step-token" }),
-            getToken: async () => {
-              const error = new Error("auth required");
-              error.name = "ConnectionAuthorizationRequiredError";
-              throw error;
-            },
-            principalType: "user",
-            startAuthorization,
-          },
-        },
-        networkPolicy: ({ service }) => ({
-          allow: {
-            "api.example.com": [
-              {
-                transform: [
-                  {
-                    headers: {
-                      authorization: `Bearer ${service!.token}`,
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      },
-      loadSandboxModule: async () => sandboxModule as never,
-    });
-    const context = new ContextContainer();
-    context.set(SessionIdKey, "session-auth");
-    context.set(CallbackBaseUrlKey, "https://app.example");
-    context.set(AuthKey, {
-      attributes: {},
-      authenticator: "test",
-      issuer: "test",
-      principalId: "user-1",
-      principalType: "user",
-    });
-
-    const error = await contextStorage
-      .run(context, () =>
-        backend.create({
-          runtimeContext: { appRoot: "/tmp/test-app-root" },
-          sessionKey: "session-key",
-          templateKey: null,
-        }),
-      )
-      .then(
-        () => null,
-        (caught: unknown) => caught,
-      );
-
-    expect(isSandboxAuthorizationInterrupt(error)).toBe(true);
-    expect(sessionSandbox.update).toHaveBeenCalledTimes(1);
-    expect(sessionSandbox.update).toHaveBeenCalledWith({
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer ",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-    expect(vi.mocked(sessionSandbox.update).mock.invocationCallOrder[0]).toBeLessThan(
-      startAuthorization.mock.invocationCallOrder[0]!,
-    );
-  });
-
-  it("clears brokered credentials when policy activation fails", async () => {
-    const sessionSandbox = createMockSandbox({ name: "session-key" });
-    vi.mocked(sessionSandbox.update)
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error("activation failed"))
-      .mockResolvedValueOnce(undefined);
-    const sandboxModule = {
-      Sandbox: {
-        create: vi.fn(),
-        get: vi.fn().mockResolvedValue(sessionSandbox),
-      },
-    };
-    const backend = createTestVercelSandbox({
-      createOptions: {
-        credentials: {
-          service: {
-            getToken: async () => ({ token: "step-token" }),
-          },
-        },
-        networkPolicy: ({ service }) => ({
-          allow: {
-            "api.example.com": [
-              {
-                transform: [
-                  {
-                    headers: {
-                      authorization: `Bearer ${service!.token}`,
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      },
-      loadSandboxModule: async () => sandboxModule as never,
-    });
-
-    await expect(
-      backend.create({
-        runtimeContext: { appRoot: "/tmp/test-app-root" },
-        sessionKey: "session-key",
-        templateKey: null,
-      }),
-    ).rejects.toThrow("activation failed");
-
-    expect(sessionSandbox.update).toHaveBeenLastCalledWith({
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer ",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-  });
-
-  it("clears the policy when framework setup fails before credential resolution", async () => {
-    const sessionSandbox = createMockSandbox({ name: "session-key" });
-    vi.mocked(sessionSandbox.runCommand).mockRejectedValueOnce(new Error("setup failed"));
-    const sandboxModule = {
-      Sandbox: {
-        create: vi.fn().mockResolvedValue(sessionSandbox),
-        get: vi.fn().mockResolvedValue(null),
-      },
-    };
-    const backend = createTestVercelSandbox({
-      createOptions: {
-        credentials: {
-          service: {
-            getToken: async () => ({ token: "step-token" }),
-          },
-        },
-        networkPolicy: ({ service }) => ({
-          allow: {
-            "api.example.com": [
-              {
-                transform: [
-                  {
-                    headers: {
-                      authorization: `Bearer ${service!.token}`,
-                    },
-                  },
-                ],
-              },
-            ],
-          },
-        }),
-      },
-      loadSandboxModule: async () => sandboxModule as never,
-    });
-
-    await expect(
-      backend.create({
-        runtimeContext: { appRoot: "/tmp/test-app-root" },
-        sessionKey: "session-key",
-        templateKey: null,
-      }),
-    ).rejects.toThrow("setup failed");
-
-    expect(sessionSandbox.update).toHaveBeenLastCalledWith({
-      networkPolicy: {
-        allow: {
-          "api.example.com": [
-            {
-              transform: [
-                {
-                  headers: {
-                    authorization: "Bearer ",
-                  },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    });
-  });
-
   it("adds eve sandbox tags to Vercel template and session creation", async () => {
     const templateSandbox = createMockSandbox({ name: "template" });
     const sessionSandbox = createMockSandbox({ name: "session" });
@@ -2115,31 +1801,21 @@ describe("vercel (public factory)", () => {
     expect(typeof backend.prewarm).toBe("function");
   });
 
-  it("infers credential labels in the network policy builder", () => {
-    const networkPolicy = vi.fn(({ service }) => {
-      const token: string = service.token;
-      return {
+  it("accepts route-level authenticated rules", () => {
+    vercel({
+      credentialResolution: "eager",
+      networkPolicy: {
         allow: {
           "api.example.com": [
             {
-              transform: [{ headers: { authorization: `Bearer ${token}` } }],
+              auth: { getToken: async () => ({ token: "secret" }) },
+              transform: ({ token }: { token: string }) => [
+                { headers: { authorization: `Bearer ${token}` } },
+              ],
             },
           ],
         },
-      };
-    });
-
-    vercel({
-      credentials: {
-        service: {
-          getToken: async () => ({ token: "secret" }),
-        },
       },
-      networkPolicy,
-    });
-
-    expect(networkPolicy).toHaveBeenCalledWith({
-      service: { token: "" },
     });
   });
 });

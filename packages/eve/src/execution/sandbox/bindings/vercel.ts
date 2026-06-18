@@ -11,9 +11,13 @@ import {
   createVercelNetworkPolicySetter,
   createVercelSandboxHandle,
 } from "#execution/sandbox/bindings/vercel-session.js";
+import {
+  clearVercelEgressDemandMarkers,
+  readVercelEgressDemandedRuleIds,
+} from "#execution/sandbox/bindings/vercel-egress-demand.js";
 import type { SandboxBootstrapContext } from "#public/definitions/sandbox.js";
-import type { SandboxCredentialMap } from "#public/sandbox/credentials.js";
 import type { SandboxNetworkPolicy } from "#shared/sandbox-network-policy.js";
+import type { TokenResult } from "#runtime/connections/types.js";
 import type {
   SandboxBackend,
   SandboxBackendCreateInput,
@@ -47,9 +51,9 @@ import type {
   VercelSandbox,
 } from "#execution/sandbox/bindings/vercel-sdk-types.js";
 
-export interface CreateVercelSandboxInput<C extends SandboxCredentialMap = Record<string, never>> {
+export interface CreateVercelSandboxInput {
   readonly createSandbox?: CreateVercelSandbox;
-  readonly createOptions?: VercelSandboxCreateOptions<C>;
+  readonly createOptions?: VercelSandboxCreateOptions;
   readonly loadSandboxModule?: () => Promise<VercelModule>;
 }
 /**
@@ -60,8 +64,8 @@ export interface CreateVercelSandboxInput<C extends SandboxCredentialMap = Recor
  * prewarm time, session at first-time session-create). On resume
  * (`Sandbox.get`) no create happens, so they are not re-applied.
  */
-export function createVercelSandbox<C extends SandboxCredentialMap = Record<string, never>>(
-  input: CreateVercelSandboxInput<C> = {},
+export function createVercelSandbox(
+  input: CreateVercelSandboxInput = {},
 ): SandboxBackend<VercelSandboxBootstrapUseOptions, VercelSandboxSessionUseOptions> {
   const loadSandboxModule =
     input.loadSandboxModule ?? (async () => await import("#compiled/@vercel/sandbox/index.js"));
@@ -73,7 +77,7 @@ export function createVercelSandbox<C extends SandboxCredentialMap = Record<stri
   const templateCreateOptions =
     extracted.brokering === undefined
       ? createOptions
-      : { ...createOptions, networkPolicy: extracted.brokering.emptyPolicy };
+      : { ...createOptions, networkPolicy: extracted.brokering.clearedPolicy };
   const createSandbox = input.createSandbox ?? createVercelEveImageSandbox;
   const prewarmedTemplates = new Map<string, VercelSandboxTemplateRecord>();
 
@@ -107,7 +111,7 @@ export function createVercelSandbox<C extends SandboxCredentialMap = Record<stri
           sessionKey: createInput.sessionKey,
           snapshotId: template?.snapshotId,
           tags,
-          networkPolicy: extracted.brokering?.emptyPolicy,
+          networkPolicy: extracted.brokering?.clearedPolicy,
         });
       } catch (error) {
         if (
@@ -133,23 +137,56 @@ export function createVercelSandbox<C extends SandboxCredentialMap = Record<stri
       }
 
       let brokeredPolicy: SandboxNetworkPolicy | undefined;
+      let resolvedCredentials = new Map<string, TokenResult>();
       if (extracted.brokering === undefined) {
         await activateStaticVercelSandboxPolicy({ createOptions, session, template });
       } else {
         await prepareVercelSandboxForCredentialResolution({
-          emptyPolicy: extracted.brokering.emptyPolicy,
+          emptyPolicy: extracted.brokering.clearedPolicy,
           session,
           template,
         });
-        brokeredPolicy = await resolveVercelCredentialPolicy(
-          extracted.brokering,
-          createInput.sessionKey,
+        const demandedRuleIds = await readVercelEgressDemandedRuleIds(
+          session.sandbox,
+          [...extracted.brokering.rules.values()]
+            .filter((rule) => rule.credentialResolution === "on-request")
+            .map((rule) => rule.id),
         );
+        let resolved;
+        try {
+          resolved = await resolveVercelCredentialPolicy(
+            extracted.brokering,
+            createInput.sessionKey,
+            [...new Set([...extracted.brokering.eagerRuleIds, ...demandedRuleIds])],
+            session.sandbox.name,
+          );
+        } catch (error) {
+          await activateBrokeredVercelSandboxPolicy({
+            brokeredPolicy: extracted.brokering.buildPolicy(new Map(), session.sandbox.name),
+            emptyPolicy: extracted.brokering.clearedPolicy,
+            sandbox: session.sandbox,
+          });
+          await clearVercelEgressDemandMarkers(session.sandbox, demandedRuleIds);
+          throw error;
+        }
+        brokeredPolicy = resolved.policy;
+        resolvedCredentials = new Map(resolved.credentials);
         await activateBrokeredVercelSandboxPolicy({
           brokeredPolicy,
-          emptyPolicy: extracted.brokering.emptyPolicy,
+          emptyPolicy: extracted.brokering.clearedPolicy,
           sandbox: session.sandbox,
         });
+        await clearVercelEgressDemandMarkers(session.sandbox, demandedRuleIds);
+        const unavailableDemandedRuleIds = resolved.unresolvedRuleIds.filter((ruleId) =>
+          demandedRuleIds.includes(ruleId),
+        );
+        if (unavailableDemandedRuleIds.length > 0) {
+          throw new Error(
+            `Sandbox credentials remained unavailable for on-request rules: ${unavailableDemandedRuleIds.join(
+              ", ",
+            )}.`,
+          );
+        }
       }
 
       return createVercelSandboxHandle(
@@ -157,6 +194,7 @@ export function createVercelSandbox<C extends SandboxCredentialMap = Record<stri
         createInput.sessionKey,
         extracted.brokering,
         brokeredPolicy,
+        resolvedCredentials,
       );
     },
     async prewarm(
