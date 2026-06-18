@@ -19,6 +19,9 @@ const GATEWAY_REALTIME_SUBPROTOCOL = "ai-gateway-realtime.v1";
 const GATEWAY_AUTH_SUBPROTOCOL_PREFIX = "ai-gateway-auth.";
 const EVE_SPEAK_PREFIX = "EVE_SPEAK:";
 const ECHO_SUPPRESSION_MS = 900;
+// Bounds the deduplication set so a long-lived session does not grow it without
+// limit; finalized transcription item ids are only revisited within a few turns.
+const MAX_TRACKED_INPUT_ITEMS = 256;
 
 type StoppableMediaStream = {
   getTracks(): readonly { stop(): void }[];
@@ -365,6 +368,10 @@ export function useEveVoice(options: UseEveVoiceOptions = {}): UseEveVoiceResult
             break;
           }
           processedInputItemsRef.current.add(event.itemId);
+          if (processedInputItemsRef.current.size > MAX_TRACKED_INPUT_ITEMS) {
+            const oldest = processedInputItemsRef.current.values().next().value;
+            if (oldest !== undefined) processedInputItemsRef.current.delete(oldest);
+          }
           latestInputItemIdRef.current = event.itemId;
           const transcript = event.transcript.trim();
           if (transcript.length === 0) {

@@ -8,6 +8,19 @@ import { traceReducer, type TraceProjection } from "./trace-reducer";
 import { resolveTurnFailureMessage, shouldRenderAssistantTurn } from "./turn-content";
 import type { TraceTurn } from "./types";
 
+// Demo session tracking sets are unbounded otherwise; cap them so a long
+// voice session does not accumulate turn ids and spoken-message keys forever.
+const MAX_TRACKED_VOICE_TURNS = 256;
+
+function rememberBounded(seen: Set<string>, value: string, max: number): void {
+  seen.add(value);
+  while (seen.size > max) {
+    const oldest = seen.values().next().value;
+    if (oldest === undefined) break;
+    seen.delete(oldest);
+  }
+}
+
 function ConversationSection(props: {
   readonly isSending: boolean;
   readonly turns: readonly TraceTurn[];
@@ -72,7 +85,7 @@ export function App() {
         pendingVoiceMessagesRef.current[0] === event.data.message
       ) {
         pendingVoiceMessagesRef.current.shift();
-        voiceTurnIdsRef.current.add(event.data.turnId);
+        rememberBounded(voiceTurnIdsRef.current, event.data.turnId, MAX_TRACKED_VOICE_TURNS);
         return;
       }
 
@@ -85,7 +98,7 @@ export function App() {
         const key = `${event.data.turnId}:${event.data.stepIndex}:${event.data.message}`;
         if (spokenVoiceMessageKeysRef.current.has(key)) return;
 
-        spokenVoiceMessageKeysRef.current.add(key);
+        rememberBounded(spokenVoiceMessageKeysRef.current, key, MAX_TRACKED_VOICE_TURNS);
         voiceRef.current?.speak(event.data.message);
         setVoiceCaption(`Reply ready: ${event.data.message}`);
       }
