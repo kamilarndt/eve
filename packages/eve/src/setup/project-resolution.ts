@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 
@@ -24,16 +25,90 @@ const VercelProjectReferenceSchema = z.object({
 /** Project and owner identifiers from a valid on-disk Vercel link. */
 export type VercelProjectReference = z.infer<typeof VercelProjectReferenceSchema>;
 
-/** Reads a validated Vercel project reference from `.vercel/project.json`. */
+type ProjectLinkDirectoryName = ".vercel" | ".now";
+
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function projectLinkDirectories(projectRoot: string): Promise<{
+  readonly hasVercel: boolean;
+  readonly hasNow: boolean;
+}> {
+  const [hasVercel, hasNow] = await Promise.all([
+    isDirectory(join(projectRoot, ".vercel")),
+    isDirectory(join(projectRoot, ".now")),
+  ]);
+  return { hasVercel, hasNow };
+}
+
+/** Reads a validated project reference from Vercel's current or legacy metadata directory. */
 export async function readProjectLink(
   projectPath: string,
 ): Promise<VercelProjectReference | undefined> {
   try {
-    const raw = await readFile(join(projectPath, ".vercel", "project.json"), "utf8");
+    const directories = await projectLinkDirectories(projectPath);
+    if (directories.hasVercel && directories.hasNow) return undefined;
+    const directory: ProjectLinkDirectoryName = directories.hasNow ? ".now" : ".vercel";
+    const raw = await readFile(join(projectPath, directory, "project.json"), "utf8");
     const parsed = VercelProjectReferenceSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : undefined;
   } catch {
     return undefined;
+  }
+}
+
+async function ensureVercelIgnored(
+  projectRoot: string,
+  directory: ProjectLinkDirectoryName,
+): Promise<void> {
+  try {
+    const path = join(projectRoot, ".gitignore");
+    const current = await readFile(path, "utf8").catch(() => "");
+    const newline = current.includes("\r\n") ? "\r\n" : "\n";
+    if (current.split(/\r?\n/u).includes(directory)) return;
+    const separator = current.length === 0 || current.endsWith(newline) ? "" : newline;
+    await writeFile(path, `${current}${separator}${directory}${newline}`, "utf8");
+  } catch {
+    // The project link remains valid when the auxiliary ignore file is unwritable.
+  }
+}
+
+/** Writes the Vercel CLI's project link contract without running plugin onboarding. */
+export async function writeProjectLink(input: {
+  readonly projectRoot: string;
+  readonly link: VercelProjectReference & { readonly projectName: string };
+  readonly signal?: AbortSignal;
+}): Promise<void> {
+  input.signal?.throwIfAborted();
+  const directories = await projectLinkDirectories(input.projectRoot);
+  if (directories.hasVercel && directories.hasNow) {
+    throw new Error(
+      "Both .vercel and legacy .now project directories exist. Remove the stale directory before linking this project.",
+    );
+  }
+  const directoryName: ProjectLinkDirectoryName = directories.hasNow ? ".now" : ".vercel";
+  const projectDirectory = join(input.projectRoot, directoryName);
+  await mkdir(projectDirectory, { recursive: true });
+  input.signal?.throwIfAborted();
+  await ensureVercelIgnored(input.projectRoot, directoryName);
+  input.signal?.throwIfAborted();
+  const projectFile = join(projectDirectory, "project.json");
+  const temporaryFile = `${projectFile}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(temporaryFile, `${JSON.stringify(input.link, null, 2)}\n`, {
+      encoding: "utf8",
+      signal: input.signal,
+    });
+    input.signal?.throwIfAborted();
+    await rename(temporaryFile, projectFile);
+  } catch (error) {
+    await rm(temporaryFile, { force: true }).catch(() => {});
+    throw error;
   }
 }
 

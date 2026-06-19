@@ -73,10 +73,6 @@ function createFlowDeps(): Partial<LinkFlowDeps> {
         kind: "linked",
         projectId: "prj_1",
       })),
-      resolveProjectByNameOrId: vi.fn<LinkProjectDeps["resolveProjectByNameOrId"]>(async () => ({
-        id: "prj_1",
-        name: "my-agent",
-      })),
       unresolvedProject: vi.fn<LinkProjectDeps["unresolvedProject"]>(() => ({
         kind: "unresolved",
       })),

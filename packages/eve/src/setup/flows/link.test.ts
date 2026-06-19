@@ -43,10 +43,6 @@ function createBoxDeps() {
         kind: "linked",
         projectId: "prj_1",
       })),
-      resolveProjectByNameOrId: vi.fn<LinkProjectDeps["resolveProjectByNameOrId"]>(async () => ({
-        id: "prj_1",
-        name: "weather-app",
-      })),
       unresolvedProject: vi.fn<LinkProjectDeps["unresolvedProject"]>(() => ({
         kind: "unresolved",
       })),

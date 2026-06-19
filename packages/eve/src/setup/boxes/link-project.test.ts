@@ -17,7 +17,6 @@ function fakeDeps(overrides: Partial<LinkProjectDeps> = {}): LinkProjectDeps {
       kind: "linked" as const,
       projectId: "prj_my_agent",
     })),
-    resolveProjectByNameOrId: vi.fn(async () => ({ id: "prj_my_agent", name: "my-agent" })),
     unresolvedProject: vi.fn(() => ({ kind: "unresolved" as const })),
     ...overrides,
   };
@@ -90,22 +89,6 @@ describe("linkVercelProject box", () => {
 
     await expect(runHeadless([box], state, silentSink)).rejects.toThrow(
       /could not resolve the Vercel project/,
-    );
-  });
-
-  it("throws when the linked identity does not match the planned project", async () => {
-    const deps = fakeDeps({
-      detectProjectResolution: vi.fn(async () => ({
-        kind: "linked" as const,
-        projectId: "prj_other",
-      })),
-    });
-    const state = resolvedState();
-    state.vercelProject = { kind: "existing", project: "my-agent", team: "team" };
-    const box = linkVercelProject({ prompter: createPrompter(), deps });
-
-    await expect(runHeadless([box], state, silentSink)).rejects.toThrow(
-      /identity did not match the planned Vercel project "my-agent"/,
     );
   });
 });
