@@ -225,13 +225,20 @@ describe("TerminalRenderer (inline scrollback)", () => {
       expect(screen.snapshot()).toContain("partial response");
     });
 
-    // The first Ctrl+C aborts the in-flight turn and unblocks the render
-    // loop even though the server stream never closes on its own. Draining
-    // instead would wait forever for an event that never arrives.
+    // The first Ctrl+C requests server cancellation but keeps draining until
+    // the server closes the turn stream, preserving the session cursor.
     input.ctrlC();
+    await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(1));
+    let settled = false;
+    void rendering.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    streamController?.close();
     await expect(rendering).resolves.toBeUndefined();
 
-    expect(abort).toHaveBeenCalledTimes(1);
     expect(screen.snapshot()).toContain("Interrupted");
     expect(input.rawModes).toEqual([true]);
 
