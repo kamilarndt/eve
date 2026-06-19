@@ -487,28 +487,11 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
       if (options.input !== undefined && mode === "headless") {
         throw new InvalidArgumentError("--input requires the interactive UI.");
       }
-      const { loadDevelopmentEnvironmentFiles } = await import("#cli/dev/environment.js");
-
-      loadDevelopmentEnvironmentFiles(appRoot);
-
-      // Resolve early so the TUI title uses the same app root the host will own.
-      let localAppRoot: string | undefined;
-      if (remoteServerUrl === undefined) {
-        const { resolveDiscoveryProject } = await import("#discover/project.js");
-        try {
-          localAppRoot = (await resolveDiscoveryProject(appRoot)).appRoot;
-        } catch {
-          localAppRoot = appRoot;
-        }
-      }
-
-      const hasExplicitEndpoint =
-        options.host !== undefined ||
-        options.port !== undefined ||
-        (process.env.PORT?.trim() ?? "") !== "";
-
       const runInteractiveUi = async (
-        serverUrl: string,
+        input: {
+          readonly appRoot?: string;
+          readonly serverUrl: string;
+        },
         report?: DevBootProgressReporter,
       ): Promise<void> => {
         const runDevelopmentTui = await devBootPhase(
@@ -519,8 +502,12 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
         const display = resolveTuiDisplayOptions(options);
         const target: DevelopmentTuiTarget =
           remoteServerUrl === undefined
-            ? { kind: "local", serverUrl, workspaceRoot: appRoot }
-            : { kind: "remote", serverUrl, workspaceRoot: appRoot };
+            ? {
+                kind: "local",
+                serverUrl: input.serverUrl,
+                workspaceRoot: input.appRoot ?? appRoot,
+              }
+            : { kind: "remote", serverUrl: input.serverUrl, workspaceRoot: appRoot };
         const title = resolveTuiTitle({ name: options.name, target });
         if (title !== undefined) display.name = title;
         const tuiInput: RunDevelopmentTuiInput = {
@@ -533,6 +520,8 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
       };
 
       if (remoteServerUrl) {
+        const { loadDevelopmentEnvironmentFiles } = await import("#cli/dev/environment.js");
+        loadDevelopmentEnvironmentFiles(appRoot);
         logger.log(`↗ remote mode targeting ${theme.info(new URL(remoteServerUrl).host)}`);
 
         if (mode === "headless") {
@@ -547,7 +536,7 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
         }
 
         logger.log("");
-        await runInteractiveUi(remoteServerUrl);
+        await runInteractiveUi({ serverUrl: remoteServerUrl });
         return;
       }
 
@@ -560,7 +549,7 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
       let closed = false;
       let server: DevelopmentServerHandle | undefined;
       const closeServer = async () => {
-        if (closed || server === undefined) {
+        if (closed || server === undefined || server.kind === "existing") {
           return;
         }
 
@@ -570,11 +559,11 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
 
       try {
         const startHost = runtime.startHost ?? (await loadStartHost());
-        server = await startHost(localAppRoot ?? appRoot, {
+        server = await startHost(appRoot, {
+          existing: mode === "tui" ? "attach-if-unconfigured" : "reject",
           host: options.host,
           onBootProgress,
           port: options.port,
-          reuseExisting: mode === "tui" && !hasExplicitEndpoint,
         });
 
         // The terminal UI's header already shows the server URL, and startup
@@ -609,7 +598,7 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
           });
         }
 
-        await runInteractiveUi(server.url, onBootProgress);
+        await runInteractiveUi({ appRoot: server.appRoot, serverUrl: server.url }, onBootProgress);
       } finally {
         buildProgress?.stop();
         await closeServer();
