@@ -165,13 +165,14 @@ export class EveAgentStore<TData> {
         return;
       }
 
+      if (!activeTurn.beginDispatch()) {
+        this.#status = "ready";
+        return;
+      }
+
       this.#projectOptimisticMessage(preparedInput);
       this.#projectInputResponses(preparedInput);
       this.#publish();
-
-      if (!activeTurn.beginDispatch()) {
-        return;
-      }
 
       const response = await this.#session.send({
         ...preparedInput,
