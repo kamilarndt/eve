@@ -28,6 +28,7 @@ export {
   renderSelectPrompt,
   type PromptColors,
   type PromptOption,
+  type PromptOptionNotice,
   type PromptState,
   type PromptValue,
 } from "./prompt-ui.js";

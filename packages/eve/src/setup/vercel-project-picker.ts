@@ -11,6 +11,7 @@ interface PickableVercelProject {
 interface VercelProjectPickerOptions {
   readonly prompter: Prompter;
   readonly team: string;
+  readonly message?: string;
   readonly projects: readonly PickableVercelProject[];
   search(query: string): Promise<readonly PickableVercelProject[]>;
 }
@@ -38,7 +39,7 @@ export async function pickExistingVercelProject(
 
   while (true) {
     const selected = await options.prompter.select({
-      message: "Project to link",
+      message: options.message ?? "Project to link",
       search: true,
       placeholder: "type to filter projects",
       options: [

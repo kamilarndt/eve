@@ -17,6 +17,7 @@ const mockedSpawn = vi.mocked(spawn);
  * streams, close/error events, and a spyable `kill`.
  */
 type ChildProcessDouble = ChildProcess & {
+  stdin: PassThrough;
   stdout: PassThrough;
   stderr: PassThrough;
   kill: ReturnType<typeof vi.fn<(signal?: NodeJS.Signals | number) => boolean>>;
@@ -24,6 +25,7 @@ type ChildProcessDouble = ChildProcess & {
 
 function createChildProcess(): ChildProcessDouble {
   const child = new EventEmitter() as ChildProcessDouble;
+  child.stdin = new PassThrough();
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.kill = vi.fn((_signal?: NodeJS.Signals | number) => true);
@@ -229,6 +231,27 @@ describe("timeoutMs", () => {
 });
 
 describe("captureVercel", () => {
+  test("writes a request body to stdin", async () => {
+    const child = createChildProcess();
+    mockSpawnReturn(child);
+    const chunks: Buffer[] = [];
+    child.stdin.on("data", (chunk: Buffer) => chunks.push(chunk));
+
+    const result = captureVercel(["api", "/v9/projects/example", "--input", "-"], {
+      cwd: "/tmp/eve-agent",
+      stdin: '{"trustedSources":{}}',
+    });
+    child.emit("close", 0);
+
+    await expect(result).resolves.toEqual({ ok: true, stdout: "" });
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      "vercel",
+      ["api", "/v9/projects/example", "--input", "-"],
+      expect.objectContaining({ stdio: ["pipe", "pipe", "pipe"] }),
+    );
+    expect(Buffer.concat(chunks).toString("utf8")).toBe('{"trustedSources":{}}');
+  });
+
   test("resolves with stdout on a clean exit", async () => {
     const child = createChildProcess();
     mockSpawnReturn(child);

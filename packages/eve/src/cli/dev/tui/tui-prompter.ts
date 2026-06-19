@@ -7,9 +7,14 @@ import type {
   SingleSelectOptions,
 } from "#setup/prompter.js";
 import { createSelectOptionCodec } from "#setup/cli/select-option-codec.js";
-import { WizardCancelledError } from "#setup/step.js";
+import { StepBackError, WizardCancelledError } from "#setup/step.js";
 
-import type { SetupFlowPrompterRenderer, SetupSelectRequest } from "./setup-flow.js";
+import {
+  BACK,
+  type Back,
+  type SetupFlowPrompterRenderer,
+  type SetupSelectRequest,
+} from "./setup-flow.js";
 
 /**
  * The renderer slice the TUI-native prompter drives: the bordered setup
@@ -19,12 +24,24 @@ import type { SetupFlowPrompterRenderer, SetupSelectRequest } from "./setup-flow
  */
 export type TuiPrompterRenderer = SetupFlowPrompterRenderer;
 
+export interface TuiPrompterOptions {
+  /** Whether Esc returns to the preceding prompt instead of cancelling the flow. */
+  readonly backOnEscape?: boolean;
+}
+
 function setupSelectRequest<T extends PrompterValue>(
   opts: SingleSelectOptions<T> | MultiSelectOptions<T>,
   options: SetupSelectRequest["options"],
   encode: (value: T) => string,
+  escape: "back" | "cancel",
 ): SetupSelectRequest {
-  const base = { message: opts.message, options };
+  const base: Pick<SetupSelectRequest, "escape" | "message" | "messageTone" | "options"> = {
+    message: opts.message,
+    options,
+    escape,
+  };
+  if (opts.messageTone !== undefined) base.messageTone = opts.messageTone;
+
   const withNotices = <Request extends SetupSelectRequest>(request: Request): Request => {
     if (opts.notices !== undefined) request.notices = opts.notices;
     return request;
@@ -83,8 +100,17 @@ function setupSelectRequest<T extends PrompterValue>(
  * `intro`/`outro` are no-ops — the command's elbow-connected outcome line is
  * the opening and closing of a TUI flow.
  */
-export function createTuiPrompter(renderer: TuiPrompterRenderer): Prompter {
-  function guardCancel<T>(value: T | undefined): T {
+export function createTuiPrompter(
+  renderer: TuiPrompterRenderer,
+  options: TuiPrompterOptions = {},
+): Prompter {
+  const escape = options.backOnEscape === true ? "back" : "cancel";
+
+  function guardCancel<T>(value: T | undefined | Back): T {
+    if (value === BACK) {
+      if (options.backOnEscape === true) throw new StepBackError();
+      throw new WizardCancelledError();
+    }
     if (value === undefined) throw new WizardCancelledError();
     return value;
   }
@@ -95,7 +121,7 @@ export function createTuiPrompter(renderer: TuiPrompterRenderer): Prompter {
     opts: SingleSelectOptions<T> | MultiSelectOptions<T>,
   ): Promise<T | T[]> {
     const codec = createSelectOptionCodec(opts.options);
-    const request = setupSelectRequest(opts, codec.options, codec.encode);
+    const request = setupSelectRequest(opts, codec.options, codec.encode, escape);
 
     const keys = guardCancel(await renderer.readSelect(request));
     const values = keys.map((key) => codec.decode(key));
@@ -114,6 +140,7 @@ export function createTuiPrompter(renderer: TuiPrompterRenderer): Prompter {
   return {
     async text(opts) {
       const request: Parameters<TuiPrompterRenderer["readText"]>[0] = {
+        escape,
         message: opts.message,
       };
       if (opts.placeholder !== undefined) request.placeholder = opts.placeholder;
@@ -126,6 +153,7 @@ export function createTuiPrompter(renderer: TuiPrompterRenderer): Prompter {
     async password(opts) {
       const request: Parameters<TuiPrompterRenderer["readText"]>[0] = {
         message: opts.message,
+        escape,
         mask: true,
       };
       if (opts.validate !== undefined) request.validate = opts.validate;
@@ -145,6 +173,7 @@ export function createTuiPrompter(renderer: TuiPrompterRenderer): Prompter {
       if (opts.editable.validate !== undefined) editable.validate = opts.editable.validate;
       const request: Parameters<TuiPrompterRenderer["readEditableSelect"]>[0] = {
         message: opts.message,
+        escape,
         options: codec.options,
         editable,
       };

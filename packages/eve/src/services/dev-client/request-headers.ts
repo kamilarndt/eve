@@ -35,9 +35,9 @@ export function isLocalDevelopmentServerUrl(serverUrl: string): boolean {
  * authorize a destination; callers must first verify the exact deployment
  * origin and install the result in a `DevelopmentCredentialGate`.
  *
- * Asks `@vercel/oidc` for a token scoped to the verified owner and project,
- * validates the returned claims, and returns an empty string when verification
- * fails. Refresh and repair are owned by the explicit remote-auth flow.
+ * Asks `@vercel/oidc` for a token scoped to the verified owner and project. In
+ * development, the library refreshes an expired token before the returned
+ * claims are validated. Returns an empty string when verification fails.
  */
 export async function resolveDevelopmentOidcToken(input: {
   readonly ownerId: string;
@@ -47,13 +47,14 @@ export async function resolveDevelopmentOidcToken(input: {
     const token = (
       await getVercelOidcToken({ team: input.ownerId, project: input.projectId })
     ).trim();
-    return tokenMatchesProject(token, input) ? token : "";
+    return vercelOidcTokenMatchesProject(token, input) ? token : "";
   } catch {
     return "";
   }
 }
 
-function tokenMatchesProject(
+/** Checks decoded owner and project claims without treating the token as authenticated input. */
+export function vercelOidcTokenMatchesProject(
   token: string,
   input: { readonly ownerId: string; readonly projectId: string },
 ): boolean {

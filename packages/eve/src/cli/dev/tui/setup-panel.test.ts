@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import pc from "picocolors";
 
 import { initialSelectState } from "#setup/cli/select-state.js";
 import { lineOf } from "./line-editor.js";
@@ -23,6 +24,7 @@ describe("renderFlowPanel", () => {
     const rows = renderFlowPanel(
       {
         title: "/deploy",
+        description: ["First line of context.", "Second line of context."],
         lines: [
           { text: "Creating Vercel project…", tone: "info" },
           { text: "Linked", tone: "success" },
@@ -39,6 +41,10 @@ describe("renderFlowPanel", () => {
 
     expect(rows[0]).toBe("▔".repeat(60));
     expect(rows[1]).toBe("   /deploy");
+    expect(rows[2]).toBe("");
+    expect(rows[3]).toBe("   First line of context.");
+    expect(rows[4]).toBe("   Second line of context.");
+    expect(rows[5]).toBe("");
     expect(text).toContain("   · Creating Vercel project…");
     expect(text).toContain("   ✓ Linked");
     expect(text).toContain("   ▷ Create a new project");
@@ -101,6 +107,24 @@ describe("renderFlowPanel", () => {
 });
 
 describe("renderSelectQuestion", () => {
+  it("preserves a blue URL in a picker question", () => {
+    const colors = pc.createColors(true);
+    const serverUrl = "https://agent.example.com/";
+    const options = [{ value: "team", label: "Team" }];
+    const rows = renderSelectQuestion(
+      {
+        kind: "single",
+        message: `Which team does ${colors.blue(serverUrl)} belong to?`,
+        options,
+        select: initialSelectState({ options }),
+      },
+      colorTheme,
+      100,
+    );
+
+    expect(rows[0]).toContain(`\x1b[34m${serverUrl}\x1b[39m`);
+  });
+
   it("paints an unnumbered single-select with one state-glyph column", () => {
     const rows = renderSelectQuestion(
       {
@@ -458,6 +482,71 @@ describe("renderSelectQuestion", () => {
       "",
       "  ↑/↓ move · enter to select · esc to cancel",
     ]);
+  });
+
+  it("renders the linked-project warning under the project-change option", () => {
+    const options = [
+      {
+        value: "current",
+        label: "Use current project",
+        hint: "inbound in Internal Playground",
+      },
+      {
+        value: "change",
+        label: "Select another Vercel project",
+        notice: {
+          tone: "warning" as const,
+          lines: ["Updates .env.local and .vercel/project.json"] as const,
+        },
+      },
+      { value: "cancel", label: "Cancel" },
+    ];
+    const state = {
+      kind: "stacked" as const,
+      message: "Authenticate v.vercel.tools",
+      options,
+      escape: "back" as const,
+      select: initialSelectState({ options, defaultValue: "change" }),
+    };
+
+    expect(renderSelectQuestion(state, theme, 100)).toEqual([
+      "  Authenticate v.vercel.tools",
+      "",
+      "  ◦ Use current project",
+      "    inbound in Internal Playground",
+      "",
+      "  ▷ Select another Vercel project",
+      "    ⚠ Updates .env.local and .vercel/project.json",
+      "",
+      "  ◦ Cancel",
+      "",
+      "  ↑/↓ move · enter to select · esc to go back",
+    ]);
+
+    const colored = renderSelectQuestion(state, colorTheme, 100);
+    expect(colored).toContain(
+      "    \x1b[33m⚠\x1b[39m \x1b[2mUpdates .env.local and .vercel/project.json\x1b[22m",
+    );
+  });
+
+  it("renders a warning heading in yellow without inheriting stacked-heading bold", () => {
+    const colors = pc.createColors(true);
+    const options = [{ value: "continue", label: "Continue" }];
+    const rows = renderSelectQuestion(
+      {
+        kind: "stacked",
+        message: `This directory is currently linked to inbound in ${colors.bold("Internal Playground")}.`,
+        messageTone: "warning",
+        options,
+        select: initialSelectState({ options }),
+      },
+      colorTheme,
+      100,
+    );
+
+    expect(rows[0]).toBe(
+      `  \x1b[33mThis directory is currently linked to inbound in \x1b[1mInternal Playground\x1b[22m.\x1b[39m`,
+    );
   });
 
   it("owns emphasis for stacked and multiline select headings", () => {

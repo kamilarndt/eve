@@ -1,15 +1,21 @@
 import { Client } from "#client/index.js";
-import { resolveDevelopmentClientOptions } from "#services/dev-client/client-options.js";
-import { resolveVerifiedRemoteDevelopmentClientOptions } from "#setup/verified-remote-client.js";
+import {
+  resolveDevelopmentClientOptions,
+  resolveRemoteDevelopmentClientOptions,
+} from "#services/dev-client/client-options.js";
+import { createDevelopmentCredentialGate } from "#services/dev-client/credential-gate.js";
+import { resolveDevelopmentOidcToken } from "#services/dev-client/request-headers.js";
 import {
   formatVercelAuthChallengeMessage,
   isVercelAuthChallenge,
 } from "#services/dev-client/vercel-auth-error.js";
+import { resolveVercelDeployment } from "#setup/vercel-deployment.js";
 import { toErrorMessage } from "#shared/errors.js";
 
 import { createPromptCommandHandler } from "./prompt-command-handler.js";
+import { promptCommandsFor } from "./prompt-commands.js";
 import { EveTUIRunner, type EveTUIRunnerOptions } from "./runner.js";
-import type { DevelopmentTuiTarget } from "./target.js";
+import { remoteHost, type DevelopmentTuiTarget, type RemoteDevelopmentTarget } from "./target.js";
 import type { TuiDisplayOptions } from "./types.js";
 
 export type { DevelopmentTuiTarget } from "./target.js";
@@ -25,15 +31,36 @@ export interface RunDevelopmentTuiInput extends TuiDisplayOptions {
   readonly initialInput?: string;
 }
 
-async function resolveClientOptions(target: DevelopmentTuiTarget) {
-  if (target.kind === "local") {
-    return resolveDevelopmentClientOptions(target.serverUrl);
-  }
+function prepareRemoteTarget(target: RemoteDevelopmentTarget) {
+  const credentials = createDevelopmentCredentialGate(target.serverUrl);
+  return {
+    target,
+    credentials,
+    resolveOidcToken: resolveDevelopmentOidcToken,
+    resolveDeployment: (signal: AbortSignal) =>
+      resolveVercelDeployment({
+        workspaceRoot: target.workspaceRoot,
+        host: remoteHost(target),
+        signal,
+      }),
+  } satisfies NonNullable<EveTUIRunnerOptions["remote"]>;
+}
 
-  return await resolveVerifiedRemoteDevelopmentClientOptions({
-    serverUrl: target.serverUrl,
-    workspaceRoot: target.workspaceRoot,
-  });
+type PreparedDevelopmentTuiTarget =
+  | {
+      readonly kind: "local";
+      readonly target: Extract<DevelopmentTuiTarget, { kind: "local" }>;
+    }
+  | {
+      readonly kind: "remote";
+      readonly target: RemoteDevelopmentTarget;
+      readonly remote: NonNullable<EveTUIRunnerOptions["remote"]>;
+    };
+
+function prepareDevelopmentTarget(target: DevelopmentTuiTarget): PreparedDevelopmentTuiTarget {
+  return target.kind === "local"
+    ? { kind: "local", target }
+    : { kind: "remote", target, remote: prepareRemoteTarget(target) };
 }
 
 /**
@@ -47,24 +74,35 @@ async function resolveClientOptions(target: DevelopmentTuiTarget) {
  */
 export async function runDevelopmentTui(input: RunDevelopmentTuiInput): Promise<void> {
   const { target, initialInput, ...display } = input;
+  const prepared = prepareDevelopmentTarget(target);
   const { serverUrl } = target;
 
-  const client = new Client(await resolveClientOptions(target));
+  const client = new Client(
+    prepared.kind === "local"
+      ? resolveDevelopmentClientOptions(serverUrl)
+      : resolveRemoteDevelopmentClientOptions({
+          serverUrl,
+          credentials: prepared.remote.credentials,
+        }),
+  );
 
   const options: EveTUIRunnerOptions = {
     ...display,
     session: client.session(),
     client,
     serverUrl,
-    promptCommandHandler: createPromptCommandHandler(
-      target.kind === "local" ? { appRoot: target.appRoot } : {},
-    ),
+    promptCommandHandler: createPromptCommandHandler({ target }),
+    availablePromptCommands: promptCommandsFor(target.kind),
     formatTransportError: (error) =>
       isVercelAuthChallenge(error)
         ? formatVercelAuthChallengeMessage({ serverUrl })
         : toErrorMessage(error),
   };
-  if (target.kind === "local") options.appRoot = target.appRoot;
+  if (prepared.kind === "local") {
+    options.appRoot = prepared.target.appRoot;
+  } else {
+    options.remote = prepared.remote;
+  }
   if (initialInput !== undefined) options.initialInput = initialInput;
 
   await new EveTUIRunner(options).run();

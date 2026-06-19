@@ -1,4 +1,4 @@
-/** Local or remote server backing one development TUI session. */
+/** Local or remote server that backs one development TUI session. */
 export type DevelopmentTuiTarget = LocalDevelopmentTarget | RemoteDevelopmentTarget;
 
 /** A development TUI session backed by the local `eve dev` server. */
@@ -13,4 +13,9 @@ export interface RemoteDevelopmentTarget {
   readonly kind: "remote";
   readonly serverUrl: string;
   readonly workspaceRoot: string;
+}
+
+/** Returns the URL host shown in remote status and authentication messages. */
+export function remoteHost(target: RemoteDevelopmentTarget): string {
+  return new URL(target.serverUrl).host;
 }

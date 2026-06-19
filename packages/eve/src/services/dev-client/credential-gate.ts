@@ -14,8 +14,11 @@ export interface DevelopmentCredentialGrant {
 export interface DevelopmentCredentialGate {
   /** The origin this gate is permanently bound to. */
   readonly serverOrigin: string;
-  /** Installs authority after Vercel verifies the exact origin. */
-  authorize(grant: DevelopmentCredentialGrant): void;
+  /**
+   * Installs authority after Vercel verifies the exact origin.
+   * Returns a rollback that restores the prior grant if this grant is still current.
+   */
+  authorize(grant: DevelopmentCredentialGrant): () => void;
   /** Resolves headers for one request without exposing stored credential material. */
   resolveHeaders(): Promise<Readonly<Record<string, string>>>;
 }
@@ -32,16 +35,21 @@ export function createDevelopmentCredentialGate(serverUrl: string): DevelopmentC
   const serverOrigin = new URL(serverUrl).origin;
   let state: DevelopmentCredentialGateState = { kind: "anonymous" };
 
-  const authorize = (grant: DevelopmentCredentialGrant): void => {
+  const authorize = (grant: DevelopmentCredentialGrant): (() => void) => {
     if (grant.target.origin !== serverOrigin) {
       throw new Error(
         `Verified Vercel origin ${grant.target.origin} does not match client origin ${serverOrigin}.`,
       );
     }
-    state = {
+    const previous = state;
+    const next = {
       kind: "vercel",
       resolveToken: grant.resolveToken,
     } as const;
+    state = next;
+    return () => {
+      if (state === next) state = previous;
+    };
   };
 
   const resolveHeaders = async (): Promise<Readonly<Record<string, string>>> => {

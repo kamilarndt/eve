@@ -85,7 +85,7 @@ describe("runVercelFlow", () => {
       label: "Connect via a project",
       hint: "vercel link + env pull",
       disabled: true,
-      disabledReason: "Vercel CLI not found, see /vc",
+      disabledReason: "Vercel CLI not found, see /vc:install",
       disabledReasonTone: "warning",
     });
     expect(deps.runLinkFlow).not.toHaveBeenCalled();

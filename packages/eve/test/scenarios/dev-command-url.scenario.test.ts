@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runCli } from "../../src/cli/run.js";
+import { stripAnsi } from "../../src/cli/dev/tui/terminal-text.js";
 import { useTemporaryDirectories } from "../../src/internal/testing/use-temporary-app-roots.js";
 
 const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -75,9 +76,8 @@ describe("runCli dev URL support", () => {
         }),
       }),
     );
-    expect(logger.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-      "connecting to https://example.com/",
-    );
+    const output = logger.log.mock.calls.map(([message]) => String(message)).join("\n");
+    expect(stripAnsi(output)).toContain("connecting to https://example.com/");
   });
 
   it("rejects local server flags when using --url", async () => {

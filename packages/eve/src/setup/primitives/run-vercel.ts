@@ -347,6 +347,11 @@ export type VercelCaptureResult =
   | { ok: true; stdout: string }
   | { ok: false; failure: VercelCaptureFailure };
 
+interface CaptureVercelOptions extends RunVercelOptions {
+  /** Optional request body written to the Vercel CLI subprocess. */
+  readonly stdin?: string;
+}
+
 /**
  * Runs a Vercel CLI lookup and captures stdout.
  *
@@ -356,7 +361,7 @@ export type VercelCaptureResult =
  */
 export async function captureVercel(
   args: string[],
-  options: RunVercelOptions,
+  options: CaptureVercelOptions,
 ): Promise<VercelCaptureResult> {
   if (options.signal?.aborted === true) {
     return {
@@ -378,7 +383,7 @@ export async function captureVercel(
       [...invocation.commandArgs, ...commandArgs(args, options.nonInteractive)],
       {
         cwd,
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: [options.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
         env: buildSpawnEnv(options.extraEnv ?? {}),
         signal: options.signal,
       },
@@ -391,6 +396,13 @@ export async function captureVercel(
       stderrChunks.push(chunk.toString("utf8"));
       outputBuffer?.write("stderr", chunk);
     });
+
+    if (options.stdin !== undefined) {
+      // A child may exit before reading stdin. Ignore EPIPE here so the
+      // caller receives the subprocess failure that caused it.
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(options.stdin);
+    }
 
     let settled = false;
     function fail(failure: VercelCaptureFailure, report = true): void {

@@ -24,6 +24,12 @@ export interface PromptColors {
   yellow(text: string): string;
 }
 
+/** Persistent context rendered directly beneath the option it qualifies. */
+export interface PromptOptionNotice {
+  readonly tone: "warning";
+  readonly lines: readonly [string, ...string[]];
+}
+
 /** A selectable item rendered by the shared multi-select prompt. */
 export interface PromptOption<T extends PromptValue> {
   value: T;
@@ -38,6 +44,7 @@ export interface PromptOption<T extends PromptValue> {
    * choice is submitted only the label remains.
    */
   description?: string;
+  notice?: PromptOptionNotice;
   /** Cursor-pointer/active-label accent; "warning" turns them yellow for an attention row. */
   accent?: "warning";
   disabled?: boolean;

@@ -5,8 +5,8 @@ import { initialSelectState } from "#setup/cli/select-state.js";
 import { reduceSetupSelectInput, setupSelectionIntent } from "./setup-selection-input.js";
 
 describe("setupSelectionIntent", () => {
-  it("shares cancellation, navigation, repaint, and submit semantics", () => {
-    expect(setupSelectionIntent({ type: "escape" })).toEqual({ kind: "cancel" });
+  it("distinguishes step-back from cancellation and shares the remaining navigation", () => {
+    expect(setupSelectionIntent({ type: "escape" })).toEqual({ kind: "back" });
     expect(setupSelectionIntent({ type: "ctrl-c" })).toEqual({ kind: "cancel" });
     expect(setupSelectionIntent({ type: "up" })).toEqual({ kind: "move", direction: "up" });
     expect(setupSelectionIntent({ type: "down" })).toEqual({ kind: "move", direction: "down" });

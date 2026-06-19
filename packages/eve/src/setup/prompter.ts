@@ -10,6 +10,7 @@ import {
   railFor,
   runSelectComponent,
   type ChannelSetupAwaitChoice,
+  type PromptOptionNotice,
   type PromptState,
 } from "#setup/cli/index.js";
 import { createRailLog, type RailSpinner } from "#setup/cli/index.js";
@@ -41,6 +42,7 @@ export interface SelectOption<T extends PrompterValue> {
    * is highlighted during navigation. Hidden once a choice is submitted.
    */
   description?: string;
+  notice?: PromptOptionNotice;
   /** Cursor-pointer/active-label accent; "warning" turns them yellow for an attention row. */
   accent?: "warning";
   disabled?: boolean;
@@ -85,9 +87,14 @@ export interface SelectNotice {
   text: string;
 }
 
+/** Semantic tone applied to a select question by renderers that support it. */
+export type SelectMessageTone = "warning";
+
 /** Options common to every {@link Prompter.select} call. */
 export interface SelectCommonOptions<T extends PrompterValue> {
   message: string;
+  /** Paint the question as a warning instead of using the renderer's default emphasis. */
+  messageTone?: SelectMessageTone;
   options: SelectOption<T>[];
   /**
    * Add a type-ahead filter line. The filter is a case-insensitive substring

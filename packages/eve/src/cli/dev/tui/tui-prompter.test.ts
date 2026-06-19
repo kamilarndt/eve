@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { WizardCancelledError } from "#setup/step.js";
+import { StepBackError, WizardCancelledError } from "#setup/step.js";
 
+import { BACK, type Back } from "./setup-flow.js";
 import { createTuiPrompter, type TuiPrompterRenderer } from "./tui-prompter.js";
 
 function fakeRenderer(overrides: Partial<TuiPrompterRenderer> = {}): TuiPrompterRenderer {
@@ -95,6 +96,39 @@ describe("createTuiPrompter", () => {
       prompter.select({ message: "Pick", options: [{ value: "a", label: "A" }] }),
     ).rejects.toBeInstanceOf(WizardCancelledError);
     await expect(prompter.text({ message: "Name" })).rejects.toBeInstanceOf(WizardCancelledError);
+  });
+
+  it("treats Esc as cancellation unless the flow enables back navigation", async () => {
+    const renderer = fakeRenderer({
+      readSelect: vi.fn(async (): Promise<Back> => BACK),
+    });
+    const prompter = createTuiPrompter(renderer);
+
+    await expect(
+      prompter.select({ message: "Pick", options: [{ value: "a", label: "A" }] }),
+    ).rejects.toBeInstanceOf(WizardCancelledError);
+  });
+
+  it("raises StepBackError when a panel resolves to BACK", async () => {
+    const back = async (): Promise<Back> => BACK;
+    const renderer = fakeRenderer({
+      readSelect: vi.fn(back),
+      readText: vi.fn(back),
+      readEditableSelect: vi.fn(back),
+    });
+    const prompter = createTuiPrompter(renderer, { backOnEscape: true });
+
+    await expect(
+      prompter.select({ message: "Pick", options: [{ value: "a", label: "A" }] }),
+    ).rejects.toBeInstanceOf(StepBackError);
+    await expect(prompter.text({ message: "Name" })).rejects.toBeInstanceOf(StepBackError);
+    await expect(
+      prompter.selectEditable?.({
+        message: "Project",
+        options: [{ value: "a", label: "A" }],
+        editable: { value: "a", defaultValue: "a", formatHint: (value) => value },
+      }),
+    ).rejects.toBeInstanceOf(StepBackError);
   });
 
   it("masks passwords through the text panel", async () => {

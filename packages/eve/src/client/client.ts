@@ -13,6 +13,7 @@ import type {
   SessionState,
   TokenValue,
 } from "#client/types.js";
+import { isObject } from "#shared/guards.js";
 
 /**
  * HTTP client for talking to a deployed eve agent.
@@ -65,17 +66,24 @@ export class Client {
    *
    * @throws {ClientError} If the server returns a non-successful status.
    */
-  async info(): Promise<AgentInfoResult> {
-    const url = createClientUrl(this.#host, EVE_INFO_ROUTE_PATH);
-    const headers = await this.#resolveHeaders();
-    const response = await fetch(url, withRedirectPolicy({ headers }, this.#redirect));
+  async info(options: { readonly signal?: AbortSignal } = {}): Promise<AgentInfoResult> {
+    const request: RequestInit = {};
+    if (options.signal !== undefined) request.signal = options.signal;
+    const response = await this.fetch(EVE_INFO_ROUTE_PATH, request);
 
     if (!response.ok) {
       const body = await response.text();
       throw new ClientError(response.status, body);
     }
 
-    return (await response.json()) as AgentInfoResult;
+    const info: unknown = await response.json();
+    if (!isAgentInfoResult(info)) {
+      throw new SyntaxError(
+        "The server returned an unrecognized response from the Eve agent info route.",
+      );
+    }
+
+    return info;
   }
 
   /**
@@ -87,7 +95,10 @@ export class Client {
    */
   async fetch(path: string, init: RequestInit = {}): Promise<Response> {
     const url = createClientUrl(this.#host, path);
-    const headers = await this.#resolveHeaders(headersInitToRecord(init.headers));
+    const headers = await raceWithAbort(
+      this.#resolveHeaders(headersInitToRecord(init.headers)),
+      init.signal ?? undefined,
+    );
     return await fetch(url, withRedirectPolicy({ ...init, headers }, this.#redirect));
   }
 
@@ -116,7 +127,8 @@ export class Client {
         maxReconnectAttempts: this.#maxReconnectAttempts,
         preserveCompletedSessions: this.#preserveCompletedSessions,
         redirect: this.#redirect,
-        resolveHeaders: (perRequest) => this.#resolveHeaders(perRequest),
+        resolveHeaders: (perRequest, signal) =>
+          raceWithAbort(this.#resolveHeaders(perRequest), signal),
       },
       resolved,
     );
@@ -176,6 +188,51 @@ export class Client {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function isAgentInfoResult(value: unknown): value is AgentInfoResult {
+  return (
+    isObject(value) &&
+    value.kind === "eve-agent-info" &&
+    value.version === 1 &&
+    isObject(value.agent) &&
+    isObject(value.agent.model) &&
+    typeof value.agent.model.id === "string" &&
+    (value.agent.model.endpoint === undefined ||
+      isModelEndpointStatus(value.agent.model.endpoint)) &&
+    isObject(value.diagnostics) &&
+    typeof value.diagnostics.discoveryErrors === "number" &&
+    typeof value.diagnostics.discoveryWarnings === "number"
+  );
+}
+
+function isModelEndpointStatus(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  if (value.kind === "external") return typeof value.provider === "string";
+  if (value.kind !== "gateway" || typeof value.connected !== "boolean") return false;
+  return value.connected === false || value.credential === "api-key" || value.credential === "oidc";
+}
+
+async function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return await promise;
+  signal.throwIfAborted();
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
 
 async function resolveTokenValue(value: TokenValue): Promise<string> {
   return typeof value === "function" ? value() : value;
