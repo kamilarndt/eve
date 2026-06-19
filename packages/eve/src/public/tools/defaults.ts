@@ -4,6 +4,7 @@
  * `agent/tools/*.ts` files.
  */
 import { BASH_TOOL_DEFINITION } from "#runtime/framework-tools/bash.js";
+import { DOWNLOAD_FILE_TOOL_DEFINITION } from "#runtime/framework-tools/download-file.js";
 import { GLOB_TOOL_DEFINITION } from "#runtime/framework-tools/glob.js";
 import { GREP_TOOL_DEFINITION } from "#runtime/framework-tools/grep.js";
 import { READ_FILE_TOOL_DEFINITION } from "#runtime/framework-tools/read-file.js";
@@ -21,6 +22,12 @@ export type { ToolDefinition };
  * Framework-provided shell execution tool. Spread or wrap to customize.
  */
 export const bash: ToolDefinition = toPublicToolDefinition(BASH_TOOL_DEFINITION);
+
+/**
+ * Framework-provided bounded sandbox download tool (`download_file`). Spread
+ * or wrap to customize the 1 MiB file handoff.
+ */
+export const downloadFile: ToolDefinition = toPublicToolDefinition(DOWNLOAD_FILE_TOOL_DEFINITION);
 
 /**
  * Framework-provided file search tool. Finds files by glob pattern. Spread

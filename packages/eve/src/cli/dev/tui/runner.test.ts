@@ -1023,6 +1023,71 @@ describe("EveTUIRunner replay guards", () => {
       },
     ]);
   });
+
+  it("omits inline file data from download_file tool output", async () => {
+    const prompts: Array<string | undefined> = ["download", undefined];
+    const emitted: AgentTUIStreamEvent[] = [];
+    const session = sessionYielding([
+      {
+        type: "actions.requested",
+        data: {
+          actions: [
+            {
+              callId: "call-download",
+              input: { filePath: "/workspace/report.txt" },
+              kind: "tool-call",
+              toolName: "download_file",
+            },
+          ],
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      {
+        type: "action.result",
+        data: {
+          result: {
+            callId: "call-download",
+            kind: "tool-result",
+            output: {
+              filename: "report.txt",
+              mediaType: "text/plain",
+              size: 5,
+              type: "file",
+              url: "data:text/plain;base64,aGVsbG8=",
+            },
+            toolName: "download_file",
+          },
+          sequence: 0,
+          status: "completed",
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      { type: "session.waiting", data: { wait: "next-user-message" } },
+    ]);
+
+    const renderer: AgentTUIRenderer = {
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<AgentTUIStreamEvent>) {
+          emitted.push(event);
+        }
+      }),
+    };
+
+    const runner = new EveTUIRunner({ session, renderer, name: "File Agent" });
+    await runner.run();
+
+    expect(emitted.filter((event) => event.type === "tool-result")).toEqual([
+      {
+        output: { filename: "report.txt", mediaType: "text/plain", size: 5 },
+        toolCallId: "call-download",
+        type: "tool-result",
+      },
+    ]);
+  });
 });
 
 describe("parsePromptCommand", () => {

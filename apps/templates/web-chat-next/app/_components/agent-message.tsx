@@ -1,6 +1,7 @@
 "use client";
 
 import type { EveDynamicToolPart, EveMessage, EveMessagePart } from "eve/react";
+import { DownloadIcon, FileIcon } from "lucide-react";
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message";
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "@/components/ai-elements/reasoning";
 import {
@@ -80,6 +81,23 @@ function AgentMessagePart({
           <ReasoningTrigger />
           <ReasoningContent>{part.text}</ReasoningContent>
         </Reasoning>
+      );
+    case "file":
+      return (
+        <a
+          className="flex w-full items-center gap-3 rounded-md border bg-card p-3 text-sm transition-colors hover:bg-muted/50"
+          download={part.filename}
+          href={part.url}
+        >
+          <FileIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{part.filename}</span>
+            <span className="block text-muted-foreground text-xs">
+              {part.mediaType} · {formatFileSize(part.size)}
+            </span>
+          </span>
+          <DownloadIcon className="size-4 shrink-0 text-muted-foreground" />
+        </a>
       );
     case "dynamic-tool":
       return (
@@ -163,7 +181,14 @@ function partKey(part: EveMessagePart, index: number): string {
   switch (part.type) {
     case "dynamic-tool":
       return part.toolCallId;
+    case "file":
+      return `file:${part.toolCallId}`;
     default:
       return `${part.type}:${index}`;
   }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${String(bytes)} B`;
+  return `${(bytes / 1024).toFixed(1)} KiB`;
 }

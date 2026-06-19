@@ -22,13 +22,14 @@ Compaction also preserves the framework's own tool state automatically. It reset
 
 ## Built-in tools
 
-These ship with every agent, no imports. The harness shows the model the tool descriptors first, then executes only what the model actually calls; discovery never runs them. The shell and file tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) live in the app runtime and proxy their work into the agent's single [sandbox](../sandbox); the rest run in the app runtime. The "Where it runs" column below names where each tool's effect lands.
+These ship with every agent, no imports. The harness shows the model the tool descriptors first, then executes only what the model actually calls; discovery never runs them. The shell and file tools (`bash`, `read_file`, `write_file`, `download_file`, `glob`, `grep`) live in the app runtime and proxy their work into the agent's single [sandbox](../sandbox); the rest run in the app runtime. The "Where it runs" column below names where each tool's effect lands.
 
 | Tool                | Does                                                                                                                                                                                                                   | Where it runs |
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
 | `bash`              | Run a shell command.                                                                                                                                                                                                   | Sandbox       |
 | `read_file`         | Read a text file with line-numbered output (enables read-before-write).                                                                                                                                                | Sandbox FS    |
 | `write_file`        | Write a complete file; enforces read-before-write and stale-read detection.                                                                                                                                            | Sandbox FS    |
+| `download_file`     | Make a sandbox file up to 1 MiB available for the user to download.                                                                                                                                                    | Sandbox FS    |
 | `glob`              | Find files by glob pattern.                                                                                                                                                                                            | Sandbox FS    |
 | `grep`              | Search file contents by regex.                                                                                                                                                                                         | Sandbox FS    |
 | `web_fetch`         | Fetch a URL.                                                                                                                                                                                                           | App runtime   |
@@ -65,7 +66,7 @@ export default defineTool({
 });
 ```
 
-The framework defaults are importable from `eve/tools/defaults` (`bash`, `readFile`, `writeFile`, `glob`, `grep`, `webFetch`, `webSearch`, `todo`, `loadSkill`), so you can spread, wrap, or patch them. Skip the spread and your replacement owns its own context. A fresh `defineTool` for `todo` won't inherit the framework's durable state key.
+The framework defaults are importable from `eve/tools/defaults` (`bash`, `readFile`, `writeFile`, `downloadFile`, `glob`, `grep`, `webFetch`, `webSearch`, `todo`, `loadSkill`), so you can spread, wrap, or patch them. Skip the spread and your replacement owns its own context. A fresh `defineTool` for `todo` won't inherit the framework's durable state key.
 
 ## Disable a default
 

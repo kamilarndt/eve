@@ -38,9 +38,10 @@ export interface EveMessageMetadata {
  * One renderable part of an {@link EveMessage}, discriminated by `type`.
  *
  * `text` and `reasoning` store streamed content with a `state` of `"streaming"`
- * or `"done"`; `step-start` marks the boundary of an agent step; and
- * `dynamic-tool` ({@link EveDynamicToolPart}) holds the tool call and its
- * lifecycle state. `stepIndex` ties a part to the agent step that produced it.
+ * or `"done"`; `step-start` marks the boundary of an agent step;
+ * {@link EveFilePart} carries a bounded downloadable file; and `dynamic-tool`
+ * ({@link EveDynamicToolPart}) holds the tool call and its lifecycle state.
+ * `stepIndex` ties a part to the agent step that produced it.
  */
 export type EveMessagePart =
   | {
@@ -60,7 +61,19 @@ export type EveMessagePart =
   | {
       readonly type: "step-start";
     }
+  | EveFilePart
   | EveDynamicToolPart;
+
+/** A bounded sandbox file made available for the user to download. */
+export interface EveFilePart {
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly size: number;
+  readonly stepIndex: number;
+  readonly toolCallId: string;
+  readonly type: "file";
+  readonly url: string;
+}
 
 /**
  * A tool-call part of an assistant message, following the AI SDK `dynamic-tool`

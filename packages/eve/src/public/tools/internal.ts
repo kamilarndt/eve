@@ -29,6 +29,9 @@ export function toPublicToolDefinition(definition: ResolvedToolDefinition): Tool
   if (definition.needsApproval !== undefined) {
     publicDefinition.needsApproval = definition.needsApproval;
   }
+  if (definition.toModelOutput !== undefined) {
+    publicDefinition.toModelOutput = definition.toModelOutput;
+  }
 
   return publicDefinition;
 }

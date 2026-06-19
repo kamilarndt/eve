@@ -2,18 +2,25 @@ import type { EveAgentReducer, EveAgentReducerEvent } from "#client/reducer.js";
 import type {
   EveMessageData,
   EveDynamicToolPart,
+  EveFilePart,
   EveMessageInputRequest,
   EveMessage,
   EveMessageMetadata,
   EveMessagePart,
   EveMessageToolMetadata,
 } from "#client/message-reducer-types.js";
+import {
+  downloadFileMetadata,
+  DOWNLOAD_FILE_TOOL_NAME,
+  parseDownloadFileResult,
+} from "#shared/download-file.js";
 import type { RuntimeActionRequest, RuntimeActionResult } from "#runtime/actions/types.js";
 import type { InputRequest, InputResponse } from "#runtime/input/types.js";
 
 export type {
   EveMessageData,
   EveDynamicToolPart,
+  EveFilePart,
   EveMessageInputRequest,
   EveMessage,
   EveMessageMetadata,
@@ -164,6 +171,12 @@ function reduceMessageData(data: EveMessageData, event: EveAgentReducerEvent): E
     case "action.result": {
       const descriptor = normalizeActionResult(event.data.result);
       const existing = findToolPart(data, event.data.result.callId);
+      const download =
+        event.data.status === "completed" &&
+        descriptor.kind === "tool-call" &&
+        descriptor.toolName === DOWNLOAD_FILE_TOOL_NAME
+          ? parseDownloadFileResult(event.data.result.output)
+          : undefined;
       const denied = event.data.error?.code === "TOOL_EXECUTION_DENIED";
       const failed = event.data.status === "failed" && !denied;
       const approvalId = existing?.approval?.id ?? event.data.result.callId;
@@ -202,20 +215,30 @@ function reduceMessageData(data: EveMessageData, event: EveAgentReducerEvent): E
         nextPart = {
           ...resultPartBase,
           approval: approvedApproval(existing),
-          output: event.data.result.output,
+          output:
+            download === undefined ? event.data.result.output : downloadFileMetadata(download),
           state: "output-available",
         };
       }
 
+      let next: EveMessageData;
       if (existing !== undefined) {
         // Approved tool results can arrive on a later runtime turn; keep
         // the UI lifecycle anchored to the original tool call.
-        return updateToolPart(data, event.data.result.callId, nextPart);
+        next = updateToolPart(data, event.data.result.callId, nextPart);
+      } else {
+        next = updateAssistantMessage(data, event.data.turnId, (message) =>
+          upsertPart(ensureStepStartPart(message, event.data.stepIndex), nextPart),
+        );
       }
 
-      return updateAssistantMessage(data, event.data.turnId, (message) =>
-        upsertPart(ensureStepStartPart(message, event.data.stepIndex), nextPart),
-      );
+      if (download === undefined) return next;
+
+      return appendFilePart(next, event.data.turnId, {
+        ...download,
+        stepIndex: event.data.stepIndex,
+        toolCallId: event.data.result.callId,
+      });
     }
 
     case "message.appended":
@@ -406,6 +429,22 @@ function updateToolPart(
   return upsertMessage(data, upsertPart(message, next));
 }
 
+function appendFilePart(data: EveMessageData, turnId: string, file: EveFilePart): EveMessageData {
+  const containingTool = data.messages.find(
+    (message): message is EveAssistantMessage =>
+      message.role === "assistant" &&
+      message.parts.some(
+        (part) => part.type === "dynamic-tool" && part.toolCallId === file.toolCallId,
+      ),
+  );
+
+  if (containingTool !== undefined) {
+    return upsertMessage(data, upsertPart(containingTool, file));
+  }
+
+  return updateAssistantMessage(data, turnId, (message) => upsertPart(message, file));
+}
+
 function findToolPart(data: EveMessageData, toolCallId: string): EveDynamicToolPart | undefined {
   for (const message of data.messages) {
     for (const part of message.parts) {
@@ -439,6 +478,8 @@ function partKey(part: EveMessagePart): string {
       return `reasoning:${part.stepIndex ?? 0}`;
     case "step-start":
       return "step-start";
+    case "file":
+      return `file:${part.toolCallId}`;
     case "dynamic-tool":
       return `dynamic-tool:${part.toolCallId}`;
   }

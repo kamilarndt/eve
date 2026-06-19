@@ -12,6 +12,101 @@ import {
 } from "#protocol/message.js";
 
 describe("defaultMessageReducer", () => {
+  it("projects bounded download results as file parts without exposing base64 in tool output", () => {
+    const reducer = defaultMessageReducer();
+    let data = reducer.reduce(
+      reducer.initial(),
+      createActionsRequestedEvent({
+        actions: [
+          {
+            callId: "download_1",
+            input: { filePath: "/workspace/report.txt" },
+            kind: "tool-call",
+            toolName: "download_file",
+          },
+        ],
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    );
+
+    data = reducer.reduce(
+      data,
+      createActionResultEvent({
+        result: {
+          callId: "download_1",
+          kind: "tool-result",
+          output: {
+            filename: "report.txt",
+            mediaType: "text/plain",
+            size: 5,
+            type: "file",
+            url: "data:text/plain;base64,aGVsbG8=",
+          },
+          toolName: "download_file",
+        },
+        sequence: 2,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    );
+
+    expect(data.messages[0]?.parts).toEqual([
+      { type: "step-start" },
+      {
+        input: { filePath: "/workspace/report.txt" },
+        output: { filename: "report.txt", mediaType: "text/plain", size: 5 },
+        state: "output-available",
+        stepIndex: 0,
+        toolCallId: "download_1",
+        toolMetadata: {
+          eve: {
+            kind: "tool-call",
+            name: "download_file",
+          },
+        },
+        toolName: "download_file",
+        type: "dynamic-tool",
+      },
+      {
+        filename: "report.txt",
+        mediaType: "text/plain",
+        size: 5,
+        stepIndex: 0,
+        toolCallId: "download_1",
+        type: "file",
+        url: "data:text/plain;base64,aGVsbG8=",
+      },
+    ]);
+  });
+
+  it("does not project malformed download results as file parts", () => {
+    const reducer = defaultMessageReducer();
+    const data = reducer.reduce(
+      reducer.initial(),
+      createActionResultEvent({
+        result: {
+          callId: "download_1",
+          kind: "tool-result",
+          output: {
+            filename: "report.txt",
+            mediaType: "text/plain",
+            size: 1,
+            type: "file",
+            url: "https://example.com/report.txt",
+          },
+          toolName: "download_file",
+        },
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    );
+
+    expect(data.messages[0]?.parts.some((part) => part.type === "file")).toBe(false);
+  });
+
   it("projects messages, reasoning, and actions into UIMessage-compatible parts", () => {
     const reducer = defaultMessageReducer();
     let data = reducer.initial();

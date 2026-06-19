@@ -64,6 +64,7 @@ export type {
 export type {
   EveMessageData,
   EveDynamicToolPart,
+  EveFilePart,
   EveMessageInputRequest,
   EveMessage,
   EveMessageMetadata,

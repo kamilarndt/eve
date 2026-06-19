@@ -1,5 +1,6 @@
 import { ASK_QUESTION_TOOL_DEFINITION } from "#runtime/framework-tools/ask-question.js";
 import { BASH_TOOL_DEFINITION } from "#runtime/framework-tools/bash.js";
+import { DOWNLOAD_FILE_TOOL_DEFINITION } from "#runtime/framework-tools/download-file.js";
 import { GLOB_TOOL_DEFINITION } from "#runtime/framework-tools/glob.js";
 import { GREP_TOOL_DEFINITION } from "#runtime/framework-tools/grep.js";
 import { READ_FILE_TOOL_DEFINITION } from "#runtime/framework-tools/read-file.js";
@@ -20,6 +21,7 @@ import type { ResolvedToolDefinition } from "#runtime/types.js";
 const ALL_FRAMEWORK_TOOLS: readonly ResolvedToolDefinition[] = [
   ASK_QUESTION_TOOL_DEFINITION,
   BASH_TOOL_DEFINITION,
+  DOWNLOAD_FILE_TOOL_DEFINITION,
   GLOB_TOOL_DEFINITION,
   GREP_TOOL_DEFINITION,
   READ_FILE_TOOL_DEFINITION,

@@ -18,6 +18,7 @@ export {
   defaultMessageReducer,
   type EveMessageData,
   type EveDynamicToolPart,
+  type EveFilePart,
   type EveMessageInputRequest,
   type EveMessage,
   type EveMessageMetadata,

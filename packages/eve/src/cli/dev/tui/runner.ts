@@ -26,6 +26,11 @@ import {
   type DevelopmentRuntimeArtifactSessionRefresher,
 } from "#services/dev-client.js";
 import { toErrorMessage } from "#shared/errors.js";
+import {
+  downloadFileMetadata,
+  DOWNLOAD_FILE_TOOL_NAME,
+  parseDownloadFileResult,
+} from "#shared/download-file.js";
 
 import {
   type FailureStreamEvent,
@@ -1689,10 +1694,17 @@ async function* eveEventsToTUIStream(
             errorText: formatActionResultError(resultEvent),
           };
         } else {
+          const download =
+            resultEvent.data.result.toolName === DOWNLOAD_FILE_TOOL_NAME
+              ? parseDownloadFileResult(resultEvent.data.result.output)
+              : undefined;
           yield {
             type: "tool-result",
             toolCallId: callId,
-            output: resultEvent.data.result.output,
+            output:
+              download === undefined
+                ? resultEvent.data.result.output
+                : downloadFileMetadata(download),
           };
         }
         break;

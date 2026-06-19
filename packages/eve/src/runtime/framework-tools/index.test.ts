@@ -9,6 +9,7 @@ describe("framework-tools/index", () => {
   it("returns every known framework tool name regardless of config", () => {
     const names = getAllFrameworkToolNames();
     expect(names.has("bash")).toBe(true);
+    expect(names.has("download_file")).toBe(true);
     expect(names.has("read_file")).toBe(true);
     expect(names.has("write_file")).toBe(true);
     expect(names.has("glob")).toBe(true);

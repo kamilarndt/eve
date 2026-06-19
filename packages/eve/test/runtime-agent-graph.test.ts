@@ -296,6 +296,10 @@ describe("resolveRuntimeAgentGraph", () => {
       },
       {
         kind: "authored-tool",
+        name: "download_file",
+      },
+      {
+        kind: "authored-tool",
         name: "glob",
       },
       {
@@ -380,6 +384,10 @@ describe("resolveRuntimeAgentGraph", () => {
         description: "Execute a shell command in the shared workspace environment.",
         kind: "authored-tool",
         name: "bash",
+      },
+      {
+        kind: "authored-tool",
+        name: "download_file",
       },
       {
         kind: "authored-tool",
@@ -642,6 +650,7 @@ describe("resolveRuntimeAgentGraph", () => {
     });
     expect(tools.map((tool) => tool.name)).toEqual([
       "ask_question",
+      "download_file",
       "glob",
       "grep",
       "read_file",
@@ -682,6 +691,7 @@ describe("resolveRuntimeAgentGraph", () => {
     expect(graph.root.turnAgent.tools.map((tool) => tool.name)).toEqual([
       "ask_question",
       "bash",
+      "download_file",
       "glob",
       "grep",
       "read_file",
@@ -738,6 +748,7 @@ describe("resolveRuntimeAgentGraph", () => {
 
     expect(tools.map((tool) => tool.name)).toEqual([
       "ask_question",
+      "download_file",
       "glob",
       "grep",
       "read_file",

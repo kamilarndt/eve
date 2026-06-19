@@ -3,7 +3,7 @@ title: "Sandbox"
 description: "The agent's isolated bash environment, including built-in file tools, a seeded /workspace, backends, lifecycle, and network policy."
 ---
 
-The sandbox is the agent's isolated bash environment: a filesystem rooted at `/workspace` where it can run shell commands, execute scripts, and read or write files without ever touching your app runtime. Every eve agent has exactly one. The built-in `bash`, `read_file`, `write_file`, `glob`, and `grep` tools already target it, and your authored code can too.
+The sandbox is the agent's isolated bash environment: a filesystem rooted at `/workspace` where it can run shell commands, execute scripts, and read or write files without ever touching your app runtime. Every eve agent has exactly one. The built-in `bash`, `read_file`, `write_file`, `download_file`, `glob`, and `grep` tools already target it, and your authored code can too.
 
 A working sandbox exists by default, with nothing to author. Override it only to add setup, seed files, pick a backend, or lock down the network.
 
@@ -13,14 +13,17 @@ The default sandbox is not a substitute for configuring network policy, credenti
 
 The model already has shell and file access through the default tools:
 
-| Tool                       | Does                                |
-| -------------------------- | ----------------------------------- |
-| `bash`                     | run a shell command in the sandbox  |
-| `read_file` / `write_file` | read/write files under `/workspace` |
-| `glob`                     | find files by pattern               |
-| `grep`                     | search file contents                |
+| Tool                       | Does                                            |
+| -------------------------- | ----------------------------------------------- |
+| `bash`                     | run a shell command in the sandbox              |
+| `read_file` / `write_file` | read/write files under `/workspace`             |
+| `download_file`            | expose a file up to 1 MiB as a browser download |
+| `glob`                     | find files by pattern                           |
+| `grep`                     | search file contents                            |
 
 All of them run with `/workspace` as the working directory. Any authored runtime function (a tool, a step, a model callback) can get a live sandbox handle with `ctx.getSandbox()`.
+
+`download_file` carries the file as a data URL through the authenticated session event stream, so it works with every sandbox backend and survives sandbox suspension. The 1 MiB cap is deliberate: larger files would bloat durable workflow history. Upload larger artifacts to object storage from an authored tool and return its download URL instead.
 
 ```ts title="agent/tools/run_analysis.ts"
 import { defineTool } from "eve/tools";
