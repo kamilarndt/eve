@@ -35,6 +35,7 @@ afterEach(() => {
   startMock.mockReset();
   vi.mocked(getCompiledRuntimeAgentBundle).mockReset();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe("workflowEntryReference", () => {
@@ -90,6 +91,57 @@ describe("createWorkflowRuntime#deliver", () => {
         payload: {},
       }),
     ).rejects.toBe(failure);
+  });
+});
+
+describe("createWorkflowRuntime#cancelTurn", () => {
+  function buildRuntime() {
+    return createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+  }
+
+  it("resumes the active turn cancellation hook", async () => {
+    getHookByTokenMock.mockResolvedValue({
+      metadata: { sessionId: "session_1" },
+      runId: "turn_1",
+    });
+
+    await expect(buildRuntime().cancelTurn("session_1", "cancel_1")).resolves.toBe(true);
+    expect(getHookByTokenMock).toHaveBeenCalledWith("cancel_1");
+    expect(resumeHookMock).toHaveBeenCalledWith("cancel_1", { kind: "cancel-turn" });
+  });
+
+  it("waits for the child hook to register before returning", async () => {
+    vi.useFakeTimers();
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    getHookByTokenMock
+      .mockRejectedValueOnce(new HookNotFoundError("cancel_1"))
+      .mockResolvedValueOnce({ metadata: { sessionId: "session_1" }, runId: "turn_1" });
+
+    const cancelling = buildRuntime().cancelTurn("session_1", "cancel_1");
+    await vi.runAllTimersAsync();
+
+    await expect(cancelling).resolves.toBe(true);
+    expect(getHookByTokenMock).toHaveBeenCalledTimes(2);
+    expect(resumeHookMock).toHaveBeenCalledWith("cancel_1", { kind: "cancel-turn" });
+  });
+
+  it("does not cancel a token owned by another session", async () => {
+    getHookByTokenMock.mockResolvedValue({
+      metadata: { sessionId: "session_2" },
+      runId: "turn_2",
+    });
+
+    await expect(buildRuntime().cancelTurn("session_1", "cancel_1")).resolves.toBe(false);
+    expect(resumeHookMock).not.toHaveBeenCalled();
+  });
+
+  it("returns false when the active turn hook is not registered", async () => {
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    getHookByTokenMock.mockRejectedValue(new HookNotFoundError("cancel_1"));
+
+    await expect(buildRuntime().cancelTurn("session_1", "cancel_1")).resolves.toBe(false);
   });
 });
 
