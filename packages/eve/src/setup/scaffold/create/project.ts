@@ -195,6 +195,15 @@ const AGENT_INSTRUCTIONS_TEMPLATE = `# Identity
 You are a helpful assistant.
 `;
 
+const AGENTS_MD_TEMPLATE = `# eve Agent App
+
+This project uses eve, a filesystem-first TypeScript framework for durable agents, published as the npm package \`eve\`. Before writing code, read the relevant guide in \`node_modules/eve/docs/\`.
+
+## Working on this agent
+
+The agent lives under \`agent/\`: \`agent/agent.ts\` wires it up and \`agent/instructions.md\` is its system prompt. Add a typed tool at \`agent/tools/<name>.ts\` (for example \`get_weather.ts\`) using \`defineTool\` from \`eve/tools\` with a Zod \`inputSchema\` and an inline \`execute\`. Run the dev server, then exercise the HTTP API: create a session with \`POST /eve/v1/session\`, attach to \`GET /eve/v1/session/:id/stream\`, and send a follow-up with the returned \`continuationToken\`. Verify with the project's typecheck, adapt model and provider choices to the project, and don't commit unless the user asks.
+`;
+
 const SHARED_TEMPLATE_FILES: Record<string, string> = {
   "agent/channels/eve.ts": WEB_APP_TEMPLATE_FILES["agent/channels/eve.ts"],
   "agent/instructions.md": AGENT_INSTRUCTIONS_TEMPLATE,
@@ -235,10 +244,7 @@ dist
 .nitro
 dist
 `,
-  "AGENTS.md": `# eve Agent App
-
-This project uses the eve framework. Before writing code, always read the relevant guide in \`node_modules/eve/docs/\`.
-`,
+  "AGENTS.md": AGENTS_MD_TEMPLATE,
   "CLAUDE.md": `@AGENTS.md
 `,
 };
