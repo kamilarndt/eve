@@ -1,5 +1,6 @@
 import { HumanActionRequiredError } from "#setup/human-action.js";
 import { runChannelsFlow } from "#setup/flows/channels.js";
+import { runConnectionsFlow } from "#setup/flows/connections.js";
 import { runDeployFlow } from "#setup/flows/deploy.js";
 import {
   runInstallVercelCliFlow,
@@ -30,6 +31,7 @@ export const SETUP_FLOW_CONFIG = {
   "vc:login": { title: "Log in to Vercel", indicator: "pulse" },
   model: { title: "Configure the agent model", indicator: "pulse" },
   channels: { title: "Agent channels", indicator: "pulse" },
+  connect: { title: "Agent connections", indicator: "pulse" },
   deploy: { title: "Deploy to Vercel", indicator: "spinner" },
 } satisfies Record<TuiSetupCommand, { title: string; indicator: SetupFlowIndicator }>;
 
@@ -59,6 +61,7 @@ export interface TuiSetupFlows {
   runLoginFlow: typeof runLoginFlow;
   runModelFlow: typeof runModelFlow;
   runChannelsFlow: typeof runChannelsFlow;
+  runConnectionsFlow: typeof runConnectionsFlow;
   runDeployFlow: typeof runDeployFlow;
 }
 
@@ -108,7 +111,7 @@ function muteableRenderer(
 }
 
 /**
- * Runs one TUI setup command (/model, /channels, /deploy) over the
+ * Runs one TUI setup command (/model, /channels, /connect, /deploy) over the
  * shared setup flows, asking through the TUI's own bordered panel. Never throws:
  * every outcome — done, cancelled, failed — folds into the returned command
  * result. Ctrl-C or Esc on the working indicator (no question open) aborts the
@@ -158,6 +161,7 @@ async function executeSetupCommand(
     runLoginFlow,
     runModelFlow,
     runChannelsFlow,
+    runConnectionsFlow,
     runDeployFlow,
     ...input.flows,
   };
@@ -232,6 +236,31 @@ async function executeSetupCommand(
               message: `Channels added: ${result.addedChannels.join(", ")} — run /deploy to ship them.`,
               preserveFlowDiagnostics: true,
               effect: { kind: "channels-added" },
+            };
+        }
+      }
+      case "connect": {
+        const result = await flows.runConnectionsFlow({ appRoot, prompter, signal });
+        switch (result.kind) {
+          case "failed":
+            // A remote provisioning failure throws before authoring and routes
+            // through the catch below; a `failed` result here is a later local
+            // fault (for example dependency installation), reported as-is.
+            return {
+              message: `Connection files changed, but /connect failed: ${result.message}`,
+              preserveFlowDiagnostics: true,
+            };
+          case "cancelled":
+            return { message: "/connect cancelled.", preserveFlowDiagnostics: true };
+          case "done":
+            if (result.addedConnections.length === 0) {
+              return { message: "No connections added.", preserveFlowDiagnostics: true };
+            }
+            // The authored connection and project attachment are live in dev;
+            // each runtime user authorizes the connector on first use.
+            return {
+              message: `Connections configured: ${result.addedConnections.join(", ")}. User authorization starts on first use.`,
+              preserveFlowDiagnostics: true,
             };
         }
       }

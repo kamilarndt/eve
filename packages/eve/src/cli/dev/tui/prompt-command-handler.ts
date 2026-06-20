@@ -15,6 +15,10 @@ type ExtensionCommand = Extract<PromptCommand, { type: "extension" }>;
 
 export interface PromptCommandHandlerOptions {
   readonly target: DevelopmentTuiTarget;
+  /** Resolves the app currently associated with an attached local server. */
+  readonly resolveAppRoot?: () => Promise<string | undefined>;
+  /** Refreshes process-local state after a setup flow may have changed Vercel auth. */
+  readonly afterSetupCommand?: (command: ExtensionCommand["name"]) => Promise<void>;
   /** Test seam; defaults to the model flow's shared source-change apply. */
   readonly applyModel?: (input: { appRoot: string; slug: string }) => Promise<ApplyModelOutcome>;
   /** Test seam; defaults to the model flow's external-provider refusal check. */
@@ -46,13 +50,16 @@ export function createPromptCommandHandler(
       // `/model <slug>` applies directly; only the bare command opens the
       // configure menu flow below.
       if (command.name === "model" && command.argument.length > 0) {
-        if (target.kind !== "local") {
+        const appRoot =
+          options.resolveAppRoot === undefined
+            ? target.workspaceRoot
+            : await options.resolveAppRoot();
+        if (appRoot === undefined) {
           return {
             message:
               "/model needs eve dev running the local server (it is not available with --url).",
           };
         }
-        const appRoot = target.workspaceRoot;
         // Package-loading failures are command outcomes at this CLI boundary.
         try {
           const {
@@ -101,6 +108,16 @@ export function createPromptCommandHandler(
         return { message };
       }
 
+      const appRoot =
+        target.kind === "local" && options.resolveAppRoot !== undefined
+          ? await options.resolveAppRoot()
+          : target.workspaceRoot;
+      if (appRoot === undefined) {
+        return {
+          message: `/${command.name} needs eve dev running the local server (it is not available with --url).`,
+        };
+      }
+
       // The remaining setup commands run against the local workspace, except
       // `/vc:install`, which needs only a working directory on a remote session.
       let setupCommands: typeof import("./setup-commands.js");
@@ -116,7 +133,7 @@ export function createPromptCommandHandler(
       try {
         const commandInput: TuiSetupCommandInput = {
           command: command.name,
-          appRoot: target.workspaceRoot,
+          appRoot,
           renderer: flow,
         };
         if (context.initialModelStep !== undefined) {
@@ -124,6 +141,7 @@ export function createPromptCommandHandler(
         }
         if (options.flows !== undefined) commandInput.flows = options.flows;
         const result = await runTuiSetupCommand(commandInput);
+        await options.afterSetupCommand?.(command.name);
         preserveFlowDiagnostics = result.preserveFlowDiagnostics;
         const outcome: PromptCommandOutcome = { message: result.message };
         if (result.effect !== undefined) outcome.effect = result.effect;

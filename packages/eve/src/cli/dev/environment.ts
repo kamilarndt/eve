@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseEnv } from "node:util";
 
+import {
+  EVE_LOCAL_DEV_AUTH_DIRECTORY_ENV,
+  EVE_LOCAL_DEV_AUTH_INSTANCE_ID_ENV,
+} from "#protocol/local-dev-auth.js";
 import { isObject } from "#shared/guards.js";
 
 /**
@@ -62,7 +66,11 @@ function getDevelopmentEnvironmentLoader(appRoot: string): DevelopmentEnvironmen
 }
 
 function createDevelopmentEnvironmentLoader(appRoot: string): DevelopmentEnvironmentLoader {
-  const protectedKeys = new Set(Object.keys(process.env));
+  const protectedKeys = new Set([
+    ...Object.keys(process.env),
+    EVE_LOCAL_DEV_AUTH_DIRECTORY_ENV,
+    EVE_LOCAL_DEV_AUTH_INSTANCE_ID_ENV,
+  ]);
   const managedValues = new Map<string, string>();
 
   return {

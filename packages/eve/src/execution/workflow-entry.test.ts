@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHook } from "#compiled/@workflow/core/index.js";
+import { createHook, sleep } from "#compiled/@workflow/core/index.js";
 
 import type { HookPayload } from "#channel/types.js";
 import { ChannelRequestIdKey } from "#context/keys.js";
@@ -28,6 +28,7 @@ vi.mock("#compiled/@workflow/core/index.js", () => ({
         write() {},
       }),
   ),
+  sleep: vi.fn(() => new Promise<void>(() => {})),
 }));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
@@ -996,6 +997,153 @@ describe("workflowEntry", () => {
     );
   });
 
+  it("resumes an authorization batch after the first completed callback", async () => {
+    const sessionState = createBaseSessionState();
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+
+    const linearCallback: HookPayload = {
+      kind: "deliver",
+      payloads: [
+        {
+          authorizationCallback: {
+            callback: { method: "GET", params: {} },
+            connectionName: "linear",
+          },
+        },
+      ],
+    };
+    const authNext = vi
+      .fn<() => Promise<IteratorResult<HookPayload>>>()
+      .mockResolvedValueOnce({ done: false, value: linearCallback })
+      .mockRejectedValueOnce(new Error("waited for an unrelated authorization callback"));
+
+    installHookMocks({
+      authNext,
+      turnCompletions: [
+        turnResult({
+          action: "park",
+          authorizationNames: ["datadog", "linear"],
+          sessionState,
+        }),
+        turnResult({ action: "done", output: "linear authorized", sessionState }),
+      ],
+    });
+
+    const result = await workflowEntry({
+      input: { message: "find linear issues" },
+      serializedContext: createSerializedContext(),
+    });
+
+    expect(result).toEqual({ output: "linear authorized" });
+    expect(authNext).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(dispatchTurnStep).mock.calls[1]?.[0].delivery).toEqual(linearCallback);
+  });
+
+  it("resumes a pending authorization with a terminal timeout callback at its deadline", async () => {
+    const sessionState = createBaseSessionState();
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    const deadline = Date.parse("2026-06-21T20:00:00.000Z");
+    vi.mocked(sleep).mockResolvedValueOnce();
+
+    installHookMocks({
+      authNext: () => new Promise<IteratorResult<HookPayload>>(() => {}),
+      turnCompletions: [
+        turnResult({
+          action: "park",
+          authorizationDeadline: deadline,
+          authorizationNames: ["linear"],
+          sessionState,
+        }),
+        turnResult({ action: "done", output: "authorization timed out", sessionState }),
+      ],
+    });
+
+    await expect(
+      workflowEntry({
+        input: { message: "find linear issues" },
+        serializedContext: createSerializedContext(),
+      }),
+    ).resolves.toEqual({ output: "authorization timed out" });
+
+    expect(sleep).toHaveBeenCalledWith(new Date(deadline));
+    expect(vi.mocked(dispatchTurnStep).mock.calls[1]?.[0].delivery).toEqual({
+      kind: "deliver",
+      payloads: [
+        {
+          authorizationCallback: {
+            callback: {
+              method: "TIMEOUT",
+              params: {
+                error: "authorization_timeout",
+                error_description: "Authorization timed out.",
+              },
+            },
+            connectionName: "linear",
+          },
+        },
+      ],
+    });
+  });
+
+  it("reuses the pending auth-hook read when a timeout wins the first race", async () => {
+    const sessionState = createBaseSessionState();
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    const notionCallback: HookPayload = {
+      kind: "deliver",
+      payloads: [
+        {
+          authorizationCallback: {
+            callback: { method: "GET", params: { code: "notion-code" } },
+            connectionName: "notion",
+          },
+        },
+      ],
+    };
+    let resolveAuthorization: ((result: IteratorResult<HookPayload>) => void) | undefined;
+    const pendingAuthorization = new Promise<IteratorResult<HookPayload>>((resolve) => {
+      resolveAuthorization = resolve;
+    });
+    const authNext = vi
+      .fn<() => Promise<IteratorResult<HookPayload>>>()
+      .mockReturnValueOnce(pendingAuthorization)
+      .mockRejectedValueOnce(new Error("concurrent auth-hook read"));
+    vi.mocked(sleep)
+      .mockResolvedValueOnce()
+      .mockImplementationOnce(() => {
+        resolveAuthorization?.({ done: false, value: notionCallback });
+        return new Promise<void>(() => {});
+      });
+
+    installHookMocks({
+      authNext,
+      turnCompletions: [
+        turnResult({
+          action: "park",
+          authorizationDeadline: 1,
+          authorizationNames: ["linear"],
+          sessionState,
+        }),
+        turnResult({
+          action: "park",
+          authorizationDeadline: 2,
+          authorizationNames: ["notion"],
+          sessionState,
+        }),
+        turnResult({ action: "done", output: "notion authorized", sessionState }),
+      ],
+    });
+
+    await expect(
+      workflowEntry({
+        input: { message: "find notion pages" },
+        serializedContext: createSerializedContext(),
+      }),
+    ).resolves.toEqual({ output: "notion authorized" });
+
+    expect(authNext).toHaveBeenCalledOnce();
+    expect(vi.mocked(dispatchTurnStep).mock.calls[2]?.[0].delivery).toEqual(notionCallback);
+  });
+
   it("disposes the workflow hook after the loop exits", async () => {
     const sessionState = createBaseSessionState();
     vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
@@ -1133,6 +1281,8 @@ function createSubagentInputRequest(): HookPayload {
 
 function turnResult(input: {
   readonly action: "done" | "park" | "dispatch-runtime-actions";
+  readonly authorizationDeadline?: number;
+  readonly authorizationNames?: readonly string[];
   readonly output?: string;
   readonly pendingActionKeys?: readonly string[];
   readonly serializedContext?: Record<string, unknown>;
@@ -1163,6 +1313,8 @@ function turnResult(input: {
   }
   return {
     action: {
+      authorizationDeadline: input.authorizationDeadline,
+      authorizationNames: input.authorizationNames,
       kind: "park",
       serializedContext,
       sessionState: input.sessionState,
@@ -1172,6 +1324,7 @@ function turnResult(input: {
 }
 
 function installHookMocks(input: {
+  readonly authNext?: () => Promise<IteratorResult<HookPayload>>;
   readonly parkHooks?: readonly ParkHookConfig[];
   readonly symbolDispose?: () => void;
   readonly turnCompletions: readonly TurnCompletionPayload[];
@@ -1191,7 +1344,7 @@ function installHookMocks(input: {
     }
 
     if (token.endsWith(":auth")) {
-      return createMockHook({ token, values: [] }) as never;
+      return createMockHook({ next: input.authNext, token, values: [] }) as never;
     }
 
     const config = parkHooks.shift() ?? { token, values: [] };

@@ -37,14 +37,12 @@ import {
   timestampHandleMessageStreamEvent,
 } from "#protocol/message.js";
 import {
+  type AuthorizationCompletionResult,
+  AuthorizationCompletionReporterKey,
   CallbackBaseUrlKey,
-  clearPendingAuthorization,
   getPendingAuthorization,
   PendingAuthorizationResultKey,
-  type AuthorizationResult,
 } from "#harness/authorization.js";
-import type { ConnectionAuthorizationChallenge } from "#public/connections/errors.js";
-import type { AuthorizationCallback } from "#runtime/connections/types.js";
 import {
   createDurableSessionState,
   type DurableSessionState,
@@ -62,6 +60,7 @@ import { buildTurnAttributes, readRootSessionId } from "#execution/eve-workflow-
 import { setEveAttributes } from "#runtime/attributes/emit.js";
 import { turnWorkflow } from "#execution/turn-workflow.js";
 import { createWorkflowRuntime, startWorkflowPreferLatest } from "#execution/workflow-runtime.js";
+import { consumeAuthorizationCallbacks } from "#execution/authorization-resume.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
 
 /**
@@ -82,6 +81,7 @@ export type DurableStepResult =
     }
   | {
       readonly action: "park";
+      readonly authorizationDeadline?: number;
       readonly authorizationNames?: readonly string[];
       readonly hasPendingAuthorization: boolean;
       readonly hasPendingInputBatch: boolean;
@@ -122,10 +122,17 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
     }),
   );
 
-  let durableSession = await readDurableSession(input.sessionState);
+  const durableSession = await readDurableSession(input.sessionState);
   const ctx = await deserializeContext(input.serializedContext);
   const adapter = ctx.require(ChannelKey);
   const bundle = ctx.require(BundleKey);
+  let initialSession = hydrateDurableSession({
+    compactionOverrides: {
+      thresholdPercent: bundle.resolvedAgent.config.compaction?.thresholdPercent,
+    },
+    durable: durableSession,
+    turnAgent: bundle.turnAgent,
+  });
 
   // Populate the callback base URL so getHookUrl() works during
   // tool execution. Reads from workflow metadata (available in steps).
@@ -139,70 +146,18 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
     // Outside a workflow context (e.g. tests) — getHookUrl will return undefined.
   }
 
-  // Authorization callback. If the delivery carries an
-  // `authorizationCallback` and there's a pending authorization on
-  // session state, extract it, build AuthorizationResult entries, and
-  // populate PendingAuthorizationResultKey so tools can complete auth.
-  // Strip the callback from the delivery so the adapter doesn't see it.
-  // Completion event names are collected here; emission happens after
-  // the `emit` function is created below.
-  const pendingAuth = getPendingAuthorization(durableSession.state);
-  let completedAuths:
-    | Array<{ name: string; authorization: ConnectionAuthorizationChallenge }>
-    | undefined;
-  if (pendingAuth && input.input?.kind === "deliver") {
-    const authResults: Array<{ name: string } & AuthorizationResult> = [];
-    const completed: Array<{ name: string; authorization: ConnectionAuthorizationChallenge }> = [];
-    const remainingPayloads: DeliverPayload[] = [];
-    for (const payload of input.input.payloads) {
-      const cb = payload["authorizationCallback"] as
-        | { connectionName: string; callback: AuthorizationCallback }
-        | undefined;
-      if (cb) {
-        const challenge = pendingAuth.challenges.find((c) => c.name === cb.connectionName);
-        if (challenge) {
-          authResults.push({
-            name: challenge.name,
-            resume: challenge.resume,
-            callback: cb.callback,
-            hookUrl: challenge.hookUrl,
-          });
-          completed.push({ name: challenge.name, authorization: challenge.challenge });
-        }
-      } else {
-        remainingPayloads.push(payload);
-      }
-    }
-    if (authResults.length > 0) {
-      ctx.set(PendingAuthorizationResultKey, authResults);
-      durableSession = {
-        ...durableSession,
-        state: clearPendingAuthorization(
-          durableSession.state,
-          authResults.map((result) => result.name),
-        ),
-      };
-      completedAuths = completed;
-      input =
-        remainingPayloads.length > 0
-          ? { ...input, input: { ...input.input, payloads: remainingPayloads } }
-          : { ...input, input: undefined };
-    }
-  }
+  const authorizationResume = consumeAuthorizationCallbacks({
+    delivery: input.input,
+    session: initialSession,
+  });
+  initialSession = authorizationResume.session;
+  input = { ...input, input: authorizationResume.delivery };
 
   // Apply deliver-time auth ferried via `resumeHook` (initial-turn
   // input has no auth; it was seeded by buildRunContext).
   if (input.input?.kind === "deliver" && input.input.auth !== undefined) {
     ctx.set(AuthKey, input.input.auth ?? null);
   }
-
-  const initialSession = hydrateDurableSession({
-    compactionOverrides: {
-      thresholdPercent: bundle.resolvedAgent.config.compaction?.thresholdPercent,
-    },
-    durable: durableSession,
-    turnAgent: bundle.turnAgent,
-  });
 
   const adapterCtx = buildAdapterContext(adapter, ctx);
 
@@ -292,29 +247,39 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
 
   const mode = ctx.require(ModeKey);
 
+  const resumedAuthorizations = new Map(
+    authorizationResume.authorizations.map((authorization) => [authorization.name, authorization]),
+  );
+  const reportedAuthorizations = new Set<string>();
+  const completionEmissionState = getHarnessEmissionState(initialSession.state);
+  const reportAuthorizationCompletion = async (result: AuthorizationCompletionResult) => {
+    const resumed = resumedAuthorizations.get(result.name);
+    if (resumed === undefined || reportedAuthorizations.has(result.name)) return;
+    reportedAuthorizations.add(result.name);
+    await handleEvent(
+      createAuthorizationCompletedEvent({
+        authorization: resumed.authorization,
+        name: result.name,
+        outcome: result.outcome,
+        reason: result.reason,
+        sequence: completionEmissionState.sequence,
+        stepIndex: completionEmissionState.stepIndex,
+        turnId: completionEmissionState.turnId,
+      }),
+    );
+  };
+
   let stepResult = await runStep(ctx, initialSession, async (enrichedSession) => {
+    if (authorizationResume.results.length > 0) {
+      ctx.setVirtualContext(PendingAuthorizationResultKey, authorizationResume.results);
+      ctx.setVirtualContext(AuthorizationCompletionReporterKey, reportAuthorizationCompletion);
+    }
     const schemaSession = resolveEffectiveOutputSchema({
       agentOutputSchema: bundle.turnAgent.outputSchema,
       input: resolved,
       mode,
       session: enrichedSession,
     });
-    if (completedAuths) {
-      const emissionState = getHarnessEmissionState(schemaSession.state);
-      for (const { name, authorization } of completedAuths) {
-        await handleEvent(
-          createAuthorizationCompletedEvent({
-            authorization,
-            name,
-            outcome: "authorized",
-            sequence: emissionState.sequence,
-            stepIndex: emissionState.stepIndex,
-            turnId: emissionState.turnId,
-          }),
-        );
-      }
-    }
-
     const capabilities = ctx.get(CapabilitiesKey);
 
     const runHarnessStep = async (
@@ -406,6 +371,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
  * the right `NextDriverAction` arm at the park boundary.
  */
 function derivePendingState(session: HarnessSession): {
+  readonly authorizationDeadline?: number;
   readonly authorizationNames?: readonly string[];
   readonly hasPendingAuthorization: boolean;
   readonly hasPendingInputBatch: boolean;
@@ -414,6 +380,7 @@ function derivePendingState(session: HarnessSession): {
   const batch = getPendingRuntimeActionBatch(session.state);
   const pendingAuth = getPendingAuthorization(session.state);
   const base = {
+    authorizationDeadline: pendingAuth?.deadline,
     authorizationNames: pendingAuth?.challenges.map((c) => c.name),
     hasPendingAuthorization: pendingAuth !== undefined,
     hasPendingInputBatch: hasPendingInputBatch(session.state),

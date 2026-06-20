@@ -3,6 +3,7 @@ import { start } from "#internal/workflow/runtime.js";
 
 import { createTestRuntime } from "#internal/testing/app-harness.js";
 import {
+  durableSleepFixtureWorkflow,
   durableSessionRetryFixtureWorkflow,
   durableSessionStoreFixtureWorkflow,
 } from "#internal/testing/durable-session-workflow.js";
@@ -12,6 +13,16 @@ import {
  * a real workflow runtime, including returned state under step retry.
  */
 describe("durableSessionStore integration", () => {
+  it("resumes after a workflow-body sleep", async () => {
+    const runtime = createTestRuntime({ agent: { name: "durable-sleep-fixture" } });
+
+    await runtime.run(async () => {
+      const run = await start(durableSleepFixtureWorkflow, [1]);
+
+      await expect(run.returnValue).resolves.toBe("awake");
+    });
+  });
+
   it("each step's readDurableSession returns the immediately-preceding write", async () => {
     const runtime = createTestRuntime({ agent: { name: "durable-session-store-fixture" } });
 

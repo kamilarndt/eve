@@ -1,4 +1,5 @@
 import {
+  type ConnectAuthMode,
   type ConnectionIdentity,
   type IntegrationEntry,
   channelEntries,
@@ -9,7 +10,7 @@ import type { LogoKey } from "./logos";
 
 /**
  * The docs integration gallery layers presentation (logo, keywords, setup
- * markdown, auth modes) on top of the shared identity catalog
+ * markdown) on top of the shared identity catalog
  * (`@vercel/eve-catalog`). Identity — slug, name, kind, tagline, and a
  * connection's transport + model-facing description — comes from the catalog
  * and is never re-declared here; this module owns only the docs-facing overlay,
@@ -24,21 +25,22 @@ import type { ConnectionProtocol } from "@vercel/eve-catalog";
 
 /**
  * Which Vercel Connect token subject a connection authenticates as. Every mode
- * is Connect-managed: `user` (per-user OAuth, the default), `app` (one shared
+ * is Connect-managed: `user` (per-user OAuth), `app` (one shared
  * app installation), and `jwtBearer` (a JWT bearer assertion whose subject maps
  * to a principal your IdP recognizes).
  */
-export type AuthMode = "user" | "app" | "jwtBearer";
+export type AuthMode = ConnectAuthMode;
 
 /**
  * Structured description of a connection consumed by the detail page to
  * generate Install, Quick start, and Configure content. Transport (`mcp`,
  * `openapi`) and `description` are filled from the shared catalog identity;
- * `authModes`, `connector`, and `configureNote` are the docs-only overlay.
+ * Connect identity comes from the shared catalog; only `configureNote` is a
+ * docs-specific connection field.
  */
 export interface ConnectionSpec {
-  /** Vercel Connect connector UID; defaults to the integration slug. */
-  connector?: string;
+  /** Canonical Vercel Connect connector UID. */
+  connector: string;
   /** Supported auth modes in display order; the first is the default. */
   authModes: AuthMode[];
   /** Model-facing description; defaults to the integration tagline. */
@@ -89,10 +91,8 @@ interface ChannelPresentation extends Presentation {
   configure: string;
 }
 
-/** Connection overlay: presentation plus Connect auth/config details. */
+/** Connection overlay: presentation plus provider-specific configuration notes. */
 interface ConnectionPresentation extends Presentation {
-  authModes: AuthMode[];
-  connector?: string;
   configureNote?: string;
 }
 
@@ -304,21 +304,18 @@ Point your frontend at the session routes eve serves (\`/eve/v1/session\`) and s
 /**
  * Connection presentation overlay, keyed by catalog slug. Transport (`mcp`,
  * `openapi`) and the model-facing description come from `@vercel/eve-catalog`;
- * this carries the docs-only auth modes, optional connector UID, and configure
- * note.
+ * this carries only docs presentation and provider-specific configure notes.
  */
 const connectionPresentations: Record<string, ConnectionPresentation> = {
   linear: {
     logo: "linear",
     docsHref: "/docs/connections",
     keywords: ["mcp", "issues", "project management", "oauth", "connect"],
-    authModes: ["user", "app"],
   },
   notion: {
     logo: "notion",
     docsHref: "/docs/connections",
     keywords: ["mcp", "openapi", "docs", "wiki", "knowledge base", "connect"],
-    authModes: ["user", "app", "jwtBearer"],
     configureNote:
       "The OpenAPI setup sends the required `Notion-Version` header; bump it as Notion ships new API versions.",
   },
@@ -326,7 +323,6 @@ const connectionPresentations: Record<string, ConnectionPresentation> = {
     logo: "datadog",
     docsHref: "/docs/connections",
     keywords: ["mcp", "observability", "metrics", "monitoring", "logs"],
-    authModes: ["jwtBearer"],
     configureNote:
       "Match the MCP `url` to your Datadog site (`datadoghq.com`, `datadoghq.eu`, and so on).",
   },
@@ -334,7 +330,6 @@ const connectionPresentations: Record<string, ConnectionPresentation> = {
     logo: "honeycomb",
     docsHref: "/docs/connections",
     keywords: ["mcp", "observability", "traces", "queries"],
-    authModes: ["jwtBearer"],
   },
 };
 
@@ -371,10 +366,10 @@ function buildConnection(entry: IntegrationEntry): Integration {
   }
   const identity: ConnectionIdentity = entry.connection;
   const spec: ConnectionSpec = {
-    authModes: presentation.authModes,
+    authModes: [...identity.connect.authModes],
+    connector: identity.connect.canonicalConnectorUid ?? identity.connect.service,
     description: identity.description,
   };
-  if (presentation.connector !== undefined) spec.connector = presentation.connector;
   if (identity.mcp !== undefined) spec.mcp = identity.mcp;
   if (identity.openapi !== undefined) spec.openapi = identity.openapi;
   if (presentation.configureNote !== undefined) spec.configureNote = presentation.configureNote;

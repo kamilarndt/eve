@@ -15,6 +15,13 @@ const mocks = vi.hoisted(() => {
     ready: vi.fn(async () => undefined),
     url: "http://localhost:2000/",
   };
+  const localAuthServer = {
+    metadata: {
+      serverInstanceId: "a".repeat(32),
+      version: 1 as const,
+    },
+    dispose: vi.fn(async () => undefined),
+  };
   const devServer = {
     close: vi.fn(async () => undefined),
     listen: vi.fn(() => listenerServer),
@@ -42,6 +49,7 @@ const mocks = vi.hoisted(() => {
     devServer,
     files,
     listenerServer,
+    localAuthServer,
     mkdir: vi.fn(async () => undefined),
     nitro,
     prepareApplicationHost: vi.fn(async () => ({ appRoot: "/tmp/eve-test" })),
@@ -64,6 +72,15 @@ const mocks = vi.hoisted(() => {
       }
     }),
     startDevelopmentSandboxPrewarmInBackground: vi.fn(() => undefined),
+    startLocalDevelopmentAuthServer: vi.fn(
+      async (): Promise<
+        | { readonly ok: true; readonly value: typeof localAuthServer }
+        | { readonly ok: false; readonly error: { readonly kind: "io"; readonly cause: unknown } }
+      > => ({
+        ok: true,
+        value: localAuthServer,
+      }),
+    ),
     pruneLocalSandboxTemplatesInBackground: vi.fn(() => undefined),
     stopDevelopmentSandboxResources: vi.fn(async () => undefined),
     pruneDevelopmentRuntimeArtifactsSnapshotsInBackground: vi.fn(() => undefined),
@@ -130,6 +147,17 @@ vi.mock("#internal/nitro/dev-runtime-artifacts.js", async (importOriginal) => {
     ...actual,
     pruneDevelopmentRuntimeArtifactsSnapshotsInBackground:
       mocks.pruneDevelopmentRuntimeArtifactsSnapshotsInBackground,
+  };
+});
+
+vi.mock("#internal/local-development-auth.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("#internal/local-development-auth.js")>();
+  return {
+    ...actual,
+    LocalDevelopmentAuthServer: {
+      ...actual.LocalDevelopmentAuthServer,
+      start: mocks.startLocalDevelopmentAuthServer,
+    },
   };
 });
 
@@ -264,6 +292,25 @@ describe("startDevelopmentServer", () => {
     expect(process.env.EVE_DEVELOPMENT_SANDBOX_RUN_ID).toBeUndefined();
   });
 
+  it("reports startup and cleanup failures without hiding either error", async () => {
+    const { startDevelopmentServer } = await import("./start-development-server.js");
+    const startupError = new Error("bundle failed");
+    const cleanupError = new Error("auth cleanup failed");
+    mocks.buildNitro.mockRejectedValueOnce(startupError);
+    mocks.localAuthServer.dispose.mockRejectedValueOnce(cleanupError);
+
+    const result = startDevelopmentServer("/tmp/eve-test").catch((error: unknown) => error);
+
+    await expect(result).resolves.toMatchObject({
+      cause: startupError,
+      errors: [startupError, cleanupError],
+      message: "Development server startup failed and cleanup was incomplete.",
+    });
+    expect(mocks.files.has(developmentProcessIdPath)).toBe(false);
+    expect(mocks.files.has(developmentServerMetadataPath)).toBe(false);
+    expect(mocks.stopDevelopmentSandboxResources).toHaveBeenCalledOnce();
+  });
+
   it("uses eve's default port when no port is requested", async () => {
     const { startDevelopmentServer } = await import("./start-development-server.js");
     Object.assign(mocks.nitro.options.devServer, {
@@ -335,14 +382,97 @@ describe("startDevelopmentServer", () => {
 
     expect(mocks.files.get(developmentProcessIdPath)).toBe(`${process.pid}\n`);
     expect(JSON.parse(mocks.files.get(developmentServerMetadataPath) ?? "{}")).toMatchObject({
+      localAuth: mocks.localAuthServer.metadata,
       pid: process.pid,
       url: "http://localhost:2000/",
     });
+    expect(server.localAuth).toEqual(mocks.localAuthServer.metadata);
 
     await server.close();
 
     expect(mocks.files.has(developmentProcessIdPath)).toBe(false);
     expect(mocks.files.has(developmentServerMetadataPath)).toBe(false);
+    expect(mocks.localAuthServer.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("removes process metadata when local auth cleanup fails", async () => {
+    const { startDevelopmentServer } = await import("./start-development-server.js");
+    mocks.localAuthServer.dispose.mockRejectedValueOnce(new Error("auth cleanup failed"));
+    const server = await startDevelopmentServer("/tmp/eve-test");
+
+    await expect(server.close()).rejects.toThrow("auth cleanup failed");
+
+    expect(mocks.files.has(developmentProcessIdPath)).toBe(false);
+    expect(mocks.files.has(developmentServerMetadataPath)).toBe(false);
+  });
+
+  it("removes discoverable metadata before disposing local auth", async () => {
+    const { startDevelopmentServer } = await import("./start-development-server.js");
+    mocks.localAuthServer.dispose.mockImplementationOnce(async () => {
+      expect(mocks.files.has(developmentProcessIdPath)).toBe(false);
+      expect(mocks.files.has(developmentServerMetadataPath)).toBe(false);
+    });
+    const server = await startDevelopmentServer("/tmp/eve-test");
+
+    await server.close();
+  });
+
+  it("runs every cleanup step when an earlier close step fails", async () => {
+    const { startDevelopmentServer } = await import("./start-development-server.js");
+    mocks.authoredSourceWatcher.close.mockRejectedValueOnce(new Error("watcher cleanup failed"));
+    mocks.devServer.close.mockRejectedValueOnce(new Error("dev server cleanup failed"));
+    mocks.localAuthServer.dispose.mockRejectedValueOnce(new Error("auth cleanup failed"));
+    mocks.stopDevelopmentSandboxResources.mockRejectedValueOnce(
+      new Error("sandbox cleanup failed"),
+    );
+    const server = await startDevelopmentServer("/tmp/eve-test");
+
+    await expect(server.close()).rejects.toThrow("Failed to close the development server");
+
+    expect(mocks.authoredSourceWatcher.close).toHaveBeenCalledOnce();
+    expect(mocks.devServer.close).toHaveBeenCalledOnce();
+    expect(mocks.nitro.close).toHaveBeenCalledOnce();
+    expect(mocks.localAuthServer.dispose).toHaveBeenCalledOnce();
+    expect(mocks.stopDevelopmentSandboxResources).toHaveBeenCalledOnce();
+    expect(mocks.files.has(developmentProcessIdPath)).toBe(false);
+    expect(mocks.files.has(developmentServerMetadataPath)).toBe(false);
+    expect(process.env.WORKFLOW_LOCAL_BASE_URL).toBeUndefined();
+    expect(process.env.PORT).toBeUndefined();
+    expect(process.env.EVE_DEVELOPMENT_SANDBOX_RUN_ID).toBeUndefined();
+
+    await expect(server.close()).rejects.toThrow("Failed to close the development server");
+    expect(mocks.authoredSourceWatcher.close).toHaveBeenCalledOnce();
+    expect(mocks.devServer.close).toHaveBeenCalledOnce();
+    expect(mocks.nitro.close).toHaveBeenCalledOnce();
+    expect(mocks.localAuthServer.dispose).toHaveBeenCalledOnce();
+    expect(mocks.stopDevelopmentSandboxResources).toHaveBeenCalledOnce();
+  });
+
+  it("allows only one active development host in a process", async () => {
+    const { startDevelopmentServer } = await import("./start-development-server.js");
+    const firstServer = await startDevelopmentServer("/tmp/eve-test");
+
+    await expect(startDevelopmentServer("/tmp/another-eve-test")).rejects.toThrow(
+      "A development server is already active in this process.",
+    );
+
+    await firstServer.close();
+    const replacementServer = await startDevelopmentServer("/tmp/eve-test");
+    await replacementServer.close();
+  });
+
+  it("unwinds host startup when local auth cannot start", async () => {
+    const { startDevelopmentServer } = await import("./start-development-server.js");
+    const cause = new Error("auth registry unavailable");
+    mocks.startLocalDevelopmentAuthServer.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: "io", cause },
+    });
+
+    await expect(startDevelopmentServer("/tmp/eve-test")).rejects.toThrow(cause);
+
+    expect(mocks.files.has(developmentProcessIdPath)).toBe(false);
+    expect(mocks.createApplicationNitro).not.toHaveBeenCalled();
   });
 
   it("refuses to start when the agent already has a running dev process", async () => {

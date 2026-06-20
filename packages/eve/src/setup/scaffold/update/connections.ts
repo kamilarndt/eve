@@ -32,7 +32,6 @@ export interface ConnectionMutationResult {
   filesWritten: string[];
   filesOverwritten?: string[];
   filesSkipped: string[];
-  packageJsonUpdated: PackageJsonMutation[];
   /** Env keys appended to `.env.local` (empty when none were added). */
   envKeysAdded: string[];
   /** Env keys the user must populate for this connection. */
@@ -50,6 +49,10 @@ export interface EnsureConnectionOptions {
   protocol: ConnectionProtocol;
   entry: ConnectionInput;
   force?: boolean;
+}
+
+export interface EnsureConnectionDependenciesOptions {
+  projectRoot: string;
   connectPackageVersion?: string;
 }
 
@@ -158,6 +161,17 @@ async function ensureConnectDependency(
   ];
 }
 
+/** Adds the package dependency required by a Connect-auth connection. */
+export async function ensureConnectionDependencies(
+  options: EnsureConnectionDependenciesOptions,
+): Promise<PackageJsonMutation[]> {
+  const connectPackageVersion = resolveVersionToken(
+    "connectPackageVersion",
+    options.connectPackageVersion ?? DEFAULT_CONNECT_PACKAGE_VERSION,
+  );
+  return ensureConnectDependency(join(options.projectRoot, "package.json"), connectPackageVersion);
+}
+
 function envKeyPresent(source: string, key: string): boolean {
   const pattern = new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`, "m");
   return pattern.test(source);
@@ -182,8 +196,9 @@ async function seedEnvPlaceholders(envPath: string, keys: readonly string[]): Pr
 
 /**
  * Scaffolds `agent/connections/<slug>.ts` from a catalog entry or custom
- * input, patching `package.json` for Connect-auth connections and seeding
- * `.env.local` placeholders for static-key connections.
+ * input and seeding `.env.local` placeholders for static-key connections.
+ * Connect dependency installation is owned by the setup box so a multi-entry
+ * run mutates and installs the project exactly once.
  */
 export async function ensureConnection(
   options: EnsureConnectionOptions,
@@ -197,7 +212,18 @@ export async function ensureConnection(
     );
   }
 
-  const filePath = join(options.projectRoot, USER_AUTHORED_CONNECTION_DIR, `${slug}.ts`);
+  const authoredModules = await listAuthoredConnectionModules(options.projectRoot);
+  const matchingModules = authoredModules.filter((module) => module.slug === slug);
+  if (matchingModules.length > 1) {
+    throw new Error(
+      `Connection "${slug}" has multiple authored modules: ${matchingModules
+        .map((module) => module.filePath)
+        .join(", ")}. Keep exactly one before retrying.`,
+    );
+  }
+  const filePath =
+    matchingModules[0]?.filePath ??
+    join(options.projectRoot, USER_AUTHORED_CONNECTION_DIR, `${slug}.ts`);
   const envKeysRequired = envKeysForAuth(auth);
   const fileAlreadyExists = await pathExists(filePath);
 
@@ -209,24 +235,9 @@ export async function ensureConnection(
       filePath,
       filesWritten: [],
       filesSkipped: [filePath],
-      packageJsonUpdated: [],
       envKeysAdded: [],
       envKeysRequired,
     };
-  }
-
-  const packageJsonUpdated: PackageJsonMutation[] = [];
-  if (auth.kind === "connect") {
-    const connectPackageVersion = resolveVersionToken(
-      "connectPackageVersion",
-      options.connectPackageVersion ?? DEFAULT_CONNECT_PACKAGE_VERSION,
-    );
-    packageJsonUpdated.push(
-      ...(await ensureConnectDependency(
-        join(options.projectRoot, "package.json"),
-        connectPackageVersion,
-      )),
-    );
   }
 
   await writeTextFile(
@@ -249,7 +260,6 @@ export async function ensureConnection(
     filePath,
     filesWritten: [filePath],
     filesSkipped: [],
-    packageJsonUpdated,
     envKeysAdded,
     envKeysRequired,
   };
@@ -259,8 +269,14 @@ export async function ensureConnection(
   return result;
 }
 
-/** Lists authored connection names under `agent/connections/` (file and folder form). */
-export async function listAuthoredConnections(projectRoot: string): Promise<string[]> {
+interface AuthoredConnectionModule {
+  readonly filePath: string;
+  readonly slug: string;
+}
+
+async function listAuthoredConnectionModules(
+  projectRoot: string,
+): Promise<AuthoredConnectionModule[]> {
   const connectionsDir = join(projectRoot, USER_AUTHORED_CONNECTION_DIR);
   let entries;
   try {
@@ -270,18 +286,26 @@ export async function listAuthoredConnections(projectRoot: string): Promise<stri
     throw error;
   }
 
-  const connections: string[] = [];
+  const connections: AuthoredConnectionModule[] = [];
   for (const entry of entries) {
     if (entry.isFile()) {
       const baseName = getSupportedModuleBaseName(entry.name);
-      if (baseName !== null) connections.push(baseName);
+      if (baseName !== null) {
+        connections.push({ filePath: join(connectionsDir, entry.name), slug: baseName });
+      }
       continue;
     }
     if (entry.isDirectory()) {
       try {
         const inner = await readdir(join(connectionsDir, entry.name));
-        if (inner.some((fileName) => matchesSupportedModuleBaseName(fileName, "connection"))) {
-          connections.push(entry.name);
+        const fileName = inner.find((candidate) =>
+          matchesSupportedModuleBaseName(candidate, "connection"),
+        );
+        if (fileName !== undefined) {
+          connections.push({
+            filePath: join(connectionsDir, entry.name, fileName),
+            slug: entry.name,
+          });
         }
       } catch {
         // Skip unreadable directories.
@@ -289,5 +313,10 @@ export async function listAuthoredConnections(projectRoot: string): Promise<stri
     }
   }
 
-  return connections.sort();
+  return connections.sort((a, b) => a.slug.localeCompare(b.slug));
+}
+
+/** Lists authored connection names under `agent/connections/` (file and folder form). */
+export async function listAuthoredConnections(projectRoot: string): Promise<string[]> {
+  return (await listAuthoredConnectionModules(projectRoot)).map((connection) => connection.slug);
 }

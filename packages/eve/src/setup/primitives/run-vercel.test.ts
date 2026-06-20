@@ -152,10 +152,15 @@ describe("timeoutMs", () => {
         onOutput,
         timeoutMs: 1_000,
       });
-      // The child never exits: the OAuth hand-off was abandoned.
+      // The child never exits: interactive connector creation was abandoned.
       vi.advanceTimersByTime(1_000);
 
-      await expect(result).resolves.toEqual({ ok: false, stdout: "" });
+      await expect(result).resolves.toEqual({
+        ok: false,
+        stdout: "",
+        stderr: "",
+        failure: "timeout",
+      });
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(onOutput).toHaveBeenCalledWith({
         stream: "stderr",
@@ -225,6 +230,27 @@ describe("timeoutMs", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("runVercelCaptureStdout", () => {
+  test("preserves stderr when an interactive command exits non-zero", async () => {
+    const child = createChildProcess();
+    mockSpawnReturn(child);
+
+    const result = runVercelCaptureStdout(["connect", "list", "-F", "json"], {
+      cwd: "/tmp/eve-agent",
+      onOutput: vi.fn(),
+    });
+    child.stderr.emit("data", Buffer.from("Setup failed: connector rejected\n"));
+    child.emit("close", 1);
+
+    await expect(result).resolves.toEqual({
+      ok: false,
+      stdout: "",
+      stderr: "Setup failed: connector rejected\n",
+      failure: "exit",
+    });
   });
 });
 

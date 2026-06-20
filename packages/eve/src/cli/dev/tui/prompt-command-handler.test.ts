@@ -254,6 +254,30 @@ describe("createPromptCommandHandler", () => {
     expect(runLoginFlow).not.toHaveBeenCalled();
   });
 
+  it("resolves the associated app root when each command starts", async () => {
+    const resolveAppRoot = vi
+      .fn<() => Promise<string | undefined>>()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(APP_ROOT);
+    const applyModel = vi.fn(async () => ({ kind: "changed", to: "openai/gpt-5.5" }) as const);
+    const handler = createPromptCommandHandler({
+      target: LOCAL_TARGET,
+      applyModel,
+      modelChangeRefusal: async () => null,
+      resolveAppRoot,
+    });
+    const command = { type: "extension", name: "model", argument: "openai/gpt-5.5" } as const;
+
+    await expect(handler.handle(command, context())).resolves.toEqual({
+      message: "/model needs eve dev running the local server (it is not available with --url).",
+    });
+    await expect(handler.handle(command, context())).resolves.toEqual({
+      message: `Model changed to ${pc.bold("openai/gpt-5.5")}. Live on your next prompt.`,
+    });
+    expect(resolveAppRoot).toHaveBeenCalledTimes(2);
+    expect(applyModel).toHaveBeenCalledWith({ appRoot: APP_ROOT, slug: "openai/gpt-5.5" });
+  });
+
   it("folds setup-module load failures at the command adapter boundary", async () => {
     vi.doMock("./setup-commands.js", () => {
       throw new Error("Cannot find package 'oxc-parser'");
@@ -275,5 +299,24 @@ describe("createPromptCommandHandler", () => {
       vi.doUnmock("./setup-commands.js");
       vi.resetModules();
     }
+  });
+
+  it("refreshes the local user grant after /vc:login completes", async () => {
+    const afterSetupCommand = vi.fn(async () => {});
+    const setupFlow = setupFlowRenderer();
+    const handler = createPromptCommandHandler({
+      target: LOCAL_TARGET,
+      afterSetupCommand,
+      flows: {
+        runLoginFlow: async () => ({ kind: "logged-in" }),
+      },
+    });
+
+    await handler.handle(
+      { type: "extension", name: "vc:login", argument: "" },
+      context({ setupFlow }),
+    );
+
+    expect(afterSetupCommand).toHaveBeenCalledWith("vc:login");
   });
 });

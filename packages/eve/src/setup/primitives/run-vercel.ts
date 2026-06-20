@@ -58,7 +58,7 @@ export interface RunVercelOptions {
    * Hard deadline for the whole command. When it elapses the run settles as a
    * failure and the child is killed (SIGTERM, then SIGKILL after a short
    * grace). Unbounded when omitted — only safe for commands that cannot wait
-   * on external action, e.g. a Connect create parked on a browser OAuth.
+   * on external action, e.g. an interactive Connect create.
    */
   timeoutMs?: number;
 }
@@ -230,11 +230,13 @@ export async function runVercel(args: string[], options: RunVercelOptions): Prom
   });
 }
 
-/** Exit success plus captured stdout from an interactive Vercel CLI run. */
-export interface RunVercelCaptureResult {
-  ok: boolean;
-  stdout: string;
-}
+/** Why an interactive Vercel CLI run failed. */
+export type RunVercelCaptureFailure = "aborted" | "timeout" | "spawn" | "exit";
+
+/** Exit outcome plus captured output from an interactive Vercel CLI run. */
+export type RunVercelCaptureResult =
+  | { ok: true; stdout: string }
+  | { ok: false; stdout: string; stderr: string; failure: RunVercelCaptureFailure };
 
 /**
  * Runs an interactive Vercel CLI command while capturing its stdout.
@@ -242,14 +244,17 @@ export interface RunVercelCaptureResult {
  * Unlike {@link captureVercel}, stdin stays attached to the terminal so the
  * command can drive prompts and browser-based OAuth flows, and stderr is
  * streamed to `onOutput` (the rail renderer) like {@link runVercel}. Only
- * stdout is captured, so a `--format json` payload can be parsed without
- * disturbing the interactive UI, which the Vercel CLI writes to stderr.
+ * stdout is kept separate so a `--format json` payload can be parsed without
+ * disturbing the interactive UI. stderr is both streamed and retained on
+ * failure so callers can report the actual CLI or provider diagnostic.
  */
 export async function runVercelCaptureStdout(
   args: string[],
   options: RunVercelOptions,
 ): Promise<RunVercelCaptureResult> {
-  if (options.signal?.aborted === true) return { ok: false, stdout: "" };
+  if (options.signal?.aborted === true) {
+    return { ok: false, stdout: "", stderr: "", failure: "aborted" };
+  }
   return new Promise<RunVercelCaptureResult>((resolvePromise) => {
     const cwd = existingDir(options.cwd);
     const invocation = resolveVercelInvocation(cwd);
@@ -270,15 +275,27 @@ export async function runVercelCaptureStdout(
     );
     const disarmAbort = armProcessAbort(child, options.signal);
     const chunks: string[] = [];
+    const stderrChunks: string[] = [];
     child.stdout?.on("data", (chunk: Buffer) => chunks.push(chunk.toString("utf8")));
-    child.stderr?.on("data", (chunk: Buffer) => outputBuffer?.write("stderr", chunk));
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrChunks.push(chunk.toString("utf8"));
+      outputBuffer?.write("stderr", chunk);
+    });
 
     let settled = false;
-    function settle(ok: boolean): void {
+    function settle(result: RunVercelCaptureResult): void {
       if (settled) return;
       settled = true;
       outputBuffer?.flush();
-      resolvePromise({ ok, stdout: chunks.join("") });
+      resolvePromise(result);
+    }
+    function fail(failure: RunVercelCaptureFailure): void {
+      settle({
+        ok: false,
+        stdout: chunks.join(""),
+        stderr: stderrChunks.join(""),
+        failure,
+      });
     }
     function reportFailure(message: string): void {
       if (options.onOutput) {
@@ -290,7 +307,7 @@ export async function runVercelCaptureStdout(
 
     const disarmDeadline = armDeadline(child, options.timeoutMs, () => {
       reportFailure(timeoutMessage(args, options.timeoutMs ?? 0));
-      settle(false);
+      fail("timeout");
     });
 
     child.on("error", (error: NodeJS.ErrnoException) => {
@@ -304,13 +321,13 @@ export async function runVercelCaptureStdout(
           ? VERCEL_NOT_FOUND_MESSAGE
           : `vercel ${args.join(" ")} failed: ${error.message}`,
       );
-      settle(false);
+      fail("spawn");
     });
     child.on("close", (code) => {
       disarmAbort();
       disarmDeadline();
       if (options.signal?.aborted === true) {
-        settle(false);
+        fail("aborted");
         return;
       }
       // After a timeout has settled the run, the eventual kill-driven exit
@@ -318,7 +335,11 @@ export async function runVercelCaptureStdout(
       if (!settled && code !== 0 && code !== null) {
         reportFailure(`vercel ${args.join(" ")} exited with code ${code}.`);
       }
-      settle(code === 0);
+      if (code === 0) {
+        settle({ ok: true, stdout: chunks.join("") });
+      } else {
+        fail("exit");
+      }
     });
   });
 }

@@ -5,6 +5,7 @@ import {
   resolveRemoteDevelopmentClientOptions,
 } from "#services/dev-client/client-options.js";
 import { createDevelopmentCredentialGate } from "#services/dev-client/credential-gate.js";
+import type { LocalDevelopmentUserCredential } from "#services/dev-client/local-user-credential.js";
 import { resolveDevelopmentOidcToken } from "#services/dev-client/request-headers.js";
 import { isVercelAuthChallenge } from "#services/dev-client/vercel-auth-error.js";
 import { resolveVercelDeployment } from "#setup/vercel-deployment.js";
@@ -22,6 +23,14 @@ export type { DevelopmentTuiTarget } from "./target.js";
 export interface RunDevelopmentTuiInput extends TuiDisplayOptions {
   /** The local server or remote URL used by this TUI session. */
   readonly target: DevelopmentTuiTarget;
+  /** Rechecks whether an attached server still belongs to this local app. */
+  readonly resolveAppRoot?: () => Promise<string | undefined>;
+  /**
+   * Temporary credential registered with the matching local dev server. It lets
+   * `localDev()` address a stable user-scoped Connect grant without trusting a
+   * caller-provided user id.
+   */
+  readonly localUserCredential?: Pick<LocalDevelopmentUserCredential, "refresh" | "token">;
   /**
    * Text to seed the prompt input with after the UI launches. The buffer is
    * editable and is not auto-submitted — the user presses Enter to send it.
@@ -74,26 +83,46 @@ function prepareDevelopmentTarget(target: DevelopmentTuiTarget): PreparedDevelop
  * the inline error region rather than crashing the command.
  */
 export async function runDevelopmentTui(input: RunDevelopmentTuiInput): Promise<void> {
-  const { target, initialInput, onBootProgress, ...display } = input;
+  const { target, resolveAppRoot, initialInput, localUserCredential, onBootProgress, ...display } =
+    input;
   const prepared = prepareDevelopmentTarget(target);
   const { serverUrl } = target;
 
   const client = new Client(
     prepared.kind === "local"
-      ? resolveDevelopmentClientOptions(serverUrl)
+      ? resolveDevelopmentClientOptions(
+          serverUrl,
+          localUserCredential === undefined
+            ? undefined
+            : { resolveLocalUserCredential: () => localUserCredential.token },
+        )
       : resolveRemoteDevelopmentClientOptions({
           serverUrl,
           credentials: prepared.remote.credentials,
         }),
   );
 
+  const promptCommandHandler =
+    target.kind === "local"
+      ? createPromptCommandHandler({
+          target,
+          resolveAppRoot,
+          afterSetupCommand: async () => {
+            await localUserCredential?.refresh({ forceIdentity: true });
+          },
+        })
+      : createPromptCommandHandler({ target });
+
   const options: EveTUIRunnerOptions = {
     ...display,
     session: client.session(),
     client,
     serverUrl,
-    promptCommandHandler: createPromptCommandHandler({ target }),
+    promptCommandHandler,
     availablePromptCommands: promptCommandsFor(target.kind),
+    prepareTurn: async () => {
+      await localUserCredential?.refresh({ forceIdentity: true });
+    },
     formatTransportError: (error) =>
       isVercelAuthChallenge(error)
         ? formatRemoteAuthChallengeMessage(serverUrl)

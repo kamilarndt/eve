@@ -32,6 +32,19 @@ describe("LiveRegion", () => {
     expect(screen.snapshot()).toBe("a");
   });
 
+  it("tracks terminal rows occupied by a soft-wrapped logical row", () => {
+    const writes: string[] = [];
+    const live = new LiveRegion(
+      { write: (chunk) => (writes.push(chunk), true) },
+      { synchronized: false },
+    );
+
+    live.update(["one logical row"], { screenRows: 2 });
+    live.update(["replacement"]);
+
+    expect(writes[1]?.startsWith("\x1b[1F")).toBe(true);
+  });
+
   it("clears the live region entirely", () => {
     const { screen, live } = setup();
     live.update(["x", "y"]);

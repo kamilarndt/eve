@@ -179,6 +179,117 @@ describe("TerminalRenderer (inline scrollback)", () => {
     expect(snapshot).toContain("It's 73°F in SF.");
   });
 
+  it("renders connection authorization as the interactive footer panel", async () => {
+    const now = Date.parse("2026-06-19T03:24:42.298Z");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const { screen, input, renderer } = makeRenderer(100, 40);
+    const abort = vi.fn();
+    const cancel = vi.fn(async () => {});
+    const rendering = renderer.renderStream(
+      {
+        abort,
+        events: new ReadableStream<AgentTUIStreamEvent>({
+          start(controller) {
+            controller.enqueue({
+              type: "tool-call",
+              toolCallId: "c1",
+              toolName: "connection__search",
+              input: { keywords: "list issues tickets assigned", connection: "linear" },
+            });
+          },
+        }),
+      },
+      { continueSession: true, tools: "auto-collapsed" },
+    );
+
+    try {
+      await vi.waitFor(() => expect(screen.snapshot()).toContain("connection__search"));
+      renderer.renderAgentHeader({
+        info: agentInfoWithModel("anthropic/claude-sonnet-4.6", {
+          kind: "gateway",
+          connected: true,
+          credential: "oidc",
+        }),
+        name: "Weather Agent",
+        serverUrl: "http://localhost:3000",
+      });
+      renderer.upsertConnectionAuth({
+        name: "linear",
+        description: "Authorization required for linear",
+        state: "required",
+        cancel,
+        challenge: {
+          url: "https://connect.vercel.com/authorize/sca_example",
+          userCode: "YZW-OPX",
+          expiresAt: "2026-06-19T03:26:34.298Z",
+        },
+      });
+
+      const snapshot = screen.snapshot();
+      expect(snapshot).toContain("· connection__search");
+      expect(snapshot).not.toContain("  input\n");
+      expect(snapshot).toContain("● authorization required for linear");
+      expect(snapshot).toContain("▔".repeat(100));
+      expect(snapshot).toContain("   Authorization required for linear");
+      expect(snapshot).toContain("   ▪ Waiting for authorization in the browser… 112s");
+      expect(screen.rawOutput()).toContain("\x1b[33m▪\x1b[39m");
+      expect(screen.rawOutput()).toContain("\x1b[33mbrowser\x1b[39m");
+      expect(snapshot).toContain("     https://connect.vercel.com/authorize/sca_example");
+      expect(snapshot).toContain("     Code: YZW-OPX");
+      expect(snapshot).toContain("   ◦ Cancel");
+      expect(snapshot).toContain("anthropic/claude-sonnet-4.6  ·  AI Gateway");
+      expect(snapshot).not.toContain("URL:");
+      expect(snapshot).not.toContain("Expires:");
+      expect(snapshot).not.toContain("linear · authorization · required");
+
+      input.down();
+      expect(screen.snapshot()).toContain("   ▷ Cancel");
+      input.enter();
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
+      expect(screen.snapshot()).toContain("Cancelling…");
+      expect(abort).not.toHaveBeenCalled();
+      input.ctrlC();
+      await rendering;
+      expect(abort).toHaveBeenCalledOnce();
+    } finally {
+      input.ctrlC();
+      await rendering;
+      renderer.shutdown();
+      clock.mockRestore();
+    }
+  });
+
+  it("keeps the live authorization controls visible in collapsed transcript mode", async () => {
+    const screen = new MockScreen({ columns: 100, rows: 30 });
+    const input = new MockUserInput();
+    const renderer = new TerminalRenderer({
+      captureForeignOutput: false,
+      connectionAuth: "collapsed",
+      input,
+      output: screen,
+      unicode: true,
+    });
+    const rendering = renderer.renderStream(
+      {
+        events: new ReadableStream<AgentTUIStreamEvent>(),
+      },
+      { continueSession: true },
+    );
+
+    renderer.upsertConnectionAuth({
+      challenge: { url: "https://connect.vercel.com/authorize/collapsed" },
+      description: "Authorization required",
+      name: "linear",
+      state: "required",
+    });
+
+    expect(screen.snapshot()).toContain("https://connect.vercel.com/authorize/collapsed");
+    expect(screen.snapshot()).toContain("Cancel");
+    input.ctrlC();
+    await rendering;
+    renderer.shutdown();
+  });
+
   it("omits the interrupt hint while waiting for the first stream event", async () => {
     const { screen, renderer } = makeRenderer();
     let streamController: ReadableStreamDefaultController<AgentTUIStreamEvent> | undefined;
@@ -1937,6 +2048,21 @@ describe("TerminalRenderer setup flow session", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("uses the attention color for an external-action pulse and its emphasis", () => {
+    const { screen, renderer } = makeRenderer();
+
+    renderer.setupFlow.begin("Agent connections", "pulse");
+    renderer.setupFlow.setStatus({
+      kind: "external-action",
+      text: "Waiting for you to complete setup in the browser…",
+      emphasis: "browser",
+    });
+
+    expect(screen.rawOutput()).toContain("\x1b[33m▪\x1b[39m");
+    expect(screen.rawOutput()).toContain("\x1b[33mbrowser\x1b[39m");
+    renderer.shutdown();
   });
 
   it("uses an ASCII fallback for pulse setup flows", () => {

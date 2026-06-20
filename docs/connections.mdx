@@ -15,7 +15,7 @@ Connections live under `agent/connections/`. The runtime name comes from the fil
 import { defineMcpClientConnection } from "eve/connections";
 
 export default defineMcpClientConnection({
-  url: "https://mcp.linear.app/sse",
+  url: "https://mcp.linear.app/mcp",
   description: "Linear workspace: issues, projects, cycles, and comments.",
   auth: {
     getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }),
@@ -64,7 +64,7 @@ To narrow which remote tools the model sees, set exactly one of `tools.allow` or
 
 ```ts
 export default defineMcpClientConnection({
-  url: "https://mcp.linear.app/sse",
+  url: "https://mcp.linear.app/mcp",
   description: "Linear: read-only.",
   auth: { getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }) },
   tools: { allow: ["search_issues", "get_issue"] },
@@ -79,7 +79,7 @@ To put every tool a connection serves behind a human, use the helpers from `eve/
 import { once } from "eve/tools/approval";
 
 export default defineMcpClientConnection({
-  url: "https://mcp.linear.app/sse",
+  url: "https://mcp.linear.app/mcp",
   description: "Linear workspace.",
   auth: { getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }) },
   approval: once(),
@@ -122,13 +122,15 @@ import { connect } from "@vercel/connect/eve";
 import { defineMcpClientConnection } from "eve/connections";
 
 export default defineMcpClientConnection({
-  url: "https://mcp.linear.app/sse",
+  url: "https://mcp.linear.app/mcp",
   description: "Linear workspace: issues, projects, cycles, and comments.",
-  auth: connect("linear/myagent"),
+  auth: connect("mcp.linear.app/linear"),
 });
 ```
 
-`"linear/myagent"` is the UID you chose when registering the Connect client. Connect-managed OAuth is user-scoped by default, so the runtime resolves the per-user token before each tool call. The full setup (Connect client provisioning, project linking, the runtime consent flow) lives in [Auth & route protection](./guides/auth-and-route-protection).
+The string passed to `connect()` is the concrete connector UID, not the bare service host. The curated defaults are `mcp.linear.app/linear` for Linear and `mcp.notion.com/notion` for Notion. `/connect` first attaches that UID. If it is unavailable, you explicitly find an existing connector that supports user authorization or create a named one; after attachment succeeds, eve writes that exact UID into this file. Connect-managed OAuth is user-scoped by default, so the runtime resolves the active user's token before each tool call. If Connect requires authorization, eve emits `authorization.required`, parks the turn, and resumes it after the user finishes the browser flow.
+
+The full setup and principal model live in [Auth & route protection](./guides/auth-and-route-protection).
 
 ## Self-hosted interactive OAuth
 
@@ -142,7 +144,7 @@ import {
 } from "eve/connections";
 
 export default defineMcpClientConnection({
-  url: "https://mcp.linear.app/sse",
+  url: "https://mcp.linear.app/mcp",
   description: "Linear workspace.",
   auth: defineInteractiveAuthorization<{ verifier: string }>({
     // Probed before every tool call. Return a token to run the tool;

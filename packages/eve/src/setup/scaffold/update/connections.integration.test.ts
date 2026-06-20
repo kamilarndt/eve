@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { describe, expect, test } from "vitest";
 
 import { getCatalogEntry } from "../connections/catalog.js";
-import { ensureConnection, listAuthoredConnections } from "./connections.js";
+import {
+  ensureConnection,
+  ensureConnectionDependencies,
+  listAuthoredConnections,
+} from "./connections.js";
 
 async function createTempDir(): Promise<string> {
   return mkdtemp(join(tmpdir(), "eve-connections-"));
@@ -17,7 +21,7 @@ function entry(slug: string) {
 }
 
 describe("ensureConnection", () => {
-  test("writes a Connect-auth MCP connection and patches package.json", async () => {
+  test("writes a Connect-auth MCP connection with the canonical connector UID", async () => {
     const projectRoot = await createTempDir();
     await writeFile(
       join(projectRoot, "package.json"),
@@ -25,11 +29,14 @@ describe("ensureConnection", () => {
       "utf8",
     );
 
+    await ensureConnectionDependencies({
+      projectRoot,
+      connectPackageVersion: "0.0.0-test",
+    });
     const result = await ensureConnection({
       projectRoot,
       protocol: "mcp",
       entry: entry("linear"),
-      connectPackageVersion: "0.0.0-test",
     });
 
     expect(result.action).toBe("created");
@@ -40,7 +47,8 @@ describe("ensureConnection", () => {
     const source = await readFile(result.filePath, "utf8");
     expect(source).toContain('import { connect } from "@vercel/connect/eve";');
     expect(source).toContain("defineMcpClientConnection");
-    expect(source).toContain('auth: connect("linear")');
+    expect(source).toContain('url: "https://mcp.linear.app/mcp"');
+    expect(source).toContain('auth: connect("mcp.linear.app/linear")');
 
     await expect(readFile(join(projectRoot, "package.json"), "utf8")).resolves.toContain(
       '"@vercel/connect": "0.0.0-test"',
@@ -64,8 +72,6 @@ describe("ensureConnection", () => {
 
     expect(result.envKeysRequired).toEqual(["NOTION_API_TOKEN"]);
     expect(result.envKeysAdded).toEqual(["NOTION_API_TOKEN"]);
-    expect(result.packageJsonUpdated).toEqual([]);
-
     const source = await readFile(result.filePath, "utf8");
     expect(source).not.toContain("@vercel/connect");
     expect(source).toContain("process.env.NOTION_API_TOKEN");
@@ -107,27 +113,59 @@ describe("ensureConnection", () => {
     const filePath = join(projectRoot, "agent/connections/linear.ts");
     await mkdir(join(projectRoot, "agent/connections"), { recursive: true });
     await writeFile(filePath, "existing\n", "utf8");
+    await writeFile(join(projectRoot, "package.json"), '{ "name": "demo" }\n', "utf8");
 
     const skipped = await ensureConnection({
       projectRoot,
       protocol: "mcp",
       entry: entry("linear"),
-      connectPackageVersion: "0.0.0-test",
     });
     expect(skipped.action).toBe("skipped");
     expect(skipped.filesSkipped).toEqual([filePath]);
     await expect(readFile(filePath, "utf8")).resolves.toBe("existing\n");
+    await expect(readFile(join(projectRoot, "package.json"), "utf8")).resolves.not.toContain(
+      "@vercel/connect",
+    );
 
     const overwritten = await ensureConnection({
       projectRoot,
       protocol: "mcp",
       entry: entry("linear"),
       force: true,
-      connectPackageVersion: "0.0.0-test",
     });
     expect(overwritten.action).toBe("overwritten");
     expect(overwritten.filesOverwritten).toEqual([filePath]);
     await expect(readFile(filePath, "utf8")).resolves.toContain("defineMcpClientConnection");
+    await expect(readFile(join(projectRoot, "package.json"), "utf8")).resolves.not.toContain(
+      "@vercel/connect",
+    );
+  });
+
+  test("prepares dependencies without rewriting a folder-form placeholder", async () => {
+    const projectRoot = await createTempDir();
+    const folderPath = join(projectRoot, "agent/connections/linear/connection.mts");
+    await mkdir(join(projectRoot, "agent/connections/linear"), { recursive: true });
+    await writeFile(folderPath, 'export default { auth: connect("linear") };\n', "utf8");
+    await writeFile(join(projectRoot, "package.json"), '{ "name": "demo" }\n', "utf8");
+
+    const packageJsonUpdated = await ensureConnectionDependencies({
+      projectRoot,
+      connectPackageVersion: "0.0.0-test",
+    });
+    const result = await ensureConnection({
+      projectRoot,
+      protocol: "mcp",
+      entry: entry("linear"),
+    });
+
+    expect(result).toMatchObject({ action: "skipped", filePath: folderPath });
+    expect(packageJsonUpdated).toHaveLength(1);
+    await expect(readFile(join(projectRoot, "package.json"), "utf8")).resolves.toContain(
+      '"@vercel/connect": "0.0.0-test"',
+    );
+    await expect(
+      readFile(join(projectRoot, "agent/connections/linear.ts"), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   test("scaffolds a custom MCP connection", async () => {

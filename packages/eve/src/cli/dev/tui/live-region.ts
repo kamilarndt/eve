@@ -41,6 +41,12 @@ export interface LiveRegionOptions {
   synchronized?: boolean;
 }
 
+/** Screen geometry for a live-region update containing soft-wrapped logical rows. */
+export interface LiveRegionUpdateOptions {
+  /** Physical screen rows occupied after terminal soft wrapping. */
+  screenRows: number;
+}
+
 export class LiveRegion {
   readonly #write: (chunk: string) => boolean;
   readonly #synchronized: boolean;
@@ -72,19 +78,23 @@ export class LiveRegion {
   }
 
   /**
-   * Repaints the live region in place from `liveRows`. Each row must already
-   * be styled and fit within the terminal width (one row == one screen line).
+   * Repaints the live region in place from `liveRows`. Supply `screenRows`
+   * when a logical row exceeds the terminal width and soft-wraps.
    */
-  update(liveRows: readonly string[]): void {
-    this.#paint([], liveRows);
+  update(liveRows: readonly string[], options?: LiveRegionUpdateOptions): void {
+    this.#paint([], liveRows, options?.screenRows ?? liveRows.length);
   }
 
   /**
    * Commits `committedRows` to scrollback above the live region, then repaints
    * `liveRows`. Committed rows are permanent and scroll with the terminal.
    */
-  flush(committedRows: readonly string[], liveRows: readonly string[]): void {
-    this.#paint(committedRows, liveRows);
+  flush(
+    committedRows: readonly string[],
+    liveRows: readonly string[],
+    options?: LiveRegionUpdateOptions,
+  ): void {
+    this.#paint(committedRows, liveRows, options?.screenRows ?? liveRows.length);
   }
 
   /**
@@ -116,7 +126,7 @@ export class LiveRegion {
     this.#liveRowCount = 0;
   }
 
-  #paint(committedRows: readonly string[], liveRows: readonly string[]): void {
+  #paint(committedRows: readonly string[], liveRows: readonly string[], screenRows: number): void {
     const body =
       this.#moveToTop() +
       CLEAR_TO_END +
@@ -124,7 +134,7 @@ export class LiveRegion {
       liveRows.join("\n");
 
     this.#write(this.#synchronized ? `${SYNC_START}${body}${SYNC_END}` : body);
-    this.#liveRowCount = liveRows.length;
+    this.#liveRowCount = screenRows;
   }
 
   /**

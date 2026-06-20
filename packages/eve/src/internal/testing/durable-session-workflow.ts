@@ -5,7 +5,7 @@
  */
 import type { ModelMessage } from "ai";
 
-import { getStepMetadata, getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
+import { getStepMetadata, getWorkflowMetadata, sleep } from "#compiled/@workflow/core/index.js";
 
 import {
   createDurableSessionState,
@@ -114,6 +114,14 @@ export async function durableSessionReadStep(input: {
  */
 export interface DurableSessionStoreFixtureInput {
   readonly markers: readonly { readonly marker: string; readonly historyDepth: number }[];
+}
+
+/** Exercises the workflow-body sleep shim against the real workflow runtime. */
+export async function durableSleepFixtureWorkflow(durationMs: number): Promise<string> {
+  "use workflow";
+
+  await sleep(durationMs);
+  return "awake";
 }
 
 export interface DurableSessionStoreFixtureResult {

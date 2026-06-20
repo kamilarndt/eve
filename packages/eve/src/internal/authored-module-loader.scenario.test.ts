@@ -182,6 +182,39 @@ describe("loadAuthoredModuleNamespace", () => {
     }
   });
 
+  it("loads eve imports from the framework installation running the compiler", async () => {
+    const appRoot = await mkdtemp(join(tmpdir(), "eve-authored-framework-resolution-"));
+
+    try {
+      const installedEveRoot = join(appRoot, "node_modules", "eve");
+      const modulePath = join(appRoot, "agent.ts");
+      await mkdir(installedEveRoot, { recursive: true });
+      await writeFile(join(appRoot, "package.json"), JSON.stringify({ type: "module" }));
+      await writeFile(
+        join(installedEveRoot, "package.json"),
+        JSON.stringify({ exports: { ".": "./index.js" }, name: "eve", type: "module" }),
+      );
+      await writeFile(
+        join(installedEveRoot, "index.js"),
+        'export function defineAgent() { return { source: "app-installed-eve" }; }\n',
+      );
+      await writeFile(
+        modulePath,
+        [
+          'import { defineAgent } from "eve";',
+          'export const result = defineAgent({ model: "anthropic/claude-sonnet-4.6" });',
+          "",
+        ].join("\n"),
+      );
+
+      const moduleNamespace = await loadAuthoredModuleNamespace(modulePath);
+
+      expect(moduleNamespace.result).toEqual({ model: "anthropic/claude-sonnet-4.6" });
+    } finally {
+      await rm(appRoot, { force: true, recursive: true });
+    }
+  });
+
   it("bundles symlinked workspace packages that export TypeScript source", async () => {
     const app = await scenarioApp({
       files: {

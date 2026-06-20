@@ -141,6 +141,26 @@ describe("createRailLog spinner", () => {
     expect(text).toContain(`G(${FIRST_FRAME})`); // glyph is the same green
     expect(text).not.toContain("C("); // and never cyan
   });
+
+  test("uses one yellow attention color for an external-action wait", () => {
+    const tagged: PromptColors = {
+      ...colors,
+      green: (text) => `G(${text})`,
+      yellow: (text) => `Y(${text})`,
+    };
+    const output = new FakeOutput(true);
+    const log = createRailLog({ colors: tagged, output });
+
+    log.spinner("Waiting for setup in the browser…", {
+      kind: "external-action",
+      emphasis: "browser",
+    });
+
+    expect(output.text()).toContain("Y(│)");
+    expect(output.text()).toContain(`Y(${FIRST_FRAME})`);
+    expect(output.text()).toContain("Y(browser)");
+    expect(output.text()).not.toContain("G(");
+  });
 });
 
 describe("SPINNER_FRAMES breathing invariant", () => {

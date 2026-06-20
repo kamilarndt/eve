@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 
 import { createAuthoredAssetImportPlugin } from "#internal/authored-asset-import-plugin.js";
+import { resolvePackageDependencyPath } from "#internal/application/package.js";
 import { createAuthoredModuleBundleError } from "#internal/authored-module-bundle.js";
 import { createAuthoredPackageTsConfigPathsPlugin } from "#internal/authored-package-tsconfig-paths.js";
 import { expectObjectRecord } from "#internal/authored-module.js";
@@ -296,9 +297,11 @@ function createPackageBoundaryPlugin(
       }
 
       if (isEveFrameworkImport(source)) {
+        // The framework runtime and authored definitions must come from the
+        // same Eve installation; a bare import would resolve from the app.
         return {
           external: true,
-          id: source,
+          id: createFileImportSpecifier(resolvePackageDependencyPath(source)),
         };
       }
 

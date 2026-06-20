@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   catalogSlugs,
+  canonicalConnectorUidForEntry,
   CONNECTION_CATALOG,
   connectorServiceForEntry,
   effectiveProtocols,
@@ -32,9 +33,24 @@ describe("catalog integrity", () => {
     expect(new Set(slugs).size).toBe(slugs.length);
   });
 
+  test("only exposes providers whose Connect service supports the user flow", () => {
+    expect(catalogSlugs()).toEqual(["linear", "notion"]);
+    expect(getCatalogEntry("linear")?.auth).toMatchObject({
+      connector: "mcp.linear.app/linear",
+      service: "mcp.linear.app",
+    });
+    expect(getCatalogEntry("notion")?.auth).toMatchObject({
+      connector: "mcp.notion.com/notion",
+      service: "mcp.notion.com",
+    });
+  });
+
   test("every curated entry authenticates via Connect", () => {
     for (const entry of CONNECTION_CATALOG) {
       expect(entry.auth.kind).toBe("connect");
+      if (entry.auth.kind === "connect") {
+        expect(entry.auth.principalType).toBe("user");
+      }
     }
   });
 
@@ -50,7 +66,12 @@ describe("connectorServiceForEntry", () => {
     expect(
       connectorServiceForEntry({
         mcp: { url: "https://mcp.example.com/sse" },
-        auth: { kind: "connect", connector: "x", service: "explicit.example" },
+        auth: {
+          kind: "connect",
+          connector: "x",
+          principalType: "user",
+          service: "explicit.example",
+        },
       }),
     ).toBe("explicit.example");
   });
@@ -59,7 +80,7 @@ describe("connectorServiceForEntry", () => {
     expect(
       connectorServiceForEntry({
         mcp: { url: "https://mcp.example.com/sse" },
-        auth: { kind: "connect", connector: "x" },
+        auth: { kind: "connect", connector: "x", principalType: "user" },
       }),
     ).toBe("mcp.example.com");
   });
@@ -71,9 +92,21 @@ describe("connectorServiceForEntry", () => {
   });
 });
 
+describe("canonicalConnectorUidForEntry", () => {
+  test("preserves an explicit UID and derives one for a custom MCP connection", () => {
+    expect(canonicalConnectorUidForEntry(getCatalogEntry("notion")!)).toBe("mcp.notion.com/notion");
+    expect(
+      canonicalConnectorUidForEntry({
+        mcp: { url: "https://mcp.example.com/sse" },
+        auth: { kind: "connect", connector: "engineering", principalType: "user" },
+      }),
+    ).toBe("mcp.example.com/engineering");
+  });
+});
+
 describe("mcpServiceHost", () => {
   test("extracts the host from a URL", () => {
-    expect(mcpServiceHost("https://mcp.linear.app/sse")).toBe("mcp.linear.app");
+    expect(mcpServiceHost("https://mcp.linear.app/mcp")).toBe("mcp.linear.app");
   });
 
   test("returns undefined for missing or unparseable input", () => {

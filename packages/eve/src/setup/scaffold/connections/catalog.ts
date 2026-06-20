@@ -4,8 +4,8 @@
  *
  * Connection *identity* (slug, label, transport, description) is owned by
  * `@vercel/eve-catalog`, the cross-surface source of truth shared with the
- * docs gallery. This module overlays the scaffolder-only concern — the Connect
- * auth spec to emit — and shapes the result into {@link ConnectionCatalogEntry}.
+ * docs gallery. This module shapes that identity into the auth spec emitted by
+ * the user-scoped scaffolder.
  *
  * Phase 1 ships MCP-only scaffolding plus a "custom" escape hatch. OpenAPI
  * entries can be scaffolded later by widening {@link SUPPORTED_PROTOCOLS}, with
@@ -36,16 +36,16 @@ export interface EnvHeader {
 /** How a scaffolded connection authenticates to its endpoint. */
 export type ConnectionAuthSpec =
   /**
-   * Vercel Connect-managed OAuth via `connect(<connector>)`.
+   * Vercel Connect-managed user OAuth via `connect(<connector>)`.
    *
-   * `connector` is the value written into the generated `connect("…")` call.
-   * It starts as a placeholder and is rewritten to the real connector UID once
-   * the connector is provisioned (see {@link service}). `service` is the
+   * `connector` is the canonical UID written by headless scaffolding and is
+   * replaced in memory when an interactive flow explicitly selects or creates
+   * another connector. `service` is the bare
    * managed-connector identifier passed to `vercel connect create <service>`
    * (e.g. the MCP host `mcp.linear.app`); when omitted, the connector must be
    * created out of band and its UID set by hand.
    */
-  | { kind: "connect"; connector: string; service?: string }
+  | { kind: "connect"; connector: string; principalType: "user"; service?: string }
   /** Static bearer token read from a single environment variable. */
   | { kind: "bearer-env"; envVar: string }
   /** Static credentials passed as one or more request headers. */
@@ -96,28 +96,23 @@ export interface CustomConnectionInput {
 /** Sentinel picker value for the "Custom connection" option. */
 export const CUSTOM_CONNECTION_SLUG = "custom";
 
-/**
- * Scaffolder-only auth overlay, keyed by catalog slug. Identity comes from
- * `@vercel/eve-catalog`; this map says how each curated connection authenticates
- * when the scaffolder emits its template. Every connection in the catalog must
- * have an entry here — {@link buildCatalogEntry} throws otherwise.
- */
-const CONNECTION_AUTH: Readonly<Record<string, ConnectionAuthSpec>> = {
-  linear: { kind: "connect", connector: "linear", service: "mcp.linear.app" },
-  notion: { kind: "connect", connector: "notion", service: "mcp.notion.com" },
-  datadog: { kind: "connect", connector: "datadog", service: "mcp.datadoghq.com" },
-  honeycomb: { kind: "connect", connector: "honeycomb", service: "mcp.honeycomb.io" },
-};
-
 function buildCatalogEntry(
   slug: string,
   label: string,
   identity: ConnectionIdentity,
 ): ConnectionCatalogEntry {
-  const auth = CONNECTION_AUTH[slug];
-  if (auth === undefined) {
-    throw new Error(`Connection "${slug}" is in the catalog but has no scaffolder auth overlay.`);
+  if (!identity.connect.authModes.includes("user")) {
+    throw new Error(`Scaffoldable connection "${slug}" does not support user authorization.`);
   }
+  if (identity.connect.canonicalConnectorUid === undefined) {
+    throw new Error(`Scaffoldable connection "${slug}" has no canonical connector UID.`);
+  }
+  const auth: ConnectionAuthSpec = {
+    kind: "connect",
+    connector: identity.connect.canonicalConnectorUid,
+    principalType: "user",
+    service: identity.connect.service,
+  };
   const entry: ConnectionCatalogEntry = {
     slug,
     label,
@@ -131,14 +126,14 @@ function buildCatalogEntry(
   return entry;
 }
 
-export const CONNECTION_CATALOG: readonly ConnectionCatalogEntry[] = connectionEntries().map(
-  (entry) => {
+export const CONNECTION_CATALOG: readonly ConnectionCatalogEntry[] = connectionEntries()
+  .filter((entry) => entry.surfaces.scaffoldable)
+  .map((entry) => {
     if (entry.connection === undefined) {
       throw new Error(`Catalog connection "${entry.slug}" is missing its connection identity.`);
     }
     return buildCatalogEntry(entry.slug, entry.name, entry.connection);
-  },
-);
+  });
 
 const CATALOG_BY_SLUG = new Map(CONNECTION_CATALOG.map((entry) => [entry.slug, entry]));
 
@@ -180,18 +175,35 @@ export function isValidConnectionSlug(slug: string): boolean {
   return CONNECTION_SLUG_PATTERN.test(slug);
 }
 
+interface ConnectProvisionEntry {
+  mcp?: McpEndpoint;
+  auth?: ConnectionAuthSpec;
+}
+
 /**
  * The `vercel connect create <service>` identifier for a Connect-backed
  * connection: the explicit `auth.service` when set, otherwise the host of the
  * MCP endpoint (e.g. `mcp.linear.app`). Returns `undefined` when neither is
  * available, in which case the connector must be provisioned out of band.
  */
-export function connectorServiceForEntry(
-  entry: Pick<ConnectionCatalogEntry, "mcp" | "auth">,
-): string | undefined {
-  if (entry.auth.kind !== "connect") return undefined;
+export function connectorServiceForEntry(entry: ConnectProvisionEntry): string | undefined {
+  if (entry.auth?.kind !== "connect") return undefined;
   if (entry.auth.service) return entry.auth.service;
   return mcpServiceHost(entry.mcp?.url);
+}
+
+/**
+ * Concrete connector UID to attach before offering a choice of other
+ * connectors. Catalog entries carry one directly; custom MCP entries derive
+ * one from their service and authored connection name.
+ */
+export function canonicalConnectorUidForEntry(entry: ConnectProvisionEntry): string | undefined {
+  if (entry.auth?.kind !== "connect") return undefined;
+  const service = connectorServiceForEntry(entry);
+  if (service === undefined) return undefined;
+  return entry.auth.connector.includes("/")
+    ? entry.auth.connector
+    : `${service}/${entry.auth.connector}`;
 }
 
 /** Extracts the bare host from an MCP URL, or `undefined` when unparseable. */

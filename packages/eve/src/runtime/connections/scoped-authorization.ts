@@ -13,9 +13,14 @@
 import { type AlsContext, contextStorage, loadContext } from "#context/container.js";
 import type { ConnectionAuthorizationChallenge } from "#public/connections/errors.js";
 import {
+  ConnectionAuthorizationFailedError,
+  isConnectionAuthorizationFailedError,
+} from "#public/connections/errors.js";
+import {
   type AuthorizationSignal,
   getAuthorizationResult,
   getHookUrl,
+  reportAuthorizationCompletion,
   requestAuthorization,
 } from "#harness/authorization.js";
 import type { JsonValue } from "#public/types/json.js";
@@ -137,18 +142,47 @@ export async function completeScopedAuthorization(input: ScopedAuthorization): P
   const result = getAuthorizationResult(scope);
   if (result === undefined) return false;
 
+  const callbackError = result.callback.params["error"]?.trim();
+  if (callbackError !== undefined && callbackError.length > 0) {
+    const reason = result.callback.params["error_description"]?.trim() || callbackError;
+    const outcome = authorizationOutcomeForReason(callbackError);
+    await reportAuthorizationCompletion({ name: scope, outcome, reason });
+    throw new ConnectionAuthorizationFailedError(scope, {
+      message: `Authorization for "${scope}" did not complete: ${reason}`,
+      reason: callbackError,
+      retryable: false,
+    });
+  }
+
   const interactive = authorization as InteractiveAuthorizationDefinition<JsonValue>;
   const ctx: AlsContext = loadContext();
-  const principal = resolveConnectionPrincipal(scope, interactive, ctx);
-  const token = await interactive.completeAuthorization({
-    callbackUrl: result.hookUrl,
-    connection,
-    principal,
-    resume: result.resume,
-    callback: result.callback,
-  });
-  writeCachedToken(ctx, scope, principalKey(principal), token);
+  try {
+    const principal = resolveConnectionPrincipal(scope, interactive, ctx);
+    const token = await interactive.completeAuthorization({
+      callbackUrl: result.hookUrl,
+      connection,
+      principal,
+      resume: result.resume,
+      callback: result.callback,
+    });
+    writeCachedToken(ctx, scope, principalKey(principal), token);
+  } catch (error) {
+    const authorizationError = isConnectionAuthorizationFailedError(error) ? error : undefined;
+    const outcome = authorizationOutcomeForReason(authorizationError?.reason);
+    const reason = error instanceof Error ? error.message : String(error);
+    await reportAuthorizationCompletion({ name: scope, outcome, reason });
+    throw error;
+  }
+  await reportAuthorizationCompletion({ name: scope, outcome: "authorized" });
   return true;
+}
+
+function authorizationOutcomeForReason(
+  reason: string | undefined,
+): "declined" | "failed" | "timed-out" {
+  if (reason === "access_denied") return "declined";
+  if (reason === "authorization_timeout") return "timed-out";
+  return "failed";
 }
 
 /**

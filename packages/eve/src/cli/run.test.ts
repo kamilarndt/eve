@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveDevUiMode, resolveTuiDisplayOptions, runCli } from "#cli/run.js";
 import type { RunDevelopmentTuiInput } from "#cli/dev/tui/tui.js";
 import type { DevelopmentServerOptions } from "#internal/nitro/host/types.js";
+import type { LocalDevelopmentUserIdentityResolution } from "#services/dev-client/local-user-credential.js";
 
 async function withInteractiveTerminal<T>(fn: () => Promise<T>): Promise<T> {
   const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -74,7 +75,9 @@ describe("eve init for a coding agent that fumbles the invocation", () => {
 
 describe("eve dev --input", () => {
   it("forwards the initial draft to the interactive TUI", async () => {
-    const runDevelopmentTui = vi.fn(async () => {});
+    const runDevelopmentTui = vi.fn<(input: RunDevelopmentTuiInput) => Promise<void>>(
+      async () => {},
+    );
 
     await withInteractiveTerminal(() =>
       runCli(
@@ -167,7 +170,11 @@ describe("eve dev boot progress", () => {
       hostReporter = options?.onBootProgress;
       hostReporter?.({ phase: "compiling agent", type: "phase-started" });
       hostReporter?.({ elapsedMs: 1, phase: "compiling agent", type: "phase-finished" });
-      return { close, url: "http://127.0.0.1:2000" };
+      return {
+        close,
+        localAuth: { serverInstanceId: "b".repeat(32), version: 1 as const },
+        url: "http://127.0.0.1:2000",
+      };
     });
     const runDevelopmentTui = vi.fn(async (input: RunDevelopmentTuiInput) => {
       tuiReporter = input.onBootProgress;
@@ -181,7 +188,19 @@ describe("eve dev boot progress", () => {
     try {
       await expect(
         withInteractiveTerminal(() =>
-          runCli(["dev"], { error: () => {}, log: () => {} }, { runDevelopmentTui, startHost }),
+          runCli(
+            ["dev"],
+            { error: () => {}, log: () => {} },
+            {
+              createLocalDevelopmentUserCredential: () => ({
+                dispose: async () => {},
+                refresh: async () => {},
+                token: undefined,
+              }),
+              runDevelopmentTui,
+              startHost,
+            },
+          ),
         ),
       ).rejects.toThrow("TUI startup failed");
     } finally {
@@ -192,6 +211,224 @@ describe("eve dev boot progress", () => {
     expect(tuiReporter).toBe(hostReporter);
     expect(writes.at(-1)).toBe("\r\u001B[K");
     expect(close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("eve dev local user projection", () => {
+  const localAuth = { serverInstanceId: "a".repeat(32), version: 1 } as const;
+
+  it("registers the integrated TUI after the local server starts", async () => {
+    const runDevelopmentTui = vi.fn<(input: RunDevelopmentTuiInput) => Promise<void>>(
+      async () => {},
+    );
+    let hostStarted = false;
+    const startHost = vi.fn(async () => {
+      hostStarted = true;
+      return {
+        localAuth,
+        url: "http://localhost:2000",
+        close: async () => {},
+      };
+    });
+    const dispose = vi.fn(async () => {});
+    const createLocalDevelopmentUserCredential = vi.fn(
+      (input: {
+        resolveIdentity(): Promise<LocalDevelopmentUserIdentityResolution>;
+        resolveServer(): Promise<typeof localAuth | undefined>;
+      }) => ({
+        token: "local-user-token",
+        refresh: async () => {
+          expect(hostStarted).toBe(true);
+          expect(await input.resolveServer()).toBe(localAuth);
+          expect(await input.resolveIdentity()).toEqual({
+            identity: { id: "vercel-user-123" },
+            status: "authenticated",
+          });
+        },
+        dispose,
+      }),
+    );
+
+    await withInteractiveTerminal(() =>
+      runCli(
+        ["dev"],
+        { error: () => {}, log: () => {} },
+        {
+          createLocalDevelopmentUserCredential,
+          getVercelUserIdentity: async () => ({
+            identity: { id: "vercel-user-123" },
+            status: "authenticated",
+          }),
+          runDevelopmentTui,
+          startHost,
+        },
+      ),
+    );
+
+    const input = runDevelopmentTui.mock.calls[0]?.[0];
+    expect(input).toEqual(
+      expect.objectContaining({
+        localUserCredential: expect.objectContaining({
+          dispose: expect.any(Function),
+          refresh: expect.any(Function),
+          token: "local-user-token",
+        }),
+        target: {
+          kind: "local",
+          serverUrl: "http://localhost:2000",
+          workspaceRoot: process.cwd(),
+        },
+      }),
+    );
+    expect(createLocalDevelopmentUserCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ resolveServer: expect.any(Function) }),
+    );
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the credential refreshable when the Vercel CLI user is unavailable", async () => {
+    const runDevelopmentTui = vi.fn(async () => {});
+    const createLocalDevelopmentUserCredential = vi.fn(
+      (input: { resolveIdentity(): Promise<LocalDevelopmentUserIdentityResolution> }) => ({
+        token: undefined,
+        refresh: async () => {
+          expect(await input.resolveIdentity()).toEqual({ status: "unavailable" });
+        },
+        dispose: async () => {},
+      }),
+    );
+
+    await withInteractiveTerminal(() =>
+      runCli(
+        ["dev"],
+        { error: () => {}, log: () => {} },
+        {
+          createLocalDevelopmentUserCredential,
+          getVercelUserIdentity: async () => ({ status: "unavailable" }),
+          runDevelopmentTui,
+          startHost: async () => ({
+            localAuth,
+            url: "http://localhost:2000",
+            close: async () => {},
+          }),
+        },
+      ),
+    );
+
+    expect(runDevelopmentTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localUserCredential: expect.objectContaining({ token: undefined }),
+      }),
+    );
+  });
+
+  it("registers an attached TUI only when localhost metadata matches this app", async () => {
+    const runDevelopmentTui = vi.fn(async () => {});
+    const resolveLocalDevelopmentServerAuth = vi.fn(async () => localAuth);
+    const createLocalDevelopmentUserCredential = vi.fn(
+      (input: { resolveServer: () => Promise<typeof localAuth | undefined> }) => ({
+        token: "attached-user-token",
+        refresh: async () => {
+          await input.resolveServer();
+        },
+        dispose: async () => {},
+      }),
+    );
+
+    await withInteractiveTerminal(() =>
+      runCli(
+        ["dev", "--url", "http://127.0.0.1:4321"],
+        { error: () => {}, log: () => {} },
+        {
+          createLocalDevelopmentUserCredential,
+          resolveLocalDevelopmentServerAuth,
+          runDevelopmentTui,
+        },
+      ),
+    );
+
+    expect(resolveLocalDevelopmentServerAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ serverUrl: "http://127.0.0.1:4321/" }),
+    );
+    expect(runDevelopmentTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localUserCredential: expect.objectContaining({ token: "attached-user-token" }),
+        target: expect.objectContaining({
+          kind: "local",
+          workspaceRoot: expect.any(String),
+        }),
+      }),
+    );
+    expect(createLocalDevelopmentUserCredential).toHaveBeenCalledWith(
+      expect.objectContaining({ resolveServer: expect.any(Function) }),
+    );
+    const credentialInput = createLocalDevelopmentUserCredential.mock.calls[0]?.[0];
+    expect(await credentialInput?.resolveServer()).toBe(localAuth);
+    expect(resolveLocalDevelopmentServerAuth).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not project this app's user into an unrelated localhost server", async () => {
+    const runDevelopmentTui = vi.fn(async () => {});
+    const createLocalDevelopmentUserCredential = vi.fn(() => ({
+      token: undefined,
+      refresh: async () => {},
+      dispose: async () => {},
+    }));
+
+    await withInteractiveTerminal(() =>
+      runCli(
+        ["dev", "--url", "http://127.0.0.1:4321"],
+        { error: () => {}, log: () => {} },
+        {
+          createLocalDevelopmentUserCredential,
+          resolveLocalDevelopmentServerAuth: async () => undefined,
+          runDevelopmentTui,
+        },
+      ),
+    );
+
+    expect(createLocalDevelopmentUserCredential).toHaveBeenCalledOnce();
+    expect(runDevelopmentTui).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localUserCredential: expect.objectContaining({ token: undefined }),
+        target: expect.objectContaining({
+          kind: "local",
+          workspaceRoot: expect.any(String),
+        }),
+      }),
+    );
+  });
+
+  it("recovers local source access when matching server metadata appears after startup", async () => {
+    let resolveCount = 0;
+    const runDevelopmentTui = vi.fn(async (input: RunDevelopmentTuiInput) => {
+      expect(input.target).toMatchObject({
+        kind: "local",
+        workspaceRoot: expect.any(String),
+      });
+      await expect(input.resolveAppRoot?.()).resolves.toEqual(expect.any(String));
+    });
+
+    await withInteractiveTerminal(() =>
+      runCli(
+        ["dev", "--url", "http://127.0.0.1:4321"],
+        { error: () => {}, log: () => {} },
+        {
+          createLocalDevelopmentUserCredential: () => ({
+            token: undefined,
+            refresh: async () => {},
+            dispose: async () => {},
+          }),
+          resolveLocalDevelopmentServerAuth: async () => {
+            resolveCount += 1;
+            return resolveCount === 1 ? undefined : localAuth;
+          },
+          runDevelopmentTui,
+        },
+      ),
+    );
+
+    expect(resolveCount).toBeGreaterThanOrEqual(2);
   });
 });
 

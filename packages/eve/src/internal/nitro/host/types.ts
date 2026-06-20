@@ -3,6 +3,7 @@ import type { ScheduleRegistration } from "#runtime/schedules/register.js";
 import type { ResolvedSchedule } from "#runtime/types.js";
 import type { GeneratedCompiledArtifactsFiles } from "#internal/application/compiled-artifacts.js";
 import type { DevBootProgressReporter } from "#internal/dev-boot-progress.js";
+import type { LocalDevelopmentAuthMetadata } from "#protocol/local-dev-auth.js";
 
 /**
  * Route surface included in one programmatic Nitro host build.
@@ -14,6 +15,7 @@ export type NitroBuildSurface = "all" | "app" | "flow";
  */
 export interface DevelopmentServerHandle {
   close(): Promise<void>;
+  localAuth: LocalDevelopmentAuthMetadata;
   url: string;
 }
 

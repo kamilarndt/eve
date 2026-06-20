@@ -26,6 +26,7 @@ export type NextDriverAction =
       readonly kind: "park";
       readonly sessionState: DurableSessionState;
       readonly serializedContext: Record<string, unknown>;
+      readonly authorizationDeadline?: number;
       readonly authorizationNames?: readonly string[];
     }
   | {

@@ -12,6 +12,9 @@ export type SetupEditableSelectResult =
 /** Animation shown while a setup flow is between questions. */
 export type SetupFlowIndicator = "spinner" | "pulse";
 
+/** Ephemeral setup status, with external user action kept distinct from background work. */
+export type SetupFlowStatus = string | { kind: "external-action"; text: string; emphasis: string };
+
 interface SetupSelectRequestBase {
   message: string;
   options: readonly SetupPanelOption[];
@@ -92,14 +95,14 @@ export interface SetupFlowRenderer {
    * whichever settles first wins.
    */
   readChoice(options: ChannelSetupChoiceOptions): ChannelSetupChoice;
-  setStatus(text: string | undefined): void;
+  setStatus(status: SetupFlowStatus | undefined): void;
   renderLine(text: string, tone: "info" | "success" | "warning" | "error"): void;
   renderOutput(text: string): void;
   /**
    * Arms a key trap for the flow's working state — the status indicator between
    * questions, where no prompt is consuming keys. Ctrl-C or Esc resolves the
    * promise so the command can abandon an in-flight flow (e.g. a parked
-   * `vercel connect create` browser OAuth). Open questions own their keys; the
+   * `vercel connect create`). Open questions own their keys; the
    * trap covers only the gaps. `dispose` releases the trap; the promise then
    * never resolves.
    */

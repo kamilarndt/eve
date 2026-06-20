@@ -86,7 +86,10 @@ function connectPlan(slug: string): ConnectionPlan {
   return {
     slug,
     protocol: "mcp",
-    entry: { slug, auth: { kind: "connect", connector: slug } } as ConnectionPlan["entry"],
+    entry: {
+      slug,
+      auth: { kind: "connect", connector: slug, principalType: "user" },
+    } as ConnectionPlan["entry"],
     provision: { kind: "connect", service: `mcp.${slug}.app` },
   };
 }

@@ -112,7 +112,7 @@ function resolveProtocolHeadless(
 
 /**
  * How the connector for a Connect-backed entry gets provisioned. Interactive
- * runs provision through Connect (browser OAuth); headless runs print the
+ * runs create or reuse it through Connect; headless runs print the
  * `vercel connect create` command instead. An underivable service degrades to
  * a manual instruction either way.
  */
@@ -165,7 +165,7 @@ async function planCustomInteractive(asker: Asker, slug: string): Promise<Connec
       description,
       protocols: ["mcp"],
       mcp: { url: url.trim() },
-      auth: { kind: "connect", connector: slug },
+      auth: { kind: "connect", connector: slug, principalType: "user" },
     };
     return { slug, protocol, entry, provision: deriveProvision(entry, false) };
   }
@@ -194,7 +194,7 @@ async function planCustomInteractive(asker: Asker, slug: string): Promise<Connec
     description,
     protocols: ["openapi"],
     openapi,
-    auth: { kind: "connect", connector: slug },
+    auth: { kind: "connect", connector: slug, principalType: "user" },
   };
   return { slug, protocol, entry, provision: deriveProvision(entry, false) };
 }
@@ -288,6 +288,8 @@ export function selectConnections(
           key: "connection",
           message: "What should your agent connect to?",
           options: pickerOptions,
+          search: true,
+          placeholder: "type to search connections",
         });
       }
 

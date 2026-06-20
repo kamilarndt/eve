@@ -5,12 +5,9 @@ import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 
-/**
- * Environment flag set by `eve dev` so runtime code can distinguish the
- * interactive development server from production processes. Optional
- * engine packages are auto-installed only when this is set.
- */
-export const EVE_DEV_ENV_FLAG = "EVE_DEV";
+import { EVE_DEV_ENV_FLAG } from "#protocol/local-dev-auth.js";
+
+export { EVE_DEV_ENV_FLAG } from "#protocol/local-dev-auth.js";
 
 /**
  * Reports whether this process belongs to an `eve dev` session.

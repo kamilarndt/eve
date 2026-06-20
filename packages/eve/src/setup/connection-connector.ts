@@ -1,252 +1,282 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createPromptCommandOutput, type ChannelSetupLog, withPhase } from "#setup/cli/index.js";
+import { runVercel } from "#setup/primitives/run-vercel.js";
 
-import { createPromptCommandOutput, type ChannelSetupLog } from "#setup/cli/index.js";
-import { captureVercel, runVercel, runVercelCaptureStdout } from "#setup/primitives/run-vercel.js";
-import { updateConnectionConnectorUid } from "#setup/scaffold/update/update-connection-connector.js";
+import {
+  attachConnectionConnector,
+  createConnectionConnector,
+  listConnectionConnectors,
+  readConnectionProjectLink,
+  removeConnectionConnector,
+  verifyConnectionConnector,
+  type ConnectConnectorListItem,
+  type ConnectConnectorRef,
+  type VercelProjectLink,
+} from "./connection-connect.js";
+
+const CONNECT_MUTATION_TIMEOUT_MS = 2 * 60_000;
+
+/** Choice shown only after the canonical provider connector could not attach. */
+export type ConnectConnectorPathChoice = { kind: "find" } | { kind: "create" };
+
+/** Interaction boundary for the connector-resolution prompts owned by setup UI. */
+export interface ConnectionConnectorPrompts {
+  choosePath(input: {
+    slug: string;
+    service: string;
+    canonicalConnectorUid: string;
+    notice?: string;
+  }): Promise<ConnectConnectorPathChoice>;
+  chooseExisting(input: {
+    slug: string;
+    service: string;
+    connectors: readonly ConnectConnectorListItem[];
+  }): Promise<ConnectConnectorRef | undefined>;
+  promptName(input: {
+    slug: string;
+    service: string;
+    suggestedName: string;
+    unavailableNames: readonly string[];
+  }): Promise<string>;
+}
 
 /** Controls connector provisioning while adding a Connect-backed connection. */
 export interface SetupConnectionConnectorOptions {
-  /** Status and command output stream through this log (rail styling preserved). */
   log: ChannelSetupLog;
   projectRoot: string;
-  /** Connection slug; also the connector `--name`. */
   slug: string;
-  /** `vercel connect create <service>` identifier (e.g. `mcp.linear.app`). */
+  /** Bare Vercel Connect service identifier used for list/create requests. */
   service: string;
-  /** Generated `agent/connections/<slug>.ts` whose `connect("…")` is patched. */
-  connectionFilePath: string;
-  /**
-   * Links a Vercel project before Connect provisioning when the caller owns a
-   * richer linking flow (e.g. shared team selection). Returns the linked
-   * project id, or `undefined` when linking did not complete. When omitted,
-   * falls back to a bare `vercel link`.
-   */
+  /** Concrete Vercel Connect UID to attach before offering a fallback. */
+  canonicalConnectorUid: string;
+  principalType: "user";
+  prompts: ConnectionConnectorPrompts;
+  signal?: AbortSignal;
   linkProject?: () => Promise<string | undefined>;
 }
 
-/** Outcome of the Connect create-and-patch sequence for a connection. */
+/** A connector attached by this run, with ownership explicit for rollback. */
 export type SetupConnectionConnectorResult =
-  | { kind: "create-failed"; created: false }
-  | { kind: "connector-unresolved"; created: true }
-  | { kind: "patch-failed"; created: true; connectorUid: string }
-  | { kind: "patched"; created: true; connectorUid: string };
+  | { kind: "attached-existing"; connectorUid: string }
+  | { kind: "attached-created"; connectorUid: string; connectorId: string };
 
-interface VercelConnectListClient {
-  uid?: unknown;
-  id?: unknown;
-  type?: unknown;
-  service?: unknown;
-  createdAt?: unknown;
-  projects?: unknown;
-}
-
-interface VercelConnectListResponse {
-  /** `vercel connect list -F json` (current CLI). */
-  connectors?: unknown;
-  /** Older CLI builds emitted the same array under `clients`. */
-  clients?: unknown;
-}
-
-/** Identifiers returned by Vercel Connect for an OAuth connector. */
-export interface ConnectConnectorRef {
-  uid: string;
-  id: string;
-}
-
-/**
- * Reads the connector identifiers from `vercel connect create … -F json`
- * stdout. This is the authoritative source for the just-created connector's
- * UID — it avoids a follow-up `connect list`, which can momentarily 404/rate
- * limit right after creation and cannot disambiguate when a service already
- * has multiple connectors. Returns `undefined` when stdout is empty or not the
- * expected JSON (e.g. an older CLI without `-F json` support on `create`).
- */
-export function parseCreatedConnector(stdout: string): ConnectConnectorRef | undefined {
-  const trimmed = stdout.trim();
-  if (!trimmed) return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return undefined;
-  }
-  if (typeof parsed !== "object" || parsed === null) return undefined;
-  const { uid, id } = parsed as { uid?: unknown; id?: unknown };
-  if (typeof uid !== "string" || typeof id !== "string") return undefined;
-  return { uid, id };
-}
-
-function attachedToProject(raw: VercelConnectListClient, projectId: string | undefined): boolean {
-  if (projectId === undefined) return false;
-  if (!Array.isArray(raw.projects)) return false;
-  return raw.projects.some(
-    (project) =>
-      typeof project === "object" &&
-      project !== null &&
-      (project as { id?: unknown }).id === projectId,
-  );
-}
-
-/**
- * Finds the connector to wire into the generated connection. The list is
- * expected to be scoped to the requested service server-side (via
- * `--service`), since `vercel connect list -F json` does not include a
- * `service` field per connector. Prefers, in order: the connector already
- * attached to this project, then the newest connector. When Connect does
- * report a `service` field, mismatches are still skipped defensively.
- */
-export function pickConnectConnector(
-  listJson: unknown,
-  service: string,
-  projectId: string | undefined,
-): ConnectConnectorRef | undefined {
-  if (typeof listJson !== "object" || listJson === null) return undefined;
-  const response = listJson as VercelConnectListResponse;
-  const connectors = response.connectors ?? response.clients;
-  if (!Array.isArray(connectors)) return undefined;
-
-  let attached: { ref: ConnectConnectorRef; createdAt: number } | undefined;
-  let newest: { ref: ConnectConnectorRef; createdAt: number } | undefined;
-
-  for (const raw of connectors as VercelConnectListClient[]) {
-    if (typeof raw.service === "string" && raw.service !== service) continue;
-    if (typeof raw.uid !== "string" || typeof raw.id !== "string") continue;
-
-    const ref: ConnectConnectorRef = { uid: raw.uid, id: raw.id };
-    const createdAt = typeof raw.createdAt === "number" ? raw.createdAt : 0;
-
-    if (!newest || createdAt > newest.createdAt) {
-      newest = { ref, createdAt };
-    }
-    if (attachedToProject(raw, projectId) && (!attached || createdAt > attached.createdAt)) {
-      attached = { ref, createdAt };
+function connectorNames(connectors: readonly ConnectConnectorListItem[]): string[] {
+  const names = new Map<string, string>();
+  for (const connector of connectors) {
+    if (connector.name != null) names.set(connector.name.toLowerCase(), connector.name);
+    const separator = connector.uid.lastIndexOf("/");
+    const uidName = connector.uid.slice(separator + 1).trim();
+    if (uidName.length > 0 && !names.has(uidName.toLowerCase())) {
+      names.set(uidName.toLowerCase(), uidName);
     }
   }
-
-  return (attached ?? newest)?.ref;
+  return [...names.values()];
 }
 
-async function readProjectId(projectRoot: string): Promise<string | undefined> {
-  try {
-    const raw = await readFile(join(projectRoot, ".vercel", "project.json"), "utf8");
-    const parsed = JSON.parse(raw) as { projectId?: unknown };
-    return typeof parsed.projectId === "string" ? parsed.projectId : undefined;
-  } catch {
-    return undefined;
-  }
+function suggestedConnectorName(slug: string, unavailableNames: readonly string[]): string {
+  const normalized = new Set(unavailableNames.map((name) => name.toLowerCase()));
+  if (!normalized.has(slug.toLowerCase())) return slug;
+  let suffix = 2;
+  while (normalized.has(`${slug}-${suffix}`.toLowerCase())) suffix += 1;
+  return `${slug}-${suffix}`;
 }
 
-/**
- * Connect attach requires a linked Vercel project. The connection step can run
- * before one exists — the gateway step used an API key or a local provider, or
- * `eve connections add` ran in a fresh checkout — so link one first. Returns the
- * resolved project id, or `undefined` when linking did not complete.
- */
 async function ensureLinkedProject(
-  log: ChannelSetupLog,
-  projectRoot: string,
+  options: SetupConnectionConnectorOptions,
   onOutput: ReturnType<typeof createPromptCommandOutput>,
-): Promise<string | undefined> {
-  const existing = await readProjectId(projectRoot);
-  if (existing) return existing;
-  log.message("Linking a Vercel project for Connect...");
-  await runVercel(["link"], { cwd: projectRoot, onOutput });
-  return readProjectId(projectRoot);
+): Promise<VercelProjectLink> {
+  const linkedProjectId = options.linkProject
+    ? await options.linkProject()
+    : (await readConnectionProjectLink(options.projectRoot))?.projectId;
+  if (linkedProjectId === undefined && options.linkProject === undefined) {
+    options.log.message("Linking a Vercel project for Connect...");
+    await runVercel(["link"], {
+      cwd: options.projectRoot,
+      onOutput,
+      signal: options.signal,
+      timeoutMs: CONNECT_MUTATION_TIMEOUT_MS,
+    });
+  }
+  const project = await readConnectionProjectLink(options.projectRoot);
+  const expectedProjectId = linkedProjectId ?? project?.projectId;
+  if (
+    project === undefined ||
+    expectedProjectId === undefined ||
+    project.projectId !== expectedProjectId
+  ) {
+    throw new Error(
+      `A linked Vercel project is required before configuring ${options.slug}. Run \`vercel link\` and retry.`,
+    );
+  }
+  return project;
 }
 
-async function findConnector(
-  projectRoot: string,
-  service: string,
-  projectId: string | undefined,
-  onOutput: ReturnType<typeof createPromptCommandOutput>,
-): Promise<ConnectConnectorRef | undefined> {
-  const result = await captureVercel(
-    ["connect", "list", "-F", "json", "--all-projects", "--service", service],
-    {
-      cwd: projectRoot,
-      onOutput,
-    },
-  );
-  if (!result.ok) return undefined;
-  try {
-    return pickConnectConnector(JSON.parse(result.stdout), service, projectId);
-  } catch {
-    return undefined;
+/** Removes a connector owned by this run or throws an exact recovery instruction. */
+export async function cleanupCreatedConnectionConnector(input: {
+  log: ChannelSetupLog;
+  projectRoot: string;
+  connectorId: string;
+}): Promise<void> {
+  const cleanup = await removeConnectionConnector({
+    projectRoot: input.projectRoot,
+    connectorIdOrUid: input.connectorId,
+    onOutput: createPromptCommandOutput(input.log),
+  });
+  if (cleanup.kind === "failed") {
+    throw new Error(
+      `Could not remove connector ${input.connectorId} created by this attempt. Run \`vercel connect remove ${input.connectorId} --disconnect-all --yes\` before retrying. ${cleanup.message}`,
+    );
   }
 }
 
+async function cleanupThenThrow(
+  options: SetupConnectionConnectorOptions,
+  connectorId: string,
+  message: string,
+): Promise<never> {
+  try {
+    await cleanupCreatedConnectionConnector({
+      log: options.log,
+      projectRoot: options.projectRoot,
+      connectorId,
+    });
+  } catch (cleanupError) {
+    const cleanupMessage =
+      cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+    throw new Error(`${message} ${cleanupMessage}`);
+  }
+  options.signal?.throwIfAborted();
+  throw new Error(message);
+}
+
+function logAttached(log: ChannelSetupLog, connectorUid: string): void {
+  log.success(`Attached ${connectorUid} connector`);
+  log.info("Authorization is per user and starts on first use.");
+}
+
 /**
- * Creates a Vercel Connect OAuth connector for a connection and rewrites the
- * generated `connect("…")` call to the connector UID Connect assigns. The
- * `vercel connect create` step is interactive (it opens a browser to complete
- * the OAuth grant); callers should only invoke this from an interactive flow.
+ * Attaches the provider's canonical connector first. Only an explicit fallback
+ * choice can select another existing connector or create a new one.
  */
 export async function setupConnectionConnector(
   options: SetupConnectionConnectorOptions,
 ): Promise<SetupConnectionConnectorResult> {
-  const { log, projectRoot, slug, service, connectionFilePath } = options;
+  const { canonicalConnectorUid, log, principalType, projectRoot, prompts, service, signal, slug } =
+    options;
   const onOutput = createPromptCommandOutput(log);
+  const project = await ensureLinkedProject(options, onOutput);
 
-  const projectId = options.linkProject
-    ? await options.linkProject()
-    : await ensureLinkedProject(log, projectRoot, onOutput);
-
-  log.message(`Connecting ${slug} via Vercel Connect...`);
-  const create = await runVercelCaptureStdout(
-    ["connect", "create", service, "--name", slug, "-F", "json"],
-    { cwd: projectRoot, onOutput },
-  );
-  if (!create.ok) {
-    log.warning(
-      `Could not create the connector. Run \`vercel connect create ${service} --name ${slug}\`, then set the UID in agent/connections/${slug}.ts.`,
-    );
-    return { kind: "create-failed", created: false };
+  const canonical = await attachConnectionConnector({
+    projectRoot,
+    connectorUid: canonicalConnectorUid,
+    signal,
+  });
+  if (canonical.kind === "attached") {
+    logAttached(log, canonicalConnectorUid);
+    return { kind: "attached-existing", connectorUid: canonicalConnectorUid };
   }
+  signal?.throwIfAborted();
 
-  // Authoritative path: the just-created connector's UID is on `create` stdout.
-  // Fall back to a service-scoped `connect list` only when the CLI emits no
-  // parseable JSON (e.g. an older build without `-F json` on `create`).
-  let ref = parseCreatedConnector(create.stdout);
-  if (!ref) {
-    // The `Connecting ...` status stays active so this fallback lookup reads
-    // as part of the same step rather than a separate line.
-    ref = await findConnector(projectRoot, service, projectId, onOutput);
-  }
-  if (!ref) {
-    log.warning(
-      `Could not locate the connector. Run \`vercel connect list --all-projects\` to find its UID, then set it in agent/connections/${slug}.ts.`,
-    );
-    return { kind: "connector-unresolved", created: true };
-  }
-
-  // Attach the connector to the linked project so the agent can call it from
-  // its builds and runtime. `vercel connect create` only creates the connector;
-  // without this attach it shows "No projects connected yet" in the dashboard.
-  if (!projectId) {
-    log.warning(
-      `Created connector ${ref.uid} but no Vercel project is linked, so it isn't attached. Run \`vercel link\`, then \`vercel connect attach ${ref.uid} --yes\`.`,
-    );
-  } else {
-    const attached = await runVercel(["connect", "attach", ref.uid, "--yes"], {
-      cwd: projectRoot,
-      onOutput,
+  let notice = `Could not attach ${canonicalConnectorUid}: ${canonical.message}`;
+  while (true) {
+    const choice = await prompts.choosePath({
+      slug,
+      service,
+      canonicalConnectorUid,
+      notice,
     });
-    if (!attached) {
-      log.warning(
-        `Created connector ${ref.uid} but could not attach it to this project. Run \`vercel connect attach ${ref.uid} --yes\`.`,
+    signal?.throwIfAborted();
+    const connectors = await listConnectionConnectors({ projectRoot, service, signal });
+
+    if (choice.kind === "find") {
+      if (connectors.length === 0) {
+        notice = `No ${service} connectors were found.`;
+        continue;
+      }
+      const userAuthorizable: ConnectConnectorListItem[] = [];
+      for (const connector of connectors) {
+        const verification = await verifyConnectionConnector({
+          projectRoot,
+          orgId: project.orgId,
+          service,
+          principalType,
+          connector,
+          signal,
+        });
+        if (verification.kind === "supported-subject") userAuthorizable.push(connector);
+      }
+      if (userAuthorizable.length === 0) {
+        notice = `No existing ${service} connectors support user authorization.`;
+        continue;
+      }
+      const selected = await prompts.chooseExisting({
+        slug,
+        service,
+        connectors: userAuthorizable,
+      });
+      if (selected === undefined) continue;
+      const attached = await attachConnectionConnector({
+        projectRoot,
+        connectorUid: selected.uid,
+        signal,
+      });
+      if (attached.kind === "failed") {
+        signal?.throwIfAborted();
+        throw new Error(
+          `Could not attach ${selected.uid} to the linked Vercel project. ${attached.message}`,
+        );
+      }
+      logAttached(log, selected.uid);
+      return { kind: "attached-existing", connectorUid: selected.uid };
+    }
+
+    const unavailableNames = connectorNames(connectors);
+    const name = (
+      await prompts.promptName({
+        slug,
+        service,
+        unavailableNames,
+        suggestedName: suggestedConnectorName(slug, unavailableNames),
+      })
+    ).trim();
+    if (name.length === 0) throw new Error("Connector name cannot be empty.");
+    const created = await withPhase(
+      log,
+      "Waiting for you to complete setup in the browser…",
+      () =>
+        createConnectionConnector({
+          projectRoot,
+          service,
+          name,
+          principalType,
+          signal,
+          onOutput,
+        }),
+      { kind: "external-action", emphasis: "browser" },
+    );
+    if (created.kind === "failed") {
+      signal?.throwIfAborted();
+      throw new Error(created.message);
+    }
+    if (created.kind === "failed-owned") {
+      return cleanupThenThrow(options, created.connectorId, created.message);
+    }
+    const attached = await attachConnectionConnector({
+      projectRoot,
+      connectorUid: created.connector.uid,
+      signal,
+    });
+    if (attached.kind === "failed") {
+      return cleanupThenThrow(
+        options,
+        created.connector.id,
+        `Could not attach ${created.connector.uid} to the linked Vercel project. ${attached.message}`,
       );
     }
+    logAttached(log, created.connector.uid);
+    return {
+      kind: "attached-created",
+      connectorUid: created.connector.uid,
+      connectorId: created.connector.id,
+    };
   }
-
-  const { patched } = await updateConnectionConnectorUid(connectionFilePath, ref.uid);
-  if (!patched) {
-    log.warning(
-      `Created connector ${ref.uid}. Update \`connect("…")\` in agent/connections/${slug}.ts to "${ref.uid}".`,
-    );
-    return { kind: "patch-failed", created: true, connectorUid: ref.uid };
-  }
-
-  log.success(`Linked ${slug} to ${ref.uid}`);
-  return { kind: "patched", created: true, connectorUid: ref.uid };
 }

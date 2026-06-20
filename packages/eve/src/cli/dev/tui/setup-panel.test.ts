@@ -73,7 +73,11 @@ describe("renderFlowPanel", () => {
         lines: [],
         content: {
           kind: "status",
-          status: { text: "Loading teams…", indicator: { glyph: "⠼", color: "yellow" } },
+          status: {
+            kind: "progress",
+            text: "Loading teams…",
+            indicator: { glyph: "⠼", color: "yellow" },
+          },
         },
       },
       theme,
@@ -91,6 +95,7 @@ describe("renderFlowPanel", () => {
         content: {
           kind: "status",
           status: {
+            kind: "progress",
             text: "Checking the project…",
             indicator: { glyph: "▪", color: "green" },
           },
@@ -104,6 +109,30 @@ describe("renderFlowPanel", () => {
     expect(stripAnsi(text)).toContain("▪ Checking the project…");
   });
 
+  it("uses one attention color for an external-action pulse and its emphasis", () => {
+    const text = renderFlowPanel(
+      {
+        title: "/connect",
+        lines: [],
+        content: {
+          kind: "status",
+          status: {
+            kind: "external-action",
+            text: "Waiting for you to complete setup in the browser…",
+            emphasis: "browser",
+            indicator: { glyph: "▪", color: "yellow" },
+          },
+        },
+      },
+      colorTheme,
+      60,
+    ).join("\n");
+
+    expect(text).toContain(colorTheme.colors.yellow("▪"));
+    expect(text).toContain(colorTheme.colors.yellow("browser"));
+    expect(stripAnsi(text)).toContain("▪ Waiting for you to complete setup in the browser…");
+  });
+
   it("rides the status pulse above an open question for the install wait", () => {
     const text = renderFlowPanel(
       {
@@ -112,6 +141,7 @@ describe("renderFlowPanel", () => {
         content: {
           kind: "question",
           status: {
+            kind: "progress",
             text: "Creating a Slackbot through Vercel Connect…",
             indicator: { glyph: "▪", color: "green" },
           },

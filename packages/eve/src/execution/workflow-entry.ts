@@ -12,6 +12,7 @@ import type {
   RunInput,
   SessionCapabilities,
 } from "#channel/types.js";
+import { waitForAuthorizationDelivery } from "#execution/authorization-wait.js";
 import { coalesceDeliveries } from "#harness/messages.js";
 import { readChannelRequestId, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import { accumulateRuntimeActionResults } from "#harness/runtime-actions.js";
@@ -44,15 +45,9 @@ import {
 import { fireSessionCallbackStep } from "#execution/session-callback-step.js";
 import { claimHookOwnership, closeHookIterator, disposeHook } from "#execution/hook-ownership.js";
 
-// workflow-entry.ts is the durable workflow body — the bundler rejects
-// node built-ins here, so `internal/logging.ts` cannot be imported.
-// Error logging happens inside `emitTerminalSessionFailureStep`.
+// The durable workflow bundle rejects Node built-ins, so errors are logged inside steps.
 
-/**
- * Serializable workflow-entry input. All runtime state travels via
- * `serializedContext`, which is produced by `serializeContext(ctx)`
- * and deserialized at each `"use step"` boundary.
- */
+/** Serializable workflow input; runtime state crosses steps through `serializedContext`. */
 export interface WorkflowEntryInput {
   readonly input: RunInput["input"];
   readonly serializedContext: Record<string, unknown>;
@@ -169,6 +164,14 @@ async function runDriverLoop(input: {
     token: `${input.sessionState.sessionId}:auth`,
   });
   const authIterator: AsyncIterator<HookPayload> = authHook[Symbol.asyncIterator]();
+  let pendingAuthorizationNext: Promise<IteratorResult<HookPayload>> | null = null;
+  const getAuthorizationNext = (): Promise<IteratorResult<HookPayload>> => {
+    pendingAuthorizationNext ??= authIterator.next();
+    return pendingAuthorizationNext;
+  };
+  const consumeAuthorizationNext = (): void => {
+    pendingAuthorizationNext = null;
+  };
   // Fast descendant resumes can start the next turn before the prior
   // completion hook disposal is persisted by the Workflow SDK, so each
   // turn needs its own session-scoped token.
@@ -343,24 +346,18 @@ async function runDriverLoop(input: {
 
         case "park": {
           if (action.authorizationNames && action.authorizationNames.length > 0) {
-            const expected = action.authorizationNames.length;
-            const allPayloads: DeliverPayload[] = [];
-
-            while (allPayloads.length < expected) {
-              const next = await authIterator.next();
-              if (next.done) break;
-              if (next.value.kind === "deliver") {
-                allPayloads.push(...next.value.payloads);
-              }
-            }
+            const authorizationDelivery = await waitForAuthorizationDelivery({
+              consumeNext: consumeAuthorizationNext,
+              deadline: action.authorizationDeadline,
+              getNext: getAuthorizationNext,
+              names: action.authorizationNames,
+            });
+            if (authorizationDelivery === null) return { output: "" };
 
             action = await dispatchAndAwaitTurn({
               capabilities: input.capabilities,
               completionToken: nextTurnCompletionToken(),
-              delivery: {
-                kind: "deliver",
-                payloads: allPayloads,
-              },
+              delivery: authorizationDelivery,
               mode: input.mode,
               parentWritable: input.driverWritable,
               serializedContext: action.serializedContext,

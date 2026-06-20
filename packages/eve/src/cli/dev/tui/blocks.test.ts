@@ -38,6 +38,27 @@ describe("renderBlockLines", () => {
     expect(lines[0]).toBe("⠋ search");
   });
 
+  it("parks a tool on the dim dot while authorization is open", () => {
+    const lines = render({ kind: "tool", title: "connection__search", status: "waiting" });
+    expect(lines[0]).toBe("· connection__search");
+  });
+
+  it("bolds only the connection name in the authorization headline", () => {
+    const colored = createTheme({ color: true, unicode: true });
+    const lines = renderBlockLines(
+      {
+        kind: "connection-auth",
+        title: "authorization required for",
+        subtitle: "linear",
+      },
+      60,
+      colored,
+      ctx,
+    );
+
+    expect(lines[0]).toBe("\x1b[33m●\x1b[39m authorization required for \x1b[1mlinear\x1b[22m");
+  });
+
   it("nests subagent tools under the orange rule", () => {
     const lines = render({
       kind: "subagent-tool",

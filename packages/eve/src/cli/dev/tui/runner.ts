@@ -238,18 +238,10 @@ export type AgentTUIRenderer = {
   /**
    * Out-of-band update for one MCP connection authorization lifecycle.
    * Called by the runner as `authorization.*` events arrive.
-   * The renderer renders this as a persistent body section per
-   * connection that transitions through `required` → `pending` →
-   * one of the terminal `ConnectionAuthorizationOutcome` states.
+   * The renderer owns both the persistent lifecycle headline and the
+   * interactive authorization panel.
    */
   upsertConnectionAuth?(update: ConnectionAuthUpdate): void;
-  /**
-   * Sets the number of connections currently awaiting an OAuth
-   * callback. The renderer overrides its bottom status bar with a
-   * "waiting for connection authorization" hint while this is > 0,
-   * so the user understands the agent is parked, not hung.
-   */
-  setConnectionAuthPendingCount?(count: number): void;
   /**
    * The log display mode currently in effect. Paired with
    * {@link setLogDisplayMode}; both are absent on renderers that do not
@@ -361,6 +353,8 @@ export type EveTUIRunnerOptions = TuiDisplayOptions & {
     readonly resolveOidcToken: NonNullable<RemoteConnectionControllerOptions["resolveOidcToken"]>;
     readonly resolveDeployment: NonNullable<RemoteConnectionControllerOptions["resolveDeployment"]>;
   };
+  /** Refreshes request identity immediately before each turn is dispatched. */
+  prepareTurn?: () => Promise<void>;
   /** Boot-time installation-state checks; defaults to the built-ins. */
   bootDetections?: readonly BootDetection[];
   /** Test seam for the status line's Vercel link probe; defaults to the real one. */
@@ -369,6 +363,8 @@ export type EveTUIRunnerOptions = TuiDisplayOptions & {
   getVercelAuthStatus?: typeof getVercelAuthStatus;
   /** Reports phases from this runner's initial local-dev connection. */
   onBootProgress?: DevBootProgressReporter;
+  /** Test seam for posting a user-declined result to an authorization callback. */
+  cancelConnectionAuthorization?: (webhookUrl: string) => Promise<void>;
 };
 
 /** The attention-line issue for a Vercel auth state, or undefined when nothing's wrong. */
@@ -398,8 +394,10 @@ export class EveTUIRunner {
   readonly #promptCommandHandler?: PromptCommandHandler;
   readonly #availablePromptCommands: readonly PromptCommandSpec[];
   readonly #remoteConnection?: RemoteConnectionController;
+  readonly #prepareTurn?: () => Promise<void>;
   readonly #bootDetections: readonly BootDetection[];
   readonly #getVercelAuthStatus: typeof getVercelAuthStatus;
+  readonly #cancelConnectionAuthorization: (webhookUrl: string) => Promise<void>;
   #onBootProgress?: DevBootProgressReporter;
   /** Set when the run loop unwinds, so a late boot login probe cannot paint into a torn-down terminal. */
   #disposed = false;
@@ -459,12 +457,6 @@ export class EveTUIRunner {
    */
   readonly #connectionAuthRuns = new Map<string, ConnectionAuthRun>();
   /**
-   * Set of connection names currently in the `pending` state — i.e.
-   * the workflow is suspended waiting on the framework-owned OAuth
-   * callback. Used to drive the renderer's bottom-bar hint.
-   */
-  readonly #pendingConnectionAuths = new Set<string>();
-  /**
    * Set when the active server session reaches a terminal failure — either a
    * `session.failed` stream event or a transport error dispatching the turn.
    * The run loop starts a fresh session before the next prompt so the user can
@@ -514,8 +506,11 @@ export class EveTUIRunner {
         resolveDeployment: options.remote.resolveDeployment,
       });
     }
+    if (options.prepareTurn !== undefined) this.#prepareTurn = options.prepareTurn;
     this.#bootDetections = options.bootDetections ?? BOOT_DETECTIONS;
     this.#getVercelAuthStatus = options.getVercelAuthStatus ?? getVercelAuthStatus;
+    this.#cancelConnectionAuthorization =
+      options.cancelConnectionAuthorization ?? cancelConnectionAuthorization;
     if (options.onBootProgress !== undefined) this.#onBootProgress = options.onBootProgress;
     if (options.serverUrl !== undefined) this.#serverUrl = options.serverUrl;
     if (options.serverUrl !== undefined && options.remote === undefined) {
@@ -826,7 +821,6 @@ export class EveTUIRunner {
     this.#subagentRuns.clear();
     this.#pendingInputRequests.clear();
     this.#connectionAuthRuns.clear();
-    this.#pendingConnectionAuths.clear();
 
     if (this.#client) {
       this.#session = this.#client.session();
@@ -914,6 +908,7 @@ export class EveTUIRunner {
 
     let response: Awaited<ReturnType<ClientSession["send"]>>;
     try {
+      await this.#prepareTurn?.();
       const client = this.#client;
       if (client !== undefined && this.#runtimeArtifacts !== undefined) {
         this.#session = await this.#runtimeArtifacts.refresh({
@@ -1195,8 +1190,10 @@ export class EveTUIRunner {
     }
   }
 
-  #handleConnectionAuthRequired(event: AuthorizationRequiredStreamEvent): void {
+  #handleConnectionAuthRequired(event: AuthorizationRequiredStreamEvent, ownerId = "root"): void {
+    const id = `${ownerId}:${event.data.name}`;
     const run: ConnectionAuthRun = {
+      id,
       name: event.data.name,
       description: event.data.description,
       state: "required",
@@ -1207,13 +1204,15 @@ export class EveTUIRunner {
     if (event.data.webhookUrl !== undefined) {
       run.webhookUrl = event.data.webhookUrl;
     }
-    this.#connectionAuthRuns.set(event.data.name, run);
+    this.#connectionAuthRuns.set(id, run);
     this.#emitConnectionAuthUpdate(run);
   }
 
-  #handleConnectionAuthCompleted(event: AuthorizationCompletedStreamEvent): void {
-    const existing = this.#connectionAuthRuns.get(event.data.name);
+  #handleConnectionAuthCompleted(event: AuthorizationCompletedStreamEvent, ownerId = "root"): void {
+    const id = `${ownerId}:${event.data.name}`;
+    const existing = this.#connectionAuthRuns.get(id);
     const run: ConnectionAuthRun = existing ?? {
+      id,
       name: event.data.name,
       description: "",
       state: event.data.outcome,
@@ -1222,20 +1221,23 @@ export class EveTUIRunner {
     if (event.data.reason !== undefined) {
       run.reason = event.data.reason;
     }
-    this.#connectionAuthRuns.set(event.data.name, run);
-    this.#pendingConnectionAuths.delete(event.data.name);
+    this.#connectionAuthRuns.set(id, run);
     this.#emitConnectionAuthUpdate(run);
-    this.#renderer.setConnectionAuthPendingCount?.(this.#pendingConnectionAuths.size);
   }
 
   #emitConnectionAuthUpdate(run: ConnectionAuthRun): void {
     const update: ConnectionAuthUpdate = {
+      id: run.id,
       name: run.name,
       description: run.description,
       state: run.state,
     };
     if (run.challenge !== undefined) update.challenge = run.challenge;
     if (run.reason !== undefined) update.reason = run.reason;
+    const webhookUrl = run.webhookUrl;
+    if (webhookUrl !== undefined) {
+      update.cancel = () => this.#cancelConnectionAuthorization(webhookUrl);
+    }
     this.#renderer.upsertConnectionAuth?.(update);
   }
 
@@ -1269,7 +1271,7 @@ export class EveTUIRunner {
         const stream = childSession.stream({ signal: controller.signal });
         for await (const event of stream) {
           if (controller.signal.aborted) break;
-          this.#applyChildEvent(callId, event);
+          this.#applyChildEvent(callId, called.data.childSessionId, event);
           if (isCurrentTurnBoundaryEvent(event)) {
             // Child completed its turn — close the parallel stream
             // gracefully. The parent's `subagent.completed` is a separate
@@ -1375,7 +1377,7 @@ export class EveTUIRunner {
     run.currentSectionKey = null;
   }
 
-  #applyChildEvent(callId: string, event: HandleMessageStreamEvent) {
+  #applyChildEvent(callId: string, childSessionId: string, event: HandleMessageStreamEvent) {
     const run = this.#subagentRuns.get(callId);
     if (!run) return;
     const renderer = this.#renderer;
@@ -1494,6 +1496,12 @@ export class EveTUIRunner {
         renderer.upsertSubagentTool?.(update);
         break;
       }
+      case "authorization.required":
+        this.#handleConnectionAuthRequired(event, `subagent:${childSessionId}:${callId}`);
+        break;
+      case "authorization.completed":
+        this.#handleConnectionAuthCompleted(event, `subagent:${childSessionId}:${callId}`);
+        break;
       default:
         // Other events (session.*, turn.*, step.started, etc.) carry no
         // visible text — ignore.
@@ -2273,17 +2281,20 @@ export type ConnectionAuthChallenge = {
   instructions?: string;
 };
 
-export type ConnectionAuthState = "required" | "pending" | ConnectionAuthorizationOutcome;
+export type ConnectionAuthState = "required" | ConnectionAuthorizationOutcome;
 
 export type ConnectionAuthUpdate = {
+  id?: string;
   name: string;
   description: string;
   state: ConnectionAuthState;
   challenge?: ConnectionAuthChallenge;
   reason?: string;
+  cancel?: () => Promise<void>;
 };
 
 type ConnectionAuthRun = {
+  id: string;
   name: string;
   description: string;
   state: ConnectionAuthState;
@@ -2291,6 +2302,21 @@ type ConnectionAuthRun = {
   webhookUrl?: string;
   reason?: string;
 };
+
+async function cancelConnectionAuthorization(webhookUrl: string): Promise<void> {
+  const response = await fetch(webhookUrl, {
+    body: new URLSearchParams({
+      error: "access_denied",
+      error_description: "Authorization cancelled by user.",
+    }),
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    method: "POST",
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Authorization cancellation failed with HTTP ${String(response.status)}.`);
+  }
+}
 
 function openCurrentSubagentSection(run: SubagentRun): {
   key: number;

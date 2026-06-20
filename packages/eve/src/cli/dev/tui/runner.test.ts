@@ -19,6 +19,7 @@ import {
   type AgentTUIRenderer,
   type AgentTUISessionOptions,
   type AgentTUIStreamEvent,
+  type ConnectionAuthUpdate,
   type PromptCommandOutcome,
 } from "./runner.js";
 import { createPromptCommandHandler } from "./prompt-command-handler.js";
@@ -468,6 +469,203 @@ function sessionYieldingTurns(turns: ReadonlyArray<readonly unknown[]>): ClientS
   });
   return session;
 }
+
+describe("EveTUIRunner turn preparation", () => {
+  it("refreshes local identity before every turn dispatch", async () => {
+    const prompts: Array<string | undefined> = ["first", "second", undefined];
+    const session = sessionYieldingTurns([
+      [{ type: "session.waiting" }],
+      [{ type: "session.waiting" }],
+    ]);
+    const prepareTurn = vi.fn(async () => {});
+    const renderer = fakeRenderer({
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<unknown>) void event;
+      }),
+    });
+
+    await new EveTUIRunner({
+      session,
+      renderer,
+      name: "Weather Agent",
+      prepareTurn,
+    }).run();
+
+    expect(prepareTurn).toHaveBeenCalledTimes(2);
+    expect(prepareTurn.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(session.send).mock.invocationCallOrder[0]!,
+    );
+    expect(prepareTurn.mock.invocationCallOrder[1]).toBeLessThan(
+      vi.mocked(session.send).mock.invocationCallOrder[1]!,
+    );
+  });
+});
+
+describe("EveTUIRunner connection authorization status", () => {
+  it("forwards an authorization challenge to the renderer", async () => {
+    const updates: ConnectionAuthUpdate[] = [];
+    const prompts: Array<string | undefined> = ["search notion", undefined];
+    const session = sessionYielding([
+      {
+        type: "authorization.required",
+        data: {
+          authorization: { url: "https://connect.vercel.com/authorize/example" },
+          description: "Authorization required for notion",
+          name: "notion",
+          webhookUrl: "https://eve.example.com/notion/callback",
+        },
+      },
+      { type: "session.waiting" },
+    ]);
+    const renderer = fakeRenderer({
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<unknown>) void event;
+      }),
+      upsertConnectionAuth: (update) => updates.push(update),
+    });
+
+    const cancelConnectionAuthorization = vi.fn(async () => {});
+    await new EveTUIRunner({
+      cancelConnectionAuthorization,
+      session,
+      renderer,
+      name: "Weather Agent",
+    }).run();
+
+    expect(updates).toContainEqual({
+      challenge: { url: "https://connect.vercel.com/authorize/example" },
+      cancel: expect.any(Function),
+      description: "Authorization required for notion",
+      id: "root:notion",
+      name: "notion",
+      state: "required",
+    });
+    await updates[0]?.cancel?.();
+    expect(cancelConnectionAuthorization).toHaveBeenCalledWith(
+      "https://eve.example.com/notion/callback",
+    );
+  });
+
+  it("posts cancellation through the authorization callback URL", async () => {
+    const updates: ConnectionAuthUpdate[] = [];
+    const prompts: Array<string | undefined> = ["search notion", undefined];
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, _init?: RequestInit) => new Response("ok"),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const session = sessionYielding([
+      {
+        type: "authorization.required",
+        data: {
+          authorization: { url: "https://connect.vercel.com/authorize/example" },
+          description: "Authorization required for notion",
+          name: "notion",
+          webhookUrl: "https://eve.example.com/notion/callback",
+        },
+      },
+      { type: "session.waiting" },
+    ]);
+    const renderer = fakeRenderer({
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<unknown>) void event;
+      }),
+      upsertConnectionAuth: (update) => updates.push(update),
+    });
+
+    await new EveTUIRunner({ session, renderer, name: "Weather Agent" }).run();
+    await updates[0]?.cancel?.();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("https://eve.example.com/notion/callback");
+    expect(init).toMatchObject({
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      method: "POST",
+    });
+    expect(init?.body).toBeInstanceOf(URLSearchParams);
+    expect(String(init?.body)).toBe(
+      "error=access_denied&error_description=Authorization+cancelled+by+user.",
+    );
+  });
+
+  it("keeps root and child authorization lifecycles separate for the same connection", async () => {
+    const updates: ConnectionAuthUpdate[] = [];
+    const prompts: Array<string | undefined> = ["delegate", undefined];
+    const parentSession = sessionYielding([
+      {
+        type: "authorization.required",
+        data: {
+          authorization: { url: "https://root.example.com/authorize" },
+          description: "Root authorization",
+          name: "linear",
+        },
+      },
+      {
+        type: "subagent.called",
+        data: {
+          callId: "call-1",
+          childSessionId: "child-session",
+          name: "researcher",
+          sequence: 0,
+          sessionId: "parent-session",
+          toolName: "delegate",
+          turnId: "turn-1",
+          workflowId: "workflow-1",
+        },
+      },
+      { type: "session.waiting", data: { wait: "next-user-message" } },
+    ]);
+    const childSession = stubSession();
+    vi.spyOn(childSession, "stream").mockReturnValue(
+      (async function* () {
+        yield {
+          type: "authorization.required",
+          data: {
+            authorization: { url: "https://child.example.com/authorize" },
+            description: "Child authorization",
+            name: "linear",
+          },
+        } as HandleMessageStreamEvent;
+        yield {
+          type: "authorization.completed",
+          data: { name: "linear", outcome: "authorized" },
+        } as HandleMessageStreamEvent;
+        yield { type: "session.waiting", data: { wait: "next-user-message" } };
+      })(),
+    );
+    const client = stubClient();
+    vi.spyOn(client, "session").mockReturnValue(childSession);
+    const renderer = fakeRenderer({
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<unknown>) void event;
+      }),
+      upsertConnectionAuth: (update) => updates.push(update),
+    });
+
+    await new EveTUIRunner({ client, session: parentSession, renderer }).run();
+    await settleAsyncWork();
+
+    expect(updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "root:linear", name: "linear", state: "required" }),
+        expect.objectContaining({
+          id: "subagent:child-session:call-1:linear",
+          name: "linear",
+          state: "required",
+        }),
+        expect.objectContaining({
+          id: "subagent:child-session:call-1:linear",
+          name: "linear",
+          state: "authorized",
+        }),
+      ]),
+    );
+  });
+});
 
 describe("EveTUIRunner terminal-failure recovery", () => {
   it("starts a fresh session and posts a notice after session.failed", async () => {

@@ -1,6 +1,7 @@
 import { exportJWK, exportSPKI, generateKeyPair, SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER } from "#protocol/local-dev-auth.js";
 import { EVE_CREATE_SESSION_ROUTE_PATH } from "#protocol/routes.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import {
@@ -24,6 +25,16 @@ import {
   verifyJwtHmac,
   verifyVercelOidc,
 } from "#public/channels/auth.js";
+
+const localDevelopmentAuthMocks = vi.hoisted(() => ({
+  resolveUserGrant: vi.fn(),
+}));
+
+vi.mock("#internal/local-development-auth.js", () => ({
+  LocalDevelopmentAuthServer: {
+    readerFromEnvironment: () => ({ read: localDevelopmentAuthMocks.resolveUserGrant }),
+  },
+}));
 
 const TEST_ROUTE_URL = `https://example.com${EVE_CREATE_SESSION_ROUTE_PATH}`;
 
@@ -312,19 +323,23 @@ describe("none", () => {
 });
 
 describe("localDev", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
   // `localDev()` checks the request URL's hostname, not `process.env`.
   // The env-based check it used to perform was unsafe on non-Vercel
   // deployments (any host where `VERCEL` happens to be unset) and these
   // tests pin the correct behaviour: only requests addressed to a
   // loopback hostname authenticate, regardless of which platform the
   // process happens to be running on.
-  function requestFor(url: string): Request {
-    return new Request(url, { method: "POST" });
+  function requestFor(url: string, headers?: Readonly<Record<string, string>>): Request {
+    return new Request(url, { headers, method: "POST" });
   }
 
-  it("authenticates requests addressed to `localhost`", () => {
-    const result = localDev()(requestFor("http://localhost:3000/eve/v1/info"));
-    expect(result).toEqual({
+  it("authenticates requests addressed to `localhost`", async () => {
+    await expect(localDev()(requestFor("http://localhost:3000/eve/v1/info"))).resolves.toEqual({
       attributes: {},
       authenticator: "local-dev",
       principalId: "local-dev",
@@ -332,32 +347,165 @@ describe("localDev", () => {
     });
   });
 
-  it("authenticates requests addressed to `127.0.0.1`", () => {
-    expect(localDev()(requestFor("http://127.0.0.1:3000/eve/v1/info"))).toMatchObject({
-      principalType: "local-dev",
+  it("projects the authenticated Vercel CLI user on loopback", async () => {
+    localDevelopmentAuthMocks.resolveUserGrant.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        authenticator: "vercel-cli",
+        id: "vercel-user-123",
+        type: "user",
+      },
+    });
+    const request = requestFor("http://localhost:3000/eve/v1/info", {
+      [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "local-secret",
+    });
+
+    await expect(localDev()(request)).resolves.toEqual({
+      attributes: {},
+      authenticator: "vercel-cli",
+      principalId: "vercel-user-123",
+      principalType: "user",
+      subject: "vercel-user-123",
     });
   });
 
-  it("authenticates any address in the `127.0.0.0/8` loopback range", () => {
+  it("never projects the local CLI user onto a public hostname", () => {
+    const request = requestFor("https://example.com/eve/v1/info", {
+      [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "local-secret",
+    });
+
+    expect(localDev()(request)).toBeNull();
+    expect(localDevelopmentAuthMocks.resolveUserGrant).not.toHaveBeenCalled();
+  });
+
+  it("projects an authenticated eve dev user on a non-loopback host", async () => {
+    vi.stubEnv("EVE_DEV", "1");
+    localDevelopmentAuthMocks.resolveUserGrant.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        authenticator: "vercel-cli",
+        id: "vercel-user-123",
+        type: "user",
+      },
+    });
+    const request = requestFor("http://192.168.1.5:3000/eve/v1/info", {
+      [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "local-secret",
+    });
+
+    await expect(localDev()(request)).resolves.toMatchObject({
+      authenticator: "vercel-cli",
+      principalId: "vercel-user-123",
+      principalType: "user",
+    });
+  });
+
+  it("fails closed for an unknown credential on a non-loopback eve dev host", async () => {
+    vi.stubEnv("EVE_DEV", "1");
+    localDevelopmentAuthMocks.resolveUserGrant.mockResolvedValueOnce({
+      ok: true,
+      value: undefined,
+    });
+
+    const result = await routeAuth(
+      requestFor("http://192.168.1.5:3000/eve/v1/info", {
+        [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "forged-secret",
+      }),
+      localDev(),
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    if (!(result instanceof Response)) throw new Error("Expected an auth failure response.");
+    expect(result.status).toBe(401);
+  });
+
+  it("does not trust an unknown loopback capability", async () => {
+    localDevelopmentAuthMocks.resolveUserGrant.mockResolvedValueOnce({
+      ok: true,
+      value: undefined,
+    });
+
+    const result = await routeAuth(
+      requestFor("http://localhost:3000/eve/v1/info", {
+        [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "forged-secret",
+      }),
+      localDev(),
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    if (!(result instanceof Response)) throw new Error("Expected an auth failure response.");
+    expect(result.status).toBe(401);
+    await expect(result.json()).resolves.toMatchObject({
+      code: "local_dev_user_credential_invalid",
+      ok: false,
+    });
+  });
+
+  it("does not treat a present empty credential as an anonymous local request", async () => {
+    const result = await routeAuth(
+      requestFor("http://localhost:3000/eve/v1/info", {
+        [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: " ",
+      }),
+      localDev(),
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    if (!(result instanceof Response)) throw new Error("Expected an auth failure response.");
+    expect(result.status).toBe(401);
+    await expect(result.json()).resolves.toMatchObject({
+      code: "local_dev_user_credential_invalid",
+      ok: false,
+    });
+    expect(localDevelopmentAuthMocks.resolveUserGrant).not.toHaveBeenCalled();
+  });
+
+  it("does not downgrade to local-dev when the local auth registry cannot be read", async () => {
+    localDevelopmentAuthMocks.resolveUserGrant.mockResolvedValueOnce({
+      ok: false,
+      error: { kind: "io", cause: new Error("read failed") },
+    });
+
+    const result = await routeAuth(
+      requestFor("http://localhost:3000/eve/v1/info", {
+        [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "local-secret",
+      }),
+      localDev(),
+    );
+
+    expect(result).toBeInstanceOf(Response);
+    if (!(result instanceof Response)) throw new Error("Expected an auth failure response.");
+    expect(result.status).toBe(503);
+    await expect(result.json()).resolves.toMatchObject({
+      code: "local_dev_user_credential_unavailable",
+      ok: false,
+    });
+  });
+
+  it("authenticates requests addressed to `127.0.0.1`", async () => {
+    await expect(
+      localDev()(requestFor("http://127.0.0.1:3000/eve/v1/info")),
+    ).resolves.toMatchObject({ principalType: "local-dev" });
+  });
+
+  it("authenticates any address in the `127.0.0.0/8` loopback range", async () => {
     // Some dev setups bind to addresses other than `127.0.0.1` (e.g.
     // `127.0.0.2` for multi-instance scenarios). The whole `/8` block
     // is loopback per RFC 1122.
-    expect(localDev()(requestFor("http://127.5.6.7:3000/"))).toMatchObject({
+    await expect(localDev()(requestFor("http://127.5.6.7:3000/"))).resolves.toMatchObject({
       principalType: "local-dev",
     });
   });
 
-  it("authenticates requests addressed to the IPv6 loopback `::1`", () => {
-    expect(localDev()(requestFor("http://[::1]:3000/"))).toMatchObject({
+  it("authenticates requests addressed to the IPv6 loopback `::1`", async () => {
+    await expect(localDev()(requestFor("http://[::1]:3000/"))).resolves.toMatchObject({
       principalType: "local-dev",
     });
   });
 
-  it("authenticates any `*.localhost` subdomain per RFC 6761", () => {
+  it("authenticates any `*.localhost` subdomain per RFC 6761", async () => {
     // RFC 6761 reserves the entire `.localhost` TLD for loopback;
     // dev setups that use subdomains (e.g. `agent.localhost`,
     // `web.localhost`) must still authenticate.
-    expect(localDev()(requestFor("http://agent.localhost:3000/"))).toMatchObject({
+    await expect(localDev()(requestFor("http://agent.localhost:3000/"))).resolves.toMatchObject({
       principalType: "local-dev",
     });
   });
@@ -387,17 +535,59 @@ describe("localDev", () => {
     expect(localDev()(requestFor("http://0.0.0.0:3000/"))).toBeNull();
   });
 
-  it("ignores `process.env.VERCEL` and `VERCEL_ENV` entirely", () => {
-    // The host check is the only signal. Setting any combination of
-    // Vercel env vars must not change the decision for a given URL —
-    // this guards against regressions back to env-sniffing.
+  it("does not let production Vercel env vars open a public hostname", async () => {
     vi.stubEnv("VERCEL", "1");
     vi.stubEnv("VERCEL_ENV", "production");
     try {
-      expect(localDev()(requestFor("http://localhost:3000/"))).toMatchObject({
+      await expect(localDev()(requestFor("http://localhost:3000/"))).resolves.toMatchObject({
         principalType: "local-dev",
       });
       expect(localDev()(requestFor("https://example.com/"))).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("projects the loopback user before applying the `vercel dev` fallback", async () => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL_ENV", "development");
+    localDevelopmentAuthMocks.resolveUserGrant.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        authenticator: "vercel-cli",
+        id: "vercel-user-123",
+        type: "user",
+      },
+    });
+    try {
+      const request = requestFor("http://localhost:3000/eve/v1/session", {
+        [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "local-secret",
+      });
+
+      await expect(localDev()(request)).resolves.toMatchObject({
+        authenticator: "vercel-cli",
+        principalId: "vercel-user-123",
+        principalType: "user",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not project the user header on a non-loopback `vercel dev` request", () => {
+    vi.stubEnv("VERCEL", "1");
+    vi.stubEnv("VERCEL_ENV", "development");
+    try {
+      const request = requestFor("https://example.com/eve/v1/session", {
+        [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: "local-secret",
+      });
+
+      expect(localDev()(request)).toEqual({
+        attributes: {},
+        authenticator: "local-dev",
+        principalId: "local-dev",
+        principalType: "local-dev",
+      });
     } finally {
       vi.unstubAllEnvs();
     }

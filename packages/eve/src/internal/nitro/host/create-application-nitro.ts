@@ -22,6 +22,7 @@ import {
 import { createCompiledSandboxBackendPrunePlugin } from "#internal/nitro/host/compiled-sandbox-backend-prune-plugin.js";
 import { configureNitroRoutes } from "#internal/nitro/host/configure-nitro-routes.js";
 import { applyEveCronHandlerRoute } from "#internal/nitro/host/cron-handler-route.js";
+import { createEvePackageResolutionPlugin } from "#internal/nitro/host/eve-package-resolution-plugin.js";
 import { createNitroBundlerConfig } from "#internal/nitro/host/nitro-bundler-config.js";
 import { captureDevLiveVirtualModules } from "#internal/nitro/host/dev-live-virtual-modules.js";
 import {
@@ -674,6 +675,7 @@ export async function createApplicationNitro(
     ).push(packageName);
   }
   const nitroBundlerPlugins = [
+    createEvePackageResolutionPlugin(),
     compiledSandboxBackendPrunePlugin,
     createOptionalEngineDependencyPlugin(unconfiguredOptionalEnginePackages),
   ].filter((plugin) => plugin !== null);

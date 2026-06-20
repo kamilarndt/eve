@@ -37,6 +37,26 @@ describe("integration catalog", () => {
     expect(getIntegrationEntry("nope")).toBeUndefined();
   });
 
+  it("uses Linear's Streamable HTTP endpoint", () => {
+    expect(getIntegrationEntry("linear")?.connection?.mcp?.url).toBe("https://mcp.linear.app/mcp");
+    expect(getIntegrationEntry("linear")?.connection?.connect).toEqual({
+      service: "mcp.linear.app",
+      canonicalConnectorUid: "mcp.linear.app/linear",
+      authModes: ["user", "app"],
+    });
+  });
+
+  it("keeps JWT-bearer-only connections out of scaffolding", () => {
+    expect(getIntegrationEntry("datadog")?.surfaces).toEqual({
+      scaffoldable: false,
+      gallery: true,
+    });
+    expect(getIntegrationEntry("honeycomb")?.surfaces).toEqual({
+      scaffoldable: false,
+      gallery: true,
+    });
+  });
+
   it("derives protocols from declared transports", () => {
     expect(connectionProtocols(getIntegrationEntry("notion")!.connection!)).toEqual([
       "mcp",

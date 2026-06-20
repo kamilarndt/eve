@@ -150,6 +150,42 @@ describe("handleConnectionCallbackRequest", () => {
     });
   });
 
+  it("forwards a form-encoded TUI cancellation as an access-denied callback", async () => {
+    resumeHookMock.mockResolvedValueOnce(undefined);
+    const url = `https://app.example.com${createEveConnectionCallbackRoutePath("linear", "tok123")}`;
+    const response = await handleConnectionCallbackRequest(
+      new Request(url, {
+        body: new URLSearchParams({
+          error: "access_denied",
+          error_description: "Authorization cancelled by user.",
+        }),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        method: "POST",
+      }),
+      buildRouteContext({ name: "linear", token: "tok123" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(resumeHookMock).toHaveBeenCalledWith("tok123", {
+      kind: "deliver",
+      payloads: [
+        {
+          authorizationCallback: {
+            callback: {
+              body: "error=access_denied&error_description=Authorization+cancelled+by+user.",
+              method: "POST",
+              params: {
+                error: "access_denied",
+                error_description: "Authorization cancelled by user.",
+              },
+            },
+            connectionName: "linear",
+          },
+        },
+      ],
+    });
+  });
+
   it("returns 404 when the workflow runtime reports no hook for the supplied token", async () => {
     // `resumeHook` throws when no workflow run is currently waiting on
     // the supplied token, e.g. the workflow already completed,

@@ -2,13 +2,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelAdapter, ChannelAdapterContext } from "#channel/adapter.js";
 import type { DeliverPayload, SubagentInputRequestHookPayload } from "#channel/types.js";
-import { ContextContainer } from "#context/container.js";
+import { ContextContainer, loadContext } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
 import { AuthKey, ContinuationTokenKey, ModeKey, SessionIdKey } from "#context/keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { serializeContext } from "#context/serialize.js";
 import { setPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
-import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
+import {
+  AuthorizationCompletionReporterKey,
+  createPendingAuthorizationState,
+  getPendingAuthorization,
+  PendingAuthorizationResultKey,
+  setPendingAuthorization,
+} from "#harness/authorization.js";
 import type { HarnessSession, StepResult } from "#harness/types.js";
 import { createEmptyHookRegistry } from "#runtime/hooks/registry.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
@@ -135,6 +141,8 @@ const threadContextAdapter: ChannelAdapter = {
   },
 };
 
+const authorizationCompletionEvents: unknown[] = [];
+
 function createStubSession(overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {
     agent: { modelReference: { id: "test" }, system: "", tools: [] },
@@ -178,6 +186,7 @@ afterEach(() => {
   getRunMock.mockReset();
   startMock.mockReset();
   workflowWritesByNamespace.clear();
+  authorizationCompletionEvents.length = 0;
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
@@ -442,6 +451,98 @@ describe("turnStep", () => {
     });
   });
 
+  it("keeps callback data step-local, clears pending state, and reports completion before continuing", async () => {
+    const eventOrder: string[] = [];
+    const adapter: ChannelAdapter = {
+      ...threadContextAdapter,
+      async "authorization.completed"(data) {
+        authorizationCompletionEvents.push(data);
+        eventOrder.push("completion-event");
+      },
+    };
+    const session = createStubSession({
+      state: setPendingAuthorization(
+        { retained: true },
+        createPendingAuthorizationState(
+          [
+            {
+              challenge: { url: "https://linear.example.com/authorize" },
+              hookUrl: "https://eve.example.com/linear",
+              name: "linear",
+            },
+          ],
+          1_000,
+        ),
+      ),
+    });
+    installSessionStoreMocks([session]);
+
+    const compiledBundle = {
+      adapterRegistry: { adaptersByKind: new Map([[adapter.kind, adapter]]) },
+      compiledArtifactsSource: {} as never,
+      graph: {
+        nodesByNodeId: new Map(),
+        root: { sandboxRegistry: { sandbox: null }, turnAgent: TestTurnAgent },
+      },
+      moduleMap: { nodes: {} },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: {},
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never;
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+    vi.mocked(createExecutionNodeStep).mockImplementation(() => {
+      return async (resumedSession): Promise<StepResult> => {
+        const ctx = loadContext();
+        expect(ctx.get(PendingAuthorizationResultKey)).toEqual([
+          {
+            callback: { method: "GET", params: { code: "oauth-code" } },
+            hookUrl: "https://eve.example.com/linear",
+            name: "linear",
+          },
+        ]);
+        await ctx.require(AuthorizationCompletionReporterKey)({
+          name: "linear",
+          outcome: "authorized",
+        });
+        eventOrder.push("tool-continued");
+        return { next: null, session: resumedSession };
+      };
+    });
+
+    const ctx = new ContextContainer();
+    ctx.set(AuthKey, null);
+    ctx.set(BundleKey, compiledBundle);
+    ctx.set(ChannelKey, adapter);
+    ctx.set(ContinuationTokenKey, "http:thread-context");
+    ctx.set(ModeKey, "conversation");
+    ctx.set(SessionIdKey, "session-1");
+
+    const result = await turnStep({
+      input: {
+        kind: "deliver",
+        payloads: [
+          {
+            authorizationCallback: {
+              callback: { method: "GET", params: { code: "oauth-code" } },
+              connectionName: "linear",
+            },
+          },
+        ],
+      },
+      parentWritable: createTestWritable(),
+      serializedContext: serializeContext(ctx),
+      sessionState: createStubSessionState(),
+    });
+
+    expect(eventOrder).toEqual(["completion-event", "tool-continued"]);
+    expect(authorizationCompletionEvents).toHaveLength(1);
+    expect(result.serializedContext).not.toHaveProperty(PendingAuthorizationResultKey.name);
+    expect(result.serializedContext).not.toHaveProperty(AuthorizationCompletionReporterKey.name);
+    expect(getPendingAuthorization(result.sessionState.snapshot?.session.state)).toBeUndefined();
+  });
+
   it("persists onDeliver context into the next durable step", async () => {
     const seenMessages: string[] = [];
     const session = createStubSession();
@@ -604,7 +705,10 @@ describe("turnStep", () => {
       resume: { nonce: "n1" },
     };
     const session = createStubSession({
-      state: setPendingAuthorization({ retained: "yes" }, { challenges: [challenge] }),
+      state: setPendingAuthorization(
+        { retained: "yes" },
+        createPendingAuthorizationState([challenge]),
+      ),
     });
     installSessionStoreMocks([session]);
     vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue({

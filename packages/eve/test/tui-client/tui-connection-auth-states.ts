@@ -17,11 +17,10 @@ import { theme } from "./lib/theme.ts";
  * deterministic coverage of:
  *
  *   1. `_required` with a populated challenge (URL, user code,
- *      instructions). That proves the renderer surfaces all three
- *      challenge fields, which the live smoke can't show.
+ *      instructions). That proves the renderer opens the interactive
+ *      authorization panel with all three challenge fields.
  *   2. `_completed` with `outcome: "authorized"`. That proves the
- *      right-title transitions, the status bar override clears,
- *      and the section becomes terminal.
+ *      panel closes and the transcript headline becomes terminal.
  *   3. A second turn with `outcome: "failed"` + a reason. That
  *      proves the failure path renders distinctly and the reason
  *      string surfaces in the section content.
@@ -175,42 +174,46 @@ void (async () => {
     input.type("turn 1, drive stub-mcp through required → authorized");
     input.enter();
 
-    await screen.waitForText("● stub-mcp · authorization", 10_000);
-    console.log(theme.muted("[states] stub-mcp section header rendered"));
+    await screen.waitForText("● authorization required for stub-mcp", 10_000);
+    console.log(theme.muted("[states] stub-mcp authorization headline rendered"));
 
     await waitForCondition(
       () => {
         const snap = screen.snapshot();
         return (
-          snap.includes("URL: https://example.com/authorize/stub-mcp") &&
+          snap.includes("https://example.com/authorize/stub-mcp") &&
           snap.includes("Code: STUB-1234") &&
-          snap.includes("Visit the URL above")
+          snap.includes("Visit the URL above") &&
+          snap.includes("◦ Cancel")
         );
       },
       {
         timeoutMs: 5_000,
-        label: "challenge URL + user code + instructions in section body",
+        label: "challenge URL + user code + instructions in authorization panel",
         onTimeout: () => screen.snapshot(),
       },
     );
-    console.log(theme.muted("[states] URL, code, and instructions all rendered"));
+    console.log(theme.muted("[states] authorization panel rendered"));
 
-    await waitForCondition(() => screen.snapshot().includes("authorized"), {
-      timeoutMs: 10_000,
-      label: "authorized right-title",
-      onTimeout: () => screen.snapshot(),
-    });
-    console.log(theme.muted("[states] right-title flipped to authorized"));
+    await waitForCondition(
+      () => screen.snapshot().includes("● authorization complete for stub-mcp"),
+      {
+        timeoutMs: 10_000,
+        label: "authorized transcript headline",
+        onTimeout: () => screen.snapshot(),
+      },
+    );
+    console.log(theme.muted("[states] headline changed to authorization complete"));
 
     await waitForCondition(
       () => !screen.snapshot().includes("Waiting for connection authorization"),
       {
         timeoutMs: 5_000,
-        label: "status-bar override cleared after completed",
+        label: "authorization panel cleared after completed",
         onTimeout: () => screen.snapshot(),
       },
     );
-    console.log(theme.muted("[states] status-bar override cleared after authorized"));
+    console.log(theme.muted("[states] authorization panel cleared after authorized"));
 
     // Wait for the runner to loop back into `readPrompt` before typing
     // the next message. Without this, `MockUserInput.type` emits onto an
@@ -235,12 +238,12 @@ void (async () => {
     input.type("turn 2, drive other-mcp through required → failed");
     input.enter();
 
-    await screen.waitForText("● other-mcp · authorization", 10_000);
-    console.log(theme.muted("[states] other-mcp section header rendered"));
+    await screen.waitForText("● authorization required for other-mcp", 10_000);
+    console.log(theme.muted("[states] other-mcp authorization headline rendered"));
 
-    await waitForCondition(() => screen.snapshot().includes("failed"), {
+    await waitForCondition(() => screen.snapshot().includes("authorization failed for other-mcp"), {
       timeoutMs: 10_000,
-      label: "failed right-title",
+      label: "failed transcript headline",
       onTimeout: () => screen.snapshot(),
     });
 

@@ -36,6 +36,20 @@ const VercelProjectReferenceSchema = z.object({
 });
 
 const EVE_FRAMEWORK_PRESET = "eve";
+
+const VercelUserIdentityResponseSchema = z.object({
+  user: z.object({
+    id: z.string().min(1),
+  }),
+});
+
+export interface VercelUserIdentity {
+  readonly id: string;
+}
+
+export type VercelUserIdentityResolution =
+  | { readonly status: "authenticated"; readonly identity: VercelUserIdentity }
+  | { readonly status: "logged-out" | "cli-missing" | "unavailable" };
 export interface PickProjectOptions extends VercelProjectOperationOptions {
   /** Whether an empty project list may fall back to entering a name to create. */
   allowCreateWhenEmpty?: boolean;
@@ -258,6 +272,36 @@ export async function getVercelAuthStatus(
   if (result.ok) return "authenticated";
   if (result.failure.errno === "ENOENT") return "cli-missing";
   return isLoggedOutFailure(result.failure) ? "logged-out" : "unavailable";
+}
+
+/** Resolves the stable Vercel CLI user without conflating logout and transient failures. */
+export async function getVercelUserIdentity(
+  projectRoot: string,
+  options: VercelProjectOperationOptions = {},
+): Promise<VercelUserIdentityResolution> {
+  const result = await captureVercel(["api", "/v2/user", "--raw"], {
+    cwd: projectRoot,
+    signal: options.signal,
+    timeoutMs: WHOAMI_TIMEOUT_MS,
+  });
+  options.signal?.throwIfAborted();
+  if (!result.ok) {
+    if (result.failure.errno === "ENOENT") return { status: "cli-missing" };
+    return {
+      status: isLoggedOutFailure(result.failure) ? "logged-out" : "unavailable",
+    };
+  }
+
+  let response: unknown;
+  try {
+    response = parseVercelJson(result.stdout, "Vercel user");
+  } catch {
+    return { status: "unavailable" };
+  }
+  const parsed = VercelUserIdentityResponseSchema.safeParse(response);
+  return parsed.success
+    ? { status: "authenticated", identity: { id: parsed.data.user.id } }
+    : { status: "unavailable" };
 }
 
 /**

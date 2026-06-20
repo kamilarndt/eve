@@ -104,6 +104,7 @@ import {
   type AuthorizationSignal,
   isAuthorizationSignal,
   setPendingAuthorization,
+  createPendingAuthorizationState,
 } from "#harness/authorization.js";
 import { readToolInterrupt } from "#harness/tool-interrupts.js";
 import { createAuthorizationRequiredEvent } from "#protocol/message.js";
@@ -1518,7 +1519,10 @@ async function handleStepResult(input: {
         {
           ...baseSession,
           history: [...promptMessages],
-          state: setPendingAuthorization(baseSession.state, { challenges }),
+          state: setPendingAuthorization(
+            baseSession.state,
+            createPendingAuthorizationState(challenges),
+          ),
         },
         emissionState,
       ),
@@ -1965,7 +1969,10 @@ async function parkOnCodeModeInterrupt(input: {
       responseMessages: input.responseMessages,
       session: {
         ...baseSession,
-        state: setPendingAuthorization(baseSession.state, { challenges }),
+        state: setPendingAuthorization(
+          baseSession.state,
+          createPendingAuthorizationState(challenges),
+        ),
       },
     });
 

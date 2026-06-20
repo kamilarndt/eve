@@ -30,12 +30,13 @@ Errors render compactly with docs links highlighted. A code bug escaping your ag
 
 ## Slash commands
 
-Each command echoes as an invocation line, asks through a bordered panel that takes the input area's place (one question at a time, separate from the chat transcript), and finishes with a one-line `⎿` result. Loading states stay on the ephemeral status line instead of piling into the transcript; model, channel, and the Vercel CLI commands (`/vc:install`, `/vc:login`) use the same green square pulse as the build phase, while `/deploy` keeps a spinner. Setup menus render the selected option with a filled arrow and an inverse label padded by one space on each side. Text prompts use a blinking block cursor over the character at the caret. The selected label is blue normally and yellow for warning rows.
+Each command echoes as an invocation line, asks through a bordered panel that takes the input area's place (one question at a time, separate from the chat transcript), and finishes with a one-line `⎿` result. Loading states stay on the ephemeral status line instead of piling into the transcript; model, channel, connection, and the Vercel CLI commands (`/vc:install`, `/vc:login`) use the same green square pulse as the build phase, while `/deploy` keeps a spinner. Setup menus render the selected option with a filled arrow and an inverse label padded by one space on each side. Text prompts use a blinking block cursor over the character at the caret. The selected label is blue normally and yellow for warning rows.
 
 | Command       | Does                                                                                                                                                         |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/model`      | Opens a configure menu that loops until Done (or Esc). See [Configure the model and provider](#configure-the-model-and-provider).                            |
 | `/channels`   | Shows the agent's channel list and adds the one you pick. See [Add a channel](#add-a-channel).                                                               |
+| `/connect`    | Shows the connection catalog and configures the one you pick. See [Add a connection](#add-a-connection).                                                     |
 | `/deploy`     | Ships the agent to Vercel production, linking the directory first when it is unlinked.                                                                       |
 | `/vc:install` | Installs the Vercel CLI. Available locally and on a remote session.                                                                                          |
 | `/vc:login`   | Logs in to Vercel locally. On a remote session, resolves the deployment's project, refreshes its OIDC token, and confirms any required Trusted Sources rule. |
@@ -44,7 +45,7 @@ Each command echoes as an invocation line, asks through a bordered panel that ta
 | `/exit`       | Quits the TUI.                                                                                                                                               |
 | `/help`       | Lists the commands available for the current local or remote session.                                                                                        |
 
-`/model`, `/channels`, and `/deploy` manage the project and are available only when `eve dev` runs the server locally, not when connected to a remote server with `--url`.
+`/model`, `/connect`, `/channels`, and `/deploy` modify the local agent or its linked project. They are available when the TUI starts the local server or attaches to the matching local server URL printed by another `eve dev` process. They are unavailable for deployment and unrelated `--url` targets.
 
 ### Configure the model and provider
 
@@ -57,6 +58,10 @@ The provider row demands attention (a bold yellow "Configure model access" with 
 ### Add a channel
 
 `/channels` shows the agent's channel list. Already-registered channels render as checked, focusable rows with an "Already installed" hint. Picking one adds it (including the Slack Connect provisioning), then installs the dependencies the scaffold added so the dev server can load the new channels right away. After each addition the list repaints with the channel checked, until Done (or Esc) leaves the flow.
+
+### Add a connection
+
+`/connect` shows the MCP server catalog available through Vercel Connect. Team and project selection stays outside this flow: run `eve link` to choose or change the linked Vercel project. When the directory is unlinked, Connect-backed rows are disabled and point to that command. For a Connect-backed entry, eve installs the shared project dependency, then tries the provider's canonical connector UID first. If that connector cannot be attached, `/connect` asks whether to open a searchable connector list or create a specifically named connector; it never silently adopts another team connector. After attachment succeeds, the panel reports the attached connector and the added `agent/connections/<name>.ts` file separately. Eve removes a connector created by the current attempt if a later step fails. Because MCP authorization is user-scoped, the first tool call by each user separately displays its browser authorization challenge.
 
 ## Keyboard shortcuts
 
@@ -115,13 +120,15 @@ Connection flags: `--host` and `--port` bind the local server, and `--no-ui` run
 
 ## Remote: `eve dev <url>`
 
-Pass a URL and the TUI talks to a running deployment instead of starting a local server, which is handy for a Vercel preview or your production app.
+Pass a URL and the TUI connects without starting another server. This can be the local URL printed by an existing `eve dev --no-ui` process, a Vercel preview, or your production app.
 
 ```bash
 eve dev https://<your-app>
 ```
 
 The bare URL is shorthand for `--url`; it cannot be combined with `--host`, `--port`, or `--no-ui`.
+
+When the URL matches this project's active local server, the attached TUI registers its own Vercel CLI user grant. That grant scopes user-authorized connector calls to the attached TUI process rather than reusing another process's identity.
 
 At startup the TUI asks Vercel to resolve the remote origin under the active scope. A resolved response is the authority for a project-scoped OIDC token—refreshing an expired development token when refresh credentials exist—or an automation-bypass secret. An unresolved host is probed anonymously. The TUI then requests `/eve/v1/info`, with a ten-second timeout. A successful response marks the remote ready. An eve OIDC challenge, Vercel Deployment Protection challenge, or `TRUSTED_SOURCES_ENVIRONMENT_MISMATCH` opens `/vc:login` automatically; ordinary network failures and server errors remain remote-availability errors and do not start an authentication flow. Esc or Ctrl-C cancels the authentication flow.
 

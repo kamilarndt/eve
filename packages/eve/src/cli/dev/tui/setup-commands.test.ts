@@ -62,6 +62,10 @@ function fakeFlows(overrides: Partial<TuiSetupFlows> = {}): TuiSetupFlows {
       kind: "done",
       addedChannels: [],
     })),
+    runConnectionsFlow: vi.fn<TuiSetupFlows["runConnectionsFlow"]>(async () => ({
+      kind: "done",
+      addedConnections: [],
+    })),
     runDeployFlow: vi.fn<TuiSetupFlows["runDeployFlow"]>(async () => ({
       kind: "deployed",
       productionUrl: "https://my-agent.vercel.app",
@@ -71,7 +75,7 @@ function fakeFlows(overrides: Partial<TuiSetupFlows> = {}): TuiSetupFlows {
 }
 
 function run(input: {
-  command: "vc:install" | "vc:login" | "model" | "channels" | "deploy";
+  command: "vc:install" | "vc:login" | "model" | "channels" | "connect" | "deploy";
   flows: TuiSetupFlows;
   renderer?: TuiSetupCommandRenderer;
   initialModelStep?: "provider";
@@ -101,6 +105,7 @@ describe("runTuiSetupCommand", () => {
       "vc:login": "pulse",
       model: "pulse",
       channels: "pulse",
+      connect: "pulse",
       deploy: "spinner",
     });
   });
@@ -335,6 +340,77 @@ describe("runTuiSetupCommand", () => {
         "Channel files changed, but /channels failed: Slack connector UID update is required before deployment.",
       preserveFlowDiagnostics: true,
       effect: { kind: "channels-added" },
+    });
+  });
+
+  it("reports connector setup separately from per-user authorization", async () => {
+    const flows = fakeFlows({
+      runConnectionsFlow: vi.fn<TuiSetupFlows["runConnectionsFlow"]>(async () => ({
+        kind: "done",
+        addedConnections: ["linear", "github"],
+      })),
+    });
+
+    await expect(run({ command: "connect", flows })).resolves.toEqual({
+      message: "Connections configured: linear, github. User authorization starts on first use.",
+      preserveFlowDiagnostics: true,
+    });
+    expect(flows.runConnectionsFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ appRoot: APP_ROOT }),
+    );
+  });
+
+  it("reports an empty connections pick", async () => {
+    const notice = await run({ command: "connect", flows: fakeFlows() });
+
+    expect(notice).toEqual({
+      message: "No connections added.",
+      preserveFlowDiagnostics: true,
+    });
+  });
+
+  it("reports a post-scaffold connection failure as-is", async () => {
+    const flows = fakeFlows({
+      runConnectionsFlow: vi.fn<TuiSetupFlows["runConnectionsFlow"]>(async () => ({
+        kind: "failed",
+        addedConnections: ["linear"],
+        message: "Connector provisioning failed.",
+      })),
+    });
+
+    await expect(run({ command: "connect", flows })).resolves.toEqual({
+      message: "Connection files changed, but /connect failed: Connector provisioning failed.",
+      preserveFlowDiagnostics: true,
+    });
+  });
+
+  it("reports a cancelled connections flow", async () => {
+    const flows = fakeFlows({
+      runConnectionsFlow: vi.fn<TuiSetupFlows["runConnectionsFlow"]>(async () => ({
+        kind: "cancelled",
+      })),
+    });
+
+    await expect(run({ command: "connect", flows })).resolves.toEqual({
+      message: "/connect cancelled.",
+      preserveFlowDiagnostics: true,
+    });
+  });
+
+  it("routes a Vercel login action raised by the connections flow to /vc:login", async () => {
+    const flows = fakeFlows({
+      runConnectionsFlow: vi.fn<TuiSetupFlows["runConnectionsFlow"]>(async () => {
+        throw new HumanActionRequiredError({
+          kind: "vercel-login",
+          command: "vercel login",
+          reason: "Connect provisioning requires you to be logged in to Vercel.",
+        });
+      }),
+    });
+
+    await expect(run({ command: "connect", flows })).resolves.toEqual({
+      message: "You're not logged in to Vercel — run /vc:login, then retry /connect.",
+      preserveFlowDiagnostics: true,
     });
   });
 

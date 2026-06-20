@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelSetupAwaitChoice, ChannelSetupLog } from "#setup/cli/index.js";
-import { captureVercel, runVercel, runVercelCaptureStdout } from "#setup/primitives/run-vercel.js";
+import {
+  captureVercel,
+  runVercel,
+  runVercelCaptureStdout,
+  type RunVercelCaptureResult,
+} from "#setup/primitives/run-vercel.js";
 import { updateSlackChannelConnectorUid } from "#setup/scaffold/update/update-slack-channel.js";
 
 import {
@@ -493,7 +498,7 @@ describe("provisionSlackbot", () => {
   });
 
   it("finishes a parked create when connector details prove the workspace connection", async () => {
-    const createClose = deferred<{ ok: boolean; stdout: string }>();
+    const createClose = deferred<RunVercelCaptureResult>();
     const workspaceLookup = deferred<{ ok: true; stdout: string }>();
     let workspaceLookups = 0;
     let createSignal: AbortSignal | undefined;
@@ -575,7 +580,7 @@ describe("provisionSlackbot", () => {
     });
     await vi.waitFor(() => expect(createSignal?.aborted).toBe(true));
     expect(mockedRunVercel).not.toHaveBeenCalled();
-    createClose.resolve({ ok: false, stdout: "" });
+    createClose.resolve({ ok: false, stdout: "", stderr: "", failure: "aborted" });
     await expect(provisioning).resolves.toEqual({
       state: "attached",
       connectorUid: "slack/my-agent",
@@ -604,9 +609,13 @@ describe("provisionSlackbot", () => {
             stream: "stderr",
             text: "Connector created: scl_partial",
           });
-          options.signal?.addEventListener("abort", () => resolve({ ok: false, stdout: "" }), {
-            once: true,
-          });
+          options.signal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, stdout: "", stderr: "", failure: "aborted" }),
+            {
+              once: true,
+            },
+          );
         }),
     );
     mockedRunVercel.mockResolvedValue(true);
@@ -668,7 +677,7 @@ describe("provisionSlackbot", () => {
         stream: "stderr",
         text: "Connector created: scl_partial",
       });
-      return { ok: false, stdout: "" };
+      return { ok: false, stdout: "", stderr: "", failure: "aborted" };
     });
     mockedRunVercel.mockResolvedValue(true);
     mockedCaptureVercel.mockImplementation(async (args) => {
@@ -864,7 +873,7 @@ describe("provisionSlackbot", () => {
   });
 
   it("cleans up before propagating an outer abort", async () => {
-    const create = deferred<{ ok: boolean; stdout: string }>();
+    const create = deferred<RunVercelCaptureResult>();
     const controller = new AbortController();
     mockedRunVercelCaptureStdout.mockImplementationOnce(() => create.promise);
     mockedRunVercel.mockResolvedValue(true);
@@ -900,7 +909,7 @@ describe("provisionSlackbot", () => {
   });
 
   it("warns when an outer abort has no exact connector ownership proof", async () => {
-    const create = deferred<{ ok: boolean; stdout: string }>();
+    const create = deferred<RunVercelCaptureResult>();
     const controller = new AbortController();
     const log = createTestLog();
     mockedRunVercelCaptureStdout.mockImplementationOnce(() => create.promise);
@@ -1070,7 +1079,7 @@ describe("provisionSlackbot", () => {
   });
 
   it("waits for the aborted attempt to settle before cleaning up and retrying", async () => {
-    const firstCreate = deferred<{ ok: boolean; stdout: string }>();
+    const firstCreate = deferred<RunVercelCaptureResult>();
     mockedRunVercelCaptureStdout
       .mockImplementationOnce(() => firstCreate.promise)
       .mockResolvedValueOnce({

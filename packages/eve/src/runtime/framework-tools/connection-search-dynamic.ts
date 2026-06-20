@@ -3,7 +3,6 @@ import { ContextKey } from "#context/key.js";
 import {
   type AuthorizationChallenge,
   type AuthorizationSignal,
-  getAuthorizationResult,
   getHookUrl,
   requestAuthorization,
 } from "#harness/authorization.js";
@@ -14,9 +13,11 @@ import {
 } from "#public/connections/errors.js";
 import type { JsonValue } from "#public/types/json.js";
 import type { JsonObject } from "#shared/json.js";
-import { writeCachedToken } from "#runtime/connections/authorization-tokens.js";
-import { principalKey, resolveConnectionPrincipal } from "#runtime/connections/principal.js";
-import { stampChallengeDisplayName } from "#runtime/connections/scoped-authorization.js";
+import { resolveConnectionPrincipal } from "#runtime/connections/principal.js";
+import {
+  completeScopedAuthorization,
+  stampChallengeDisplayName,
+} from "#runtime/connections/scoped-authorization.js";
 import {
   type ConnectionRegistry,
   type ConnectionToolMetadata,
@@ -134,28 +135,27 @@ function resolveInteractiveAuth(
  * following load, the freshly minted token is itself being rejected, so
  * the connection must fail terminally rather than re-challenge forever.
  */
-async function completePendingAuthorizations(registry: ConnectionRegistry): Promise<Set<string>> {
-  const ctx = loadContext();
-  const completed = new Set<string>();
+async function completePendingAuthorizations(registry: ConnectionRegistry): Promise<{
+  readonly authorized: Set<string>;
+  readonly failures: Map<string, string>;
+}> {
+  const authorized = new Set<string>();
+  const failures = new Map<string, string>();
   for (const conn of registry.getConnections()) {
-    const result = getAuthorizationResult(conn.connectionName);
-    if (!result) continue;
     const auth = resolveInteractiveAuth(registry, conn.connectionName);
     if (!auth) continue;
-    const principal = resolveConnectionPrincipal(conn.connectionName, auth);
-    const token = await (
-      auth as InteractiveAuthorizationDefinition<JsonValue>
-    ).completeAuthorization({
-      callbackUrl: result.hookUrl,
-      connection: { url: conn.url ?? "" },
-      principal,
-      resume: result.resume,
-      callback: result.callback,
-    });
-    writeCachedToken(ctx, conn.connectionName, principalKey(principal), token);
-    completed.add(conn.connectionName);
+    try {
+      const didComplete = await completeScopedAuthorization({
+        authorization: auth,
+        connection: { url: conn.url ?? "" },
+        scope: conn.connectionName,
+      });
+      if (didComplete) authorized.add(conn.connectionName);
+    } catch (error) {
+      failures.set(conn.connectionName, error instanceof Error ? error.message : String(error));
+    }
   }
-  return completed;
+  return { authorized, failures };
 }
 
 async function executeConnectionSearch(
@@ -167,7 +167,7 @@ async function executeConnectionSearch(
     return [];
   }
 
-  const justAuthorized = await completePendingAuthorizations(registry);
+  const completedAuthorizations = await completePendingAuthorizations(registry);
 
   const limit = input.limit ?? 10;
   const queryTokens = tokenize(input.keywords);
@@ -182,6 +182,15 @@ async function executeConnectionSearch(
   const authChallenges: AuthorizationChallenge[] = [];
 
   for (const conn of targetConnections) {
+    const completionFailure = completedAuthorizations.failures.get(conn.connectionName);
+    if (completionFailure !== undefined) {
+      failedConnections.push({
+        connection: conn.connectionName,
+        description: conn.description,
+        error: completionFailure,
+      });
+      continue;
+    }
     let tools: readonly ConnectionToolMetadata[];
     try {
       const client = registry.getClient(conn.connectionName);
@@ -192,7 +201,7 @@ async function executeConnectionSearch(
         // still rejected means the new token itself is bad. Fail it
         // terminally instead of re-challenging into an infinite sign-in
         // loop.
-        if (justAuthorized.has(conn.connectionName)) {
+        if (completedAuthorizations.authorized.has(conn.connectionName)) {
           logger.warn("connection still unauthorized after authorization", {
             connection: conn.connectionName,
           });
@@ -433,23 +442,13 @@ export function createConnectionSearchEvents(): DynamicToolEvents {
                 ? (conn.authorization as InteractiveAuthorizationDefinition<JsonValue>)
                 : undefined;
 
-            let justCompletedAuth = false;
-            if (interactiveAuth) {
-              const authResult = getAuthorizationResult(connectionName);
-              if (authResult) {
-                justCompletedAuth = true;
-                const ctx = loadContext();
-                const principal = resolveConnectionPrincipal(connectionName, interactiveAuth);
-                const token = await interactiveAuth.completeAuthorization({
-                  callbackUrl: authResult.hookUrl,
+            const justCompletedAuth = interactiveAuth
+              ? await completeScopedAuthorization({
+                  authorization: interactiveAuth,
                   connection: { url: conn?.url ?? "" },
-                  principal,
-                  resume: authResult.resume,
-                  callback: authResult.callback,
-                });
-                writeCachedToken(ctx, connectionName, principalKey(principal), token);
-              }
-            }
+                  scope: connectionName,
+                })
+              : false;
 
             try {
               const client = reg.getClient(connectionName);

@@ -10,6 +10,7 @@ import { createFakePrompter } from "#internal/testing/fake-prompter.js";
 import {
   assertNewProjectNameAvailable,
   getVercelAuthStatus,
+  getVercelUserIdentity,
   linkProject,
   pickNewProjectName,
   pickProject,
@@ -114,6 +115,57 @@ describe("getVercelAuthStatus", () => {
       failedCapture("", "Error: getaddrinfo ENOTFOUND api.vercel.com"),
     );
     await expect(getVercelAuthStatus("/tmp/eve-agent")).resolves.toBe("unavailable");
+  });
+});
+
+describe("getVercelUserIdentity", () => {
+  it("returns the stable user id from the authenticated Vercel API", async () => {
+    mockedCaptureVercel.mockResolvedValueOnce(
+      captured(JSON.stringify({ user: { id: "vercel-user-123" } })),
+    );
+
+    await expect(getVercelUserIdentity("/tmp/eve-agent")).resolves.toEqual({
+      identity: { id: "vercel-user-123" },
+      status: "authenticated",
+    });
+    expect(mockedCaptureVercel).toHaveBeenCalledWith(
+      ["api", "/v2/user", "--raw"],
+      expect.objectContaining({ cwd: "/tmp/eve-agent", timeoutMs: 10_000 }),
+    );
+  });
+
+  it("distinguishes logout from an invalid or unavailable response", async () => {
+    mockedCaptureVercel
+      .mockResolvedValueOnce(failedCapture("", "Error: Not authenticated"))
+      .mockResolvedValueOnce(captured(JSON.stringify({ user: { email: "dev@example.com" } })));
+
+    await expect(getVercelUserIdentity("/tmp/eve-agent")).resolves.toEqual({
+      status: "logged-out",
+    });
+    await expect(getVercelUserIdentity("/tmp/eve-agent")).resolves.toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("distinguishes a missing CLI from a transient API failure", async () => {
+    mockedCaptureVercel
+      .mockResolvedValueOnce({
+        ok: false,
+        failure: {
+          errno: "ENOENT",
+          message: "Vercel CLI not found.",
+          stderr: "",
+          stdout: "",
+        },
+      })
+      .mockResolvedValueOnce(failedCapture("", "Error: getaddrinfo ENOTFOUND api.vercel.com"));
+
+    await expect(getVercelUserIdentity("/tmp/eve-agent")).resolves.toEqual({
+      status: "cli-missing",
+    });
+    await expect(getVercelUserIdentity("/tmp/eve-agent")).resolves.toEqual({
+      status: "unavailable",
+    });
   });
 });
 

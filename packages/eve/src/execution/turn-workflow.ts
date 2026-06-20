@@ -94,6 +94,7 @@ export async function turnWorkflow(rawInput: unknown): Promise<void> {
                 sessionState: result.sessionState,
               }
             : {
+                authorizationDeadline: result.authorizationDeadline,
                 kind: "park",
                 serializedContext: result.serializedContext,
                 sessionState: result.sessionState,

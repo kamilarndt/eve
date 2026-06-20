@@ -1,10 +1,4 @@
-import {
-  type AuthMode,
-  type ConnectionProtocol,
-  type ConnectionSpec,
-  type Integration,
-  authModeLabel,
-} from "./data";
+import { type AuthMode, type ConnectionProtocol, type Integration, authModeLabel } from "./data";
 
 /**
  * One entry per (protocol, auth mode) the connection supports. The detail
@@ -20,8 +14,6 @@ export interface ConnectionSetup {
 export const setupKey = (protocol: ConnectionProtocol, auth: AuthMode): string =>
   `${protocol}:${auth}`;
 
-const connectorOf = (slug: string, spec: ConnectionSpec): string => spec.connector ?? slug;
-
 /** The TypeScript connection file for one (protocol, auth) combination. */
 const buildSnippet = (
   integration: Integration,
@@ -32,7 +24,7 @@ const buildSnippet = (
   if (!spec) {
     return "";
   }
-  const connector = connectorOf(integration.slug, spec);
+  const connector = spec.connector;
   const description = spec.description ?? integration.tagline;
   const defineFn = protocol === "mcp" ? "defineMcpClientConnection" : "defineOpenAPIConnection";
   const transport = protocol === "mcp" ? spec.mcp : spec.openapi;
@@ -151,17 +143,18 @@ export const buildConnectionConfigure = (integration: Integration): string => {
   if (!spec) {
     return "";
   }
-  const connector = connectorOf(integration.slug, spec);
+  const connector = spec.connector;
   const sections: string[] = [
     [
-      "Create the connector, link it to your project, and pull OIDC locally:",
+      "Link the project, attach the provider's canonical connector, and pull OIDC locally:",
       ``,
       "```bash",
-      `vercel connect create ${connector}`,
       "vercel link",
+      `vercel connect attach ${connector} --yes`,
       "vercel env pull",
       "```",
     ].join("\n"),
+    "If the canonical connector is unavailable, run `/connect` in the development TUI to find an existing connector or create a named one.",
   ];
 
   if (spec.authModes.includes("jwtBearer")) {

@@ -1,9 +1,13 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { realpath } from "node:fs/promises";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
+import type { HandleMessageStreamEvent } from "../../src/protocol/message.js";
+import { runCli } from "../../src/cli/run.js";
+import { EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER } from "../../src/protocol/local-dev-auth.js";
 import { EVE_HEALTH_ROUTE_PATH } from "../../src/protocol/routes.js";
 import { WEATHER_AGENT_DESCRIPTOR } from "../../src/internal/testing/scenario-apps/weather-agent.js";
 import {
@@ -19,13 +23,41 @@ process.env.EVE_TUI_UNICODE = "1";
 
 const scenarioApp = useScenarioApp();
 const DEV_SERVER_SCENARIO_TIMEOUT_MS = 360_000;
+const CALLBACK_ORIGIN_CONNECTION_SOURCE = `import {
+  ConnectionAuthorizationRequiredError,
+  defineInteractiveAuthorization,
+  defineMcpClientConnection,
+} from "eve/connections";
+
+const auth = defineInteractiveAuthorization({
+  async getToken() {
+    throw new ConnectionAuthorizationRequiredError("callback-origin");
+  },
+  async startAuthorization({ callbackUrl, principal }) {
+    const url = new URL("https://idp.example/authorize");
+    url.searchParams.set("principal_id", principal.id);
+    url.searchParams.set("redirect_uri", callbackUrl);
+    return { challenge: { url: url.toString() } };
+  },
+  async completeAuthorization() {
+    return { token: "authorized" };
+  },
+});
+
+export default defineMcpClientConnection({
+  auth,
+  description: "Connection used to verify the local authorization callback origin.",
+  url: "https://mcp.invalid/example",
+});
+`;
 const DEV_SERVER_AGENT_DESCRIPTOR: ScenarioAppDescriptor = {
   ...WEATHER_AGENT_DESCRIPTOR,
-  files: Object.fromEntries(
-    Object.entries(WEATHER_AGENT_DESCRIPTOR.files).filter(
+  files: Object.fromEntries([
+    ...Object.entries(WEATHER_AGENT_DESCRIPTOR.files).filter(
       ([path]) => !path.startsWith("agent/channels/"),
     ),
-  ),
+    ["agent/connections/callback-origin.ts", CALLBACK_ORIGIN_CONNECTION_SOURCE],
+  ]),
 };
 
 interface RunningEveDev {
@@ -73,6 +105,38 @@ async function wait(ms: number): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+async function withInteractiveTerminal<T>(fn: () => Promise<T>): Promise<T> {
+  const stdinDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+  const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  try {
+    return await fn();
+  } finally {
+    if (stdinDescriptor === undefined) Reflect.deleteProperty(process.stdin, "isTTY");
+    else Object.defineProperty(process.stdin, "isTTY", stdinDescriptor);
+    if (stdoutDescriptor === undefined) Reflect.deleteProperty(process.stdout, "isTTY");
+    else Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(message));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function waitForServerUrl(input: {
@@ -284,6 +348,108 @@ describe("eve dev server", () => {
             `stderr:\n${server.stderr()}`,
           ].join("\n\n"),
         ).toBe(true);
+
+        type AuthorizationRequiredEvent = Extract<
+          HandleMessageStreamEvent,
+          { readonly type: "authorization.required" }
+        >;
+        let authorizationRequired: AuthorizationRequiredEvent | undefined;
+        const previousCwd = process.cwd();
+        try {
+          process.chdir(app.appRoot);
+          await withInteractiveTerminal(() =>
+            runCli(
+              ["dev", "--url", server.url],
+              { error: () => {}, log: () => {} },
+              {
+                getVercelUserIdentity: async () => ({
+                  identity: { id: "dev-server-scenario-user-id" },
+                  status: "authenticated",
+                }),
+                runDevelopmentTui: async (input) => {
+                  expect(input.target).toEqual({
+                    kind: "local",
+                    serverUrl: server.url,
+                    workspaceRoot: await realpath(app.appRoot),
+                  });
+                  const credential = input.localUserCredential?.token;
+                  expect(credential).toBeDefined();
+                  if (credential === undefined) {
+                    throw new Error("Attached local TUI did not receive a user credential.");
+                  }
+
+                  let resolveAuthorizationRequired: (
+                    event: AuthorizationRequiredEvent,
+                  ) => void = () => {};
+                  const authorizationRequiredEvent = new Promise<AuthorizationRequiredEvent>(
+                    (resolve) => {
+                      resolveAuthorizationRequired = resolve;
+                    },
+                  );
+                  const authAbortController = new AbortController();
+                  const authRequest = sendDevelopmentMessage({
+                    headers: {
+                      [EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER]: credential,
+                    },
+                    message: 'Call connection__search once with keywords "callback".',
+                    onEvent(event) {
+                      if (
+                        event.type === "authorization.required" &&
+                        event.data.name === "callback-origin"
+                      ) {
+                        resolveAuthorizationRequired(event);
+                      }
+                    },
+                    session: createDevelopmentSessionState(),
+                    signal: authAbortController.signal,
+                    serverUrl: server.url,
+                  });
+                  try {
+                    authorizationRequired = await withTimeout(
+                      Promise.race([
+                        authorizationRequiredEvent,
+                        authRequest.then((result) => {
+                          throw new Error(
+                            `Connection search reached a turn boundary before requesting authorization. Events: ${JSON.stringify(result.events)}`,
+                          );
+                        }),
+                      ]),
+                      30_000,
+                      "Timed out waiting for callback-origin to request authorization.",
+                    );
+                  } finally {
+                    authAbortController.abort();
+                  }
+                  await authRequest.catch((error: unknown) => {
+                    if (!authAbortController.signal.aborted) throw error;
+                  });
+                },
+              },
+            ),
+          );
+        } finally {
+          process.chdir(previousCwd);
+        }
+
+        expect(authorizationRequired).toBeDefined();
+        if (authorizationRequired === undefined) {
+          throw new Error("Attached local TUI did not receive an authorization challenge.");
+        }
+        const webhookUrl = authorizationRequired.data.webhookUrl;
+        const challengeUrl = authorizationRequired.data.authorization?.url;
+        expect(webhookUrl).toBeDefined();
+        expect(challengeUrl).toBeDefined();
+        if (webhookUrl === undefined || challengeUrl === undefined) {
+          throw new Error("Authorization challenge omitted its callback URL.");
+        }
+
+        const serverPort = new URL(server.url).port;
+        expect(serverPort).not.toBe("3000");
+        expect(new URL(webhookUrl).port).toBe(serverPort);
+        expect(new URL(challengeUrl).searchParams.get("redirect_uri")).toBe(webhookUrl);
+        expect(new URL(challengeUrl).searchParams.get("principal_id")).toBe(
+          "dev-server-scenario-user-id",
+        );
         await wait(1_000);
 
         const output = `${server.stdout()}\n${server.stderr()}`;

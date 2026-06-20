@@ -1,13 +1,10 @@
 /**
  * Shared identity for eve integrations. This package is the single source of
  * truth for *which* integrations exist (channels and connections) and how a
- * connection is wired (transport + model-facing description).
+ * connection is wired (transport, Connect identity, and model-facing description).
  *
- * Surface-specific concerns live with their consumer, keyed by {@link
- * IntegrationEntry.slug}: the scaffolder (eve) overlays the
- * Connect auth spec it emits, and the docs gallery overlays presentation
- * (logo, keywords, auth modes, hand-authored markdown). Neither re-declares the
- * identity below.
+ * Surface-specific presentation lives with each consumer. Neither the
+ * scaffolder nor docs re-declares the connection identity below.
  *
  * Everything lives in this one module on purpose. The catalog is consumed
  * directly from source by both NodeNext tooling (`tsc` in eve,
@@ -22,6 +19,19 @@ export type IntegrationKind = "channel" | "connection";
 
 /** Wire protocol a connection speaks at runtime. */
 export type ConnectionProtocol = "mcp" | "openapi";
+
+/** Connect subject modes supported by a provider's managed service. */
+export type ConnectAuthMode = "user" | "app" | "jwtBearer";
+
+/** Shared Vercel Connect identity for a managed connection provider. */
+export interface ConnectionConnectIdentity {
+  /** Service identifier passed to `vercel connect create` and used to filter inventory. */
+  service: string;
+  /** Concrete connector UID eve attaches before it offers an explicit fallback, when known. */
+  canonicalConnectorUid?: string;
+  /** Subject modes accepted by this provider service. */
+  authModes: readonly ConnectAuthMode[];
+}
 
 /** MCP transport: a single server URL, with optional static headers. */
 export interface McpTransport {
@@ -42,6 +52,7 @@ export interface OpenApiTransport {
 export interface ConnectionIdentity {
   /** Model-facing description written into the generated definition. */
   description: string;
+  connect: ConnectionConnectIdentity;
   mcp?: McpTransport;
   openapi?: OpenApiTransport;
 }
@@ -78,13 +89,11 @@ export function connectionProtocols(connection: ConnectionIdentity): ConnectionP
 
 /**
  * The canonical set of eve integrations. Order is display order. Each entry
- * carries only shared identity; the scaffolder and docs overlay their own
- * surface-specific data keyed by {@link IntegrationEntry.slug}.
+ * carries shared identity; the scaffolder and docs add presentation only.
  *
  * `surfaces.scaffoldable` reflects what the CLI can scaffold today: Slack and
- * eve Web Chat for channels, and every curated connection. The remaining
- * channels are runtime modules that are still configured by hand, so they
- * appear in the gallery but not the CLI picker.
+ * eve Web Chat for channels, plus connections that support the CLI's user-auth
+ * flow. Other entries remain available to the docs gallery.
  */
 export const INTEGRATIONS: readonly IntegrationEntry[] = [
   {
@@ -151,7 +160,12 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     surfaces: { scaffoldable: true, gallery: true },
     connection: {
       description: "Linear workspace: issues, projects, cycles, and comments.",
-      mcp: { url: "https://mcp.linear.app/sse" },
+      connect: {
+        service: "mcp.linear.app",
+        canonicalConnectorUid: "mcp.linear.app/linear",
+        authModes: ["user", "app"],
+      },
+      mcp: { url: "https://mcp.linear.app/mcp" },
     },
   },
   {
@@ -162,6 +176,11 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     surfaces: { scaffoldable: true, gallery: true },
     connection: {
       description: "Notion workspace: search and edit pages and databases.",
+      connect: {
+        service: "mcp.notion.com",
+        canonicalConnectorUid: "mcp.notion.com/notion",
+        authModes: ["user", "app", "jwtBearer"],
+      },
       mcp: { url: "https://mcp.notion.com/mcp" },
       openapi: {
         spec: "https://developers.notion.com/openapi.json",
@@ -175,9 +194,13 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     name: "Datadog",
     kind: "connection",
     tagline: "Query metrics, monitors, and logs through Datadog's MCP server.",
-    surfaces: { scaffoldable: true, gallery: true },
+    surfaces: { scaffoldable: false, gallery: true },
     connection: {
       description: "Datadog: query metrics, monitors, logs, and incidents.",
+      connect: {
+        service: "mcp.datadoghq.com",
+        authModes: ["jwtBearer"],
+      },
       mcp: { url: "https://mcp.datadoghq.com/api/mcp" },
     },
   },
@@ -186,9 +209,13 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     name: "Honeycomb",
     kind: "connection",
     tagline: "Explore traces and run queries through Honeycomb's MCP server.",
-    surfaces: { scaffoldable: true, gallery: true },
+    surfaces: { scaffoldable: false, gallery: true },
     connection: {
       description: "Honeycomb: explore traces, run queries, and inspect datasets.",
+      connect: {
+        service: "mcp.honeycomb.io",
+        authModes: ["jwtBearer"],
+      },
       mcp: { url: "https://mcp.honeycomb.io/mcp" },
     },
   },

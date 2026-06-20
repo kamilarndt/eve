@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  occupiedTerminalRows,
   clipVisible,
   inputTextWidth,
   offsetAtVisibleColumn,
@@ -31,6 +32,14 @@ describe("stripAnsi", () => {
     const input = "a\x1b[31mb\x1b[0mc\x1b]0;title\x07d";
 
     expect(stripAnsi(input)).toBe("abc]0;titled");
+  });
+});
+
+describe("occupiedTerminalRows", () => {
+  it("counts soft-wrapped terminal rows without treating an exact fit as wrapped", () => {
+    expect(occupiedTerminalRows(["x".repeat(80)], 80)).toBe(1);
+    expect(occupiedTerminalRows(["x".repeat(81)], 80)).toBe(2);
+    expect(occupiedTerminalRows(["", "x".repeat(81)], 80)).toBe(3);
   });
 });
 

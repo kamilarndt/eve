@@ -50,6 +50,11 @@ describe("parsePromptCommand", () => {
       name: "channels",
       argument: "",
     });
+    expect(parsePromptCommand("/connect")).toEqual({
+      type: "extension",
+      name: "connect",
+      argument: "",
+    });
     expect(parsePromptCommand("/deploy")).toEqual({
       type: "extension",
       name: "deploy",

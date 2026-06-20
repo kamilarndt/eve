@@ -1,6 +1,6 @@
 import type { Writable } from "node:stream";
 
-import type { ChannelSetupLog } from "./channel-setup-prompter.js";
+import type { ChannelSetupLog, SetupSpinnerIntent } from "./channel-setup-prompter.js";
 import { formatPromptHeader, formatRailLine, RAIL, type PromptColors } from "./prompt-ui.js";
 
 interface PromptOutput extends Writable {
@@ -85,7 +85,7 @@ export interface RailLog extends ChannelSetupLog {
    * on {@link RailSpinner.stop} so it leaves no trace. Non-TTY output prints the
    * message once and the returned `stop` is a no-op.
    */
-  spinner(message: string): RailSpinner;
+  spinner(message: string, intent?: SetupSpinnerIntent): RailSpinner;
   settle(): void;
 }
 
@@ -97,6 +97,20 @@ export interface RailLogOptions {
 
 function countRows(rendered: string): number {
   return rendered.split("\n").length - 1;
+}
+
+function renderSpinnerLabel(
+  label: string,
+  intent: SetupSpinnerIntent | undefined,
+  colors: PromptColors,
+): string {
+  if (intent?.kind !== "external-action") return label;
+  const emphasisStart = label.indexOf(intent.emphasis);
+  if (emphasisStart === -1) return label;
+  const emphasisEnd = emphasisStart + intent.emphasis.length;
+  return `${label.slice(0, emphasisStart)}${colors.yellow(
+    label.slice(emphasisStart, emphasisEnd),
+  )}${label.slice(emphasisEnd)}`;
 }
 
 /**
@@ -184,12 +198,16 @@ export function createRailLog(options: RailLogOptions): RailLog {
         `${formatPromptHeader("submit", title, { colors: options.colors, leadingRail: "green" })}${body}`,
       );
     },
-    spinner(message) {
+    spinner(message, intent) {
       settleStatus(false);
 
-      // The breathing cell stands in for the section bullet: a green leading
-      // rail, then an animated `<frame>  <message>` row beneath it.
-      const spacer = `${options.colors.green(RAIL)}\n`;
+      // External action waits use the attention color; ordinary work stays on
+      // the flow's green rail.
+      const accent = (text: string): string =>
+        intent?.kind === "external-action"
+          ? options.colors.yellow(text)
+          : options.colors.green(text);
+      const spacer = `${accent(RAIL)}\n`;
 
       // Animation redraws the message row in place (carriage return + clear
       // line), so it must stay on a single terminal row. Wrapping is what
@@ -200,8 +218,8 @@ export function createRailLog(options: RailLogOptions): RailLog {
       const columns = canRedraw && options.output.columns ? options.output.columns : 80;
       const maxLabel = Math.max(4, columns - (SPINNER_CELLS + 3));
       const label = message.length > maxLabel ? `${message.slice(0, maxLabel - 1)}…` : message;
-      // Paint the glyph the same green as the rail so it blends into the border.
-      const row = (glyph: string): string => `${options.colors.green(glyph)}  ${label}`;
+      const row = (glyph: string): string =>
+        `${accent(glyph)}  ${renderSpinnerLabel(label, intent, options.colors)}`;
 
       if (!canRedraw) {
         // No animation here, so show the densest frame as a static marker.

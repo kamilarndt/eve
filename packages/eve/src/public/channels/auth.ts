@@ -8,6 +8,11 @@
 import { decodeJwt } from "#compiled/jose/index.js";
 
 import type { SessionAuthContext } from "#channel/types.js";
+import { LocalDevelopmentAuthServer } from "#internal/local-development-auth.js";
+import {
+  EVE_DEV_ENV_FLAG,
+  EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER,
+} from "#protocol/local-dev-auth.js";
 import { createLogger } from "#internal/logging.js";
 import { authenticateHttpBasicStrategy } from "#runtime/governance/auth/http-basic.js";
 import { authenticateJwtEcdsaStrategy } from "#runtime/governance/auth/jwt-ecdsa.js";
@@ -576,10 +581,18 @@ export function none<TEvent = unknown>(): AuthFn<TEvent> {
  * `*.localhost` subdomain (RFC 6761 routes the `.localhost` TLD to
  * loopback), any IPv4 in `127.0.0.0/8`, or the IPv6 loopback `::1`.
  *
- * Matching requests get a synthetic principal with `principalType:
- * "local-dev"`. Every other request returns `null`, skipping to the next
- * entry under {@link routeAuth}, which makes `[localDev(), vercelOidc()]`
- * the canonical "open on localhost, Vercel OIDC in prod" pattern.
+ * Matching requests normally get a synthetic principal with `principalType:
+ * "local-dev"`. A local `eve dev` TUI sends an unguessable token for its
+ * server-bound Vercel CLI user grant. The server resolves that grant on each
+ * request, so worker reloads and `/login` changes do not depend on mutable
+ * process environment. That request receives a user principal, allowing local
+ * Connect calls to reuse the correct user-scoped authorization. During `eve
+ * dev`, a presented user grant is resolved before the hostname fallback so a
+ * server bound to a private-network address can authenticate its TUI without
+ * making anonymous private-network traffic local. Every other request returns
+ * `null`, skipping to the next entry under
+ * {@link routeAuth}, which makes `[localDev(), vercelOidc()]` the canonical
+ * "open on localhost, Vercel OIDC in prod" pattern.
  *
  * The check is not based on bare `process.env.VERCEL`: a deployment
  * outside Vercel (Fly, Railway, raw container) leaves `VERCEL` unset and
@@ -597,14 +610,90 @@ export function none<TEvent = unknown>(): AuthFn<TEvent> {
  */
 export function localDev(): AuthFn<Request> {
   return (request) => {
+    if (
+      process.env[EVE_DEV_ENV_FLAG] === "1" &&
+      request.headers.has(EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER)
+    ) {
+      return resolveLocalDevSessionAuthContext(request);
+    }
+    if (isLoopbackRequest(request)) {
+      return resolveLocalDevSessionAuthContext(request);
+    }
     if (process.env.VERCEL && process.env.VERCEL_ENV === "development") {
       return LOCAL_DEV_SESSION_AUTH_CONTEXT;
     }
-    if (!isLoopbackRequest(request)) {
-      return null;
-    }
-    return LOCAL_DEV_SESSION_AUTH_CONTEXT;
+    return null;
   };
+}
+
+async function resolveLocalDevSessionAuthContext(request: Request): Promise<SessionAuthContext> {
+  const credentialHeader = request.headers.get(EVE_LOCAL_DEV_USER_CREDENTIAL_HEADER);
+  if (credentialHeader === null) {
+    return LOCAL_DEV_SESSION_AUTH_CONTEXT;
+  }
+  const receivedCredential = credentialHeader.trim();
+  if (receivedCredential.length === 0) {
+    throwLocalDevUserCredentialFailure({
+      code: "local_dev_user_credential_invalid",
+      message: "The local development user credential is no longer valid. Reconnect the TUI.",
+      status: 401,
+    });
+  }
+  const authServer = LocalDevelopmentAuthServer.readerFromEnvironment();
+  if (authServer === undefined) {
+    throwLocalDevUserCredentialFailure({
+      code: "local_dev_user_credential_unavailable",
+      message: "Local development user authentication is unavailable. Restart eve dev.",
+      status: 503,
+    });
+  }
+  const principalResult = await authServer.read(receivedCredential);
+  if (!principalResult.ok) {
+    throwLocalDevUserCredentialFailure({
+      code: "local_dev_user_credential_unavailable",
+      message: "Local development user authentication is unavailable. Restart eve dev.",
+      status: 503,
+    });
+  }
+  if (principalResult.value === undefined) {
+    throwLocalDevUserCredentialFailure({
+      code: "local_dev_user_credential_invalid",
+      message: "The local development user credential is no longer valid. Reconnect the TUI.",
+      status: 401,
+    });
+  }
+  const principal = principalResult.value;
+  return {
+    attributes: {},
+    authenticator: principal.authenticator,
+    principalId: principal.id,
+    principalType: "user",
+    subject: principal.id,
+  };
+}
+
+function throwLocalDevUserCredentialFailure(input: {
+  readonly code: string;
+  readonly message: string;
+  readonly status: 401 | 503;
+}): never {
+  if (input.status === 401) {
+    throw new UnauthenticatedError({ code: input.code, message: input.message });
+  }
+  throw new LocalDevelopmentAuthUnavailableError(input.code, input.message);
+}
+
+class LocalDevelopmentAuthUnavailableError extends Error {
+  readonly response: Response;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "LocalDevelopmentAuthUnavailableError";
+    this.response = Response.json(
+      { code, error: message, ok: false },
+      { headers: { "cache-control": "no-store" }, status: 503 },
+    );
+  }
 }
 
 /**

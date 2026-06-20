@@ -6,6 +6,51 @@ import {
   createDeclarationCopier,
 } from "../_shared.mjs";
 
+const WORKFLOW_GET_PORT_LAZY_SUFFIX = "/@workflow/core/dist/runtime/get-port-lazy.js";
+
+function createWorkflowGetPortPlugin() {
+  let replacedGetPortLazy = false;
+
+  return {
+    name: "eve-workflow-get-port",
+    buildStart() {
+      replacedGetPortLazy = false;
+    },
+    load(id) {
+      const normalizedId = id.replaceAll("\\", "/");
+      if (!normalizedId.endsWith(WORKFLOW_GET_PORT_LAZY_SUFFIX)) {
+        return undefined;
+      }
+
+      replacedGetPortLazy = true;
+      return {
+        code: `import { getPort } from "@workflow/utils/get-port";
+
+function readConfiguredPort() {
+  const value = process.env.PORT?.trim();
+  if (!value) return undefined;
+
+  const port = Number(value);
+  return Number.isInteger(port) && port > 0 && port <= 65_535 ? port : undefined;
+}
+
+export async function getPortLazy() {
+  return readConfiguredPort() ?? await getPort();
+}
+`,
+        moduleType: "js",
+      };
+    },
+    buildEnd() {
+      if (!replacedGetPortLazy) {
+        throw new Error(
+          `Expected to replace ${WORKFLOW_GET_PORT_LAZY_SUFFIX} while vendoring @workflow/core.`,
+        );
+      }
+    },
+  };
+}
+
 async function discoverDeclarationFiles({ distDir }) {
   const files = await collectFilesRecursively(distDir, [".d.ts"]);
   return (
@@ -116,5 +161,6 @@ export default {
       outputPath: "private",
     },
   ],
+  plugins: [createWorkflowGetPortPlugin()],
   copyDeclarations,
 };

@@ -16,7 +16,7 @@ import { isPromptControlCommand } from "./prompt-commands.js";
 import { formatValuePretty, truncate } from "./tool-format.js";
 import { sliceVisible, visibleLength, wrapVisibleLine } from "./terminal-text.js";
 
-export type ToolStatus = "running" | "done" | "error" | "denied" | "approval";
+export type ToolStatus = "running" | "waiting" | "done" | "error" | "denied" | "approval";
 
 export type BlockKind =
   | "user"
@@ -149,8 +149,9 @@ function renderBody(
     case "command":
       return renderCommand(block, theme);
     case "question":
-    case "connection-auth":
       return renderPreformatted(block, width, theme);
+    case "connection-auth":
+      return renderConnectionAuth(block, width, theme);
     case "sandbox":
       return renderSandbox(block, width, theme, context);
     case "log":
@@ -292,8 +293,9 @@ function toolGlyph(
       return { icon: theme.colors.yellow(theme.glyph.warning), accent: theme.colors.yellow };
     case "approval":
       return { icon: theme.colors.yellow(theme.glyph.question), accent: theme.colors.yellow };
+    case "waiting":
+      return { icon: theme.colors.dim(theme.glyph.dot), accent: theme.colors.gray };
     case "running":
-    default:
       return { icon: theme.colors.yellow(context.spinner), accent: theme.colors.gray };
   }
 }
@@ -433,10 +435,7 @@ function renderResult(block: Block, width: number, theme: Theme): string[] {
 }
 
 function renderPreformatted(block: Block, width: number, theme: Theme): string[] {
-  const glyph =
-    block.kind === "connection-auth"
-      ? theme.colors.yellow(theme.glyph.connection)
-      : theme.colors.yellow(theme.colors.bold(theme.glyph.question));
+  const glyph = theme.colors.yellow(theme.colors.bold(theme.glyph.question));
   // The title is agent-authored prose (a question prompt, a connection name)
   // and can exceed the width; an overflowing row soft-wraps in the terminal
   // and breaks the live region's one-row-one-line accounting, leaking a
@@ -451,6 +450,19 @@ function renderPreformatted(block: Block, width: number, theme: Theme): string[]
   for (const raw of (block.body ?? "").split("\n")) {
     for (const line of wrapVisibleLine(raw, width - 2)) {
       rows.push(`  ${line}`);
+    }
+  }
+  return rows;
+}
+
+function renderConnectionAuth(block: Block, width: number, theme: Theme): string[] {
+  const glyph = theme.colors.yellow(theme.glyph.connection);
+  const title = `${block.title ?? "authorization required for"} ${theme.colors.bold(block.subtitle ?? "connection")}`;
+  const titleRows = wrapVisibleLine(title, Math.max(1, width - 2));
+  const rows = titleRows.map((line, index) => (index === 0 ? `${glyph} ${line}` : `  ${line}`));
+  for (const raw of (block.body ?? "").split("\n")) {
+    for (const line of wrapVisibleLine(raw, width - 2)) {
+      if (line.length > 0) rows.push(`  ${line}`);
     }
   }
   return rows;

@@ -42,6 +42,15 @@ export function visibleLength(input: string): number {
   return width;
 }
 
+/** Physical terminal rows occupied when logical rows are allowed to soft-wrap. */
+export function occupiedTerminalRows(rows: readonly string[], width: number): number {
+  const rowWidth = Math.max(1, width);
+  return rows.reduce(
+    (total, row) => total + Math.max(1, Math.ceil(visibleLength(row) / rowWidth)),
+    0,
+  );
+}
+
 export function sliceVisible(input: string, width: number): string {
   if (width <= 0) {
     return "";

@@ -3590,6 +3590,7 @@ describe("createToolLoopHarness", () => {
       expect(result.next).toBeNull();
       expect(getPendingAuthorization(result.session.state)).toEqual({
         challenges: full.challenges,
+        deadline: expect.any(Number),
       });
 
       const authRequired = events.filter((event) => event.type === "authorization.required");
@@ -3688,6 +3689,7 @@ describe("createToolLoopHarness", () => {
       expect(result.next).toBeNull();
       expect(getPendingAuthorization(result.session.state)).toEqual({
         challenges: full.challenges,
+        deadline: expect.any(Number),
       });
 
       const authRequired = events.filter((event) => event.type === "authorization.required");

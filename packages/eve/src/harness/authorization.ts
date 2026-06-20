@@ -33,6 +33,7 @@
 import { loadContext } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
 import { SessionIdKey } from "#context/keys.js";
+import type { ConnectionAuthorizationOutcome } from "#protocol/message.js";
 import type { ConnectionAuthorizationChallenge } from "#public/connections/errors.js";
 import type { AuthorizationCallback } from "#runtime/connections/types.js";
 import type { JsonValue } from "#public/types/json.js";
@@ -219,6 +220,27 @@ export const PendingAuthorizationResultKey = new ContextKey<readonly NamedAuthor
   "eve.pendingAuthorizationResult",
 );
 
+export interface AuthorizationCompletionResult {
+  readonly name: string;
+  readonly outcome: ConnectionAuthorizationOutcome;
+  readonly reason?: string;
+}
+
+export type AuthorizationCompletionReporter = (
+  result: AuthorizationCompletionResult,
+) => Promise<void>;
+
+export const AuthorizationCompletionReporterKey = new ContextKey<AuthorizationCompletionReporter>(
+  "eve.authorizationCompletionReporter",
+);
+
+export async function reportAuthorizationCompletion(
+  result: AuthorizationCompletionResult,
+): Promise<void> {
+  const ctx = loadContext();
+  await ctx.get(AuthorizationCompletionReporterKey)?.(result);
+}
+
 /**
  * Deployment base URL for building callback URLs. Set by the
  * framework (turnStep) at the start of each step from workflow
@@ -231,9 +253,25 @@ export const CallbackBaseUrlKey = new ContextKey<string>("eve.callbackBaseUrl");
 // ---------------------------------------------------------------------------
 
 const PENDING_AUTHORIZATION_KEY = "eve.runtime.pendingAuthorization";
+export const DEFAULT_AUTHORIZATION_TIMEOUT_MS = 10 * 60 * 1_000;
 
 export interface PendingAuthorizationState {
   readonly challenges: readonly AuthorizationChallenge[];
+  readonly deadline: number;
+}
+
+export function createPendingAuthorizationState(
+  challenges: readonly AuthorizationChallenge[],
+  now = Date.now(),
+): PendingAuthorizationState {
+  let deadline = now + DEFAULT_AUTHORIZATION_TIMEOUT_MS;
+  for (const entry of challenges) {
+    const expiresAt = entry.challenge.expiresAt;
+    if (expiresAt === undefined) continue;
+    const providerDeadline = Date.parse(expiresAt);
+    if (Number.isFinite(providerDeadline)) deadline = Math.min(deadline, providerDeadline);
+  }
+  return { challenges, deadline };
 }
 
 export function setPendingAuthorization(
@@ -281,6 +319,32 @@ export function getPendingAuthorization(
   const v = sessionState[PENDING_AUTHORIZATION_KEY];
   if (typeof v !== "object" || v === null) return undefined;
   return v as PendingAuthorizationState;
+}
+
+export function consumePendingAuthorization(
+  sessionState: Record<string, unknown> | undefined,
+  names: readonly string[],
+): {
+  readonly consumed: readonly AuthorizationChallenge[];
+  readonly sessionState: Record<string, unknown> | undefined;
+} {
+  const pending = getPendingAuthorization(sessionState);
+  if (pending === undefined) return { consumed: [], sessionState };
+
+  const matchedNames = new Set(names);
+  const consumed = pending.challenges.filter((entry) => matchedNames.has(entry.name));
+  if (consumed.length === 0) return { consumed, sessionState };
+
+  const remaining = pending.challenges.filter((entry) => !matchedNames.has(entry.name));
+  if (remaining.length > 0) {
+    return {
+      consumed,
+      sessionState: setPendingAuthorization(sessionState, { ...pending, challenges: remaining }),
+    };
+  }
+
+  const { [PENDING_AUTHORIZATION_KEY]: _removed, ...rest } = sessionState ?? {};
+  return { consumed, sessionState: rest };
 }
 
 export function hasPendingAuthorization(

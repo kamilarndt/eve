@@ -3,12 +3,15 @@ import { devBootPhase, type DevBootProgressReporter } from "#internal/dev-boot-p
 import { resolveApplicationRoot } from "#internal/application/paths.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import { isCodingAgentLaunch } from "#cli/agent-detection.js";
+import { resolveLocalDevelopmentServerAuth } from "#internal/nitro/host/development-server-metadata.js";
 import { eveCliBanner } from "#cli/banner.js";
 import { registerProjectCommands } from "#cli/commands/register-project-commands.js";
 import type { RunDevelopmentTuiInput } from "#cli/dev/tui/tui.js";
 import { LOG_DISPLAY_MODES, parseLogDisplayMode } from "#cli/dev/tui/log-display-mode.js";
 import { resolveTuiTitle, type DevelopmentTuiTarget } from "#cli/dev/tui/target.js";
+import { resolveTuiDisplayOptions } from "#cli/dev/tui/cli-options.js";
 import { parseDevelopmentServerUrl } from "#cli/dev/url.js";
+import { runInteractiveDevelopmentUi } from "#cli/dev/run-interactive-ui.js";
 import { startCliLiveRow } from "#cli/ui/live-row.js";
 import { createCliTheme, renderCliTaggedLine } from "#cli/ui/output.js";
 import { createLogger } from "#internal/logging.js";
@@ -17,12 +20,17 @@ import type {
   DevelopmentServerOptions,
   ProductionServerHandle,
 } from "#internal/nitro/host/types.js";
+import { createLocalDevelopmentUserCredential } from "#services/dev-client/local-user-credential.js";
+import { isLocalDevelopmentServerUrl } from "#services/dev-client/local-host.js";
+import { getVercelUserIdentity } from "#setup/vercel-project.js";
+import type { LocalDevelopmentAuthMetadata } from "#protocol/local-dev-auth.js";
 import type {
   AssistantResponseStatsMode,
   LogDisplayMode,
   TerminalPartDisplayMode,
-  TuiDisplayOptions,
 } from "#cli/dev/tui/types.js";
+
+export { resolveTuiDisplayOptions } from "#cli/dev/tui/cli-options.js";
 
 interface CliLogger {
   error(message: string): void;
@@ -53,6 +61,8 @@ interface ProductionCliOptions {
 interface CliRuntimeDependencies {
   isCodingAgentLaunch(): Promise<boolean>;
   buildHost(appRoot: string): Promise<string>;
+  createLocalDevelopmentUserCredential: typeof createLocalDevelopmentUserCredential;
+  getVercelUserIdentity: typeof getVercelUserIdentity;
   printApplicationInfo(
     logger: CliLogger,
     appRoot: string,
@@ -65,6 +75,7 @@ interface CliRuntimeDependencies {
     logger: CliLogger,
   ): Promise<void>;
   startHost(appRoot: string, options?: DevelopmentServerOptions): Promise<DevelopmentServerHandle>;
+  resolveLocalDevelopmentServerAuth: typeof resolveLocalDevelopmentServerAuth;
   startProductionHost(
     appRoot: string,
     options?: {
@@ -262,27 +273,6 @@ export function resolveDevUiMode(input: {
   }
 
   return "tui";
-}
-
-/**
- * Builds the terminal-UI display options for `eve dev`. Tools default to
- * `auto-collapsed`, reasoning to `full`, and stderr logs are visible so
- * long-running local sandbox work can report progress.
- */
-export function resolveTuiDisplayOptions(options: DevelopmentCliOptions): TuiDisplayOptions {
-  const display: TuiDisplayOptions = {
-    logs: options.logs ?? "stderr",
-    reasoning: options.reasoning ?? "full",
-    tools: options.tools ?? "auto-collapsed",
-  };
-
-  if (options.subagents !== undefined) display.subagents = options.subagents;
-  if (options.connectionAuth !== undefined) display.connectionAuth = options.connectionAuth;
-  if (options.assistantResponseStats !== undefined) {
-    display.assistantResponseStats = options.assistantResponseStats;
-  }
-  if (options.contextSize !== undefined) display.contextSize = options.contextSize;
-  return display;
 }
 
 function hasInteractiveTerminal(): boolean {
@@ -488,29 +478,39 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
         throw new InvalidArgumentError("--input requires the interactive UI.");
       }
       const { loadDevelopmentEnvironmentFiles } = await import("#cli/dev/environment.js");
-
       loadDevelopmentEnvironmentFiles(appRoot);
 
-      const runInteractiveUi = async (serverUrl: string, report?: DevBootProgressReporter) => {
+      const runInteractiveUi = async (
+        serverUrl: string,
+        input: {
+          readonly onBootProgress?: DevBootProgressReporter;
+          readonly resolveLocalAuth?: () => Promise<LocalDevelopmentAuthMetadata | undefined>;
+        } = {},
+      ): Promise<void> => {
         const runDevelopmentTui = await devBootPhase(
           "loading interactive UI",
           async () => runtime.runDevelopmentTui ?? (await loadRunDevelopmentTui()),
-          report,
+          input.onBootProgress,
         );
         const display = resolveTuiDisplayOptions(options);
         const target: DevelopmentTuiTarget =
-          remoteServerUrl === undefined
-            ? { kind: "local", serverUrl, workspaceRoot: appRoot }
-            : { kind: "remote", serverUrl, workspaceRoot: appRoot };
+          input.resolveLocalAuth === undefined
+            ? { kind: "remote", serverUrl, workspaceRoot: appRoot }
+            : { kind: "local", serverUrl, workspaceRoot: appRoot };
         const title = resolveTuiTitle({ name: options.name, target });
         if (title !== undefined) display.name = title;
-        const tuiInput: RunDevelopmentTuiInput = {
-          target,
+        const createUserCredential =
+          runtime.createLocalDevelopmentUserCredential ?? createLocalDevelopmentUserCredential;
+        await runInteractiveDevelopmentUi({
+          createUserCredential,
+          display,
           initialInput: options.input,
-          onBootProgress: report,
-          ...display,
-        };
-        await runDevelopmentTui(tuiInput);
+          onBootProgress: input.onBootProgress,
+          resolveIdentity: runtime.getVercelUserIdentity ?? getVercelUserIdentity,
+          resolveLocalAuth: input.resolveLocalAuth,
+          runDevelopmentTui,
+          target,
+        });
       };
 
       if (remoteServerUrl) {
@@ -528,7 +528,12 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
         }
 
         logger.log("");
-        await runInteractiveUi(remoteServerUrl);
+        const resolveServerAuth =
+          runtime.resolveLocalDevelopmentServerAuth ?? resolveLocalDevelopmentServerAuth;
+        const resolveLocalAuth = isLocalDevelopmentServerUrl(remoteServerUrl)
+          ? () => resolveServerAuth({ appRoot, serverUrl: remoteServerUrl })
+          : undefined;
+        await runInteractiveUi(remoteServerUrl, { resolveLocalAuth });
         return;
       }
 
@@ -589,7 +594,11 @@ function createCliProgram(logger: CliLogger, runtime: CliRuntimeOverrides): Comm
           });
         }
 
-        await runInteractiveUi(server.url, onBootProgress);
+        const activeServer = server;
+        await runInteractiveUi(activeServer.url, {
+          onBootProgress,
+          resolveLocalAuth: async () => activeServer.localAuth,
+        });
       } finally {
         buildProgress?.stop();
         await closeServer();
