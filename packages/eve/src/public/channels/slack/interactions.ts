@@ -208,11 +208,13 @@ export async function handleInteractionPost(
   const hitlAction = interaction.actions.find(
     (action) => isFreeformAction(action.actionId) || isHitlAction(action.actionId),
   );
+  let validatedResponse: { readonly requestId: string; readonly optionId: string } | undefined;
   if (hitlAction) {
     const freeform = isFreeformAction(hitlAction.actionId);
+    const response = freeform ? null : deriveHitlResponse(hitlAction);
     const requestId = freeform
       ? freeformRequestIdFromActionId(hitlAction.actionId)
-      : deriveHitlResponse(hitlAction)?.requestId;
+      : response?.requestId;
     if (
       !requestId ||
       hitlAction.blockId !==
@@ -242,21 +244,17 @@ export async function handleInteractionPost(
       });
       return ack;
     }
+    if (response) validatedResponse = response;
   }
 
   const continuationToken = slackContinuationToken(interaction.channelId, interaction.threadTs);
-  const inputResponses = interaction.actions
-    .map(deriveHitlResponse)
-    .filter((r): r is { requestId: string; optionId: string } => r !== null);
-
-  if (inputResponses.length > 0) {
-    const user = interaction.actions[0]?.user;
-    if (!user) return ack;
+  if (hitlAction && validatedResponse) {
+    const user = hitlAction.user;
 
     ctx.waitUntil(
       ctx
         .send(
-          { inputResponses },
+          { inputResponses: [validatedResponse] },
           {
             auth: buildSlackAuthContext({
               channelId: interaction.channelId,

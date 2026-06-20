@@ -1,5 +1,7 @@
+import { defaultDeliverResult, type ChannelAdapterContext } from "#channel/adapter.js";
+import { isCompiledChannel } from "#channel/compiled-channel.js";
 import type { SessionHandle } from "#channel/session.js";
-import type { SessionAuthContext } from "#channel/types.js";
+import type { DeliverPayload, SessionAuthContext } from "#channel/types.js";
 import type { CardElement } from "#compiled/chat/index.js";
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import type { ChannelSessionOps } from "#public/definitions/defineChannel.js";
@@ -45,6 +47,7 @@ import {
   POST,
   type Channel,
   type SendFn,
+  type SendPayload,
 } from "#public/definitions/defineChannel.js";
 import { markEventHandled } from "./utils.js";
 
@@ -463,6 +466,10 @@ export interface SlackChannel extends Channel<
   SlackInstrumentationMetadata
 > {}
 
+type SlackDeliveryPayload = SendPayload & {
+  readonly slackTriggeringUserId: string | null;
+};
+
 /**
  * Slack channel factory. Wires up the webhook route, mention dispatch,
  * interaction handling, and a baseline set of typing / error /
@@ -491,7 +498,7 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
   // Light weight dedup mechanism - not reliable across multiple invocations.
   const handledEvents = new Set<string>();
 
-  return defineChannel<
+  const channel = defineChannel<
     SlackChannelState,
     SlackChannelContext,
     SlackReceiveTarget,
@@ -599,6 +606,23 @@ export function slackChannel(config: SlackChannelConfig = {}): SlackChannel {
 
     events: mergedEvents,
   });
+
+  attachSlackDeliver(channel);
+  return channel;
+}
+
+function attachSlackDeliver(channel: SlackChannel): void {
+  if (!isCompiledChannel(channel)) return;
+  channel.adapter.deliver = (
+    payload: DeliverPayload,
+    ctx: ChannelAdapterContext<SlackChannelState>,
+  ) => {
+    const triggeringUserId = payload["slackTriggeringUserId"];
+    if (triggeringUserId === null || typeof triggeringUserId === "string") {
+      ctx.state.triggeringUserId = triggeringUserId;
+    }
+    return defaultDeliverResult(payload);
+  };
 }
 
 /**
@@ -785,22 +809,23 @@ async function dispatchInboundMessage(input: {
 
     const channelContext = result.context ?? [];
 
-    await input.send(
-      {
-        message: turnMessage,
-        context: [formatSlackContextBlock(inboundContext), ...channelContext],
+    const triggeringUserId = inboundContext.userId || null;
+    const payload: SlackDeliveryPayload = {
+      message: turnMessage,
+      context: [formatSlackContextBlock(inboundContext), ...channelContext],
+      slackTriggeringUserId: triggeringUserId,
+    };
+
+    await input.send(payload, {
+      auth: result.auth,
+      continuationToken: slackContinuationToken(message.channelId, message.threadTs),
+      state: {
+        channelId: message.channelId,
+        threadTs: message.threadTs,
+        teamId: message.teamId ?? null,
+        triggeringUserId,
       },
-      {
-        auth: result.auth,
-        continuationToken: slackContinuationToken(message.channelId, message.threadTs),
-        state: {
-          channelId: message.channelId,
-          threadTs: message.threadTs,
-          teamId: message.teamId ?? null,
-          triggeringUserId: inboundContext.userId || null,
-        },
-      },
-    );
+    });
   } catch (error) {
     logError(log, `${kind} delivery failed`, error, { channelId: message.channelId });
   }

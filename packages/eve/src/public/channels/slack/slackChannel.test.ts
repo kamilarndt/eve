@@ -166,9 +166,11 @@ let mentionCounter = 0;
 
 function buildMentionBody(overrides?: {
   channel?: string;
+  threadTs?: string;
   ts?: string;
   text?: string;
   teamId?: string;
+  user?: string;
 }): { body: string; channel: string; ts: string } {
   mentionCounter += 1;
   const channel = overrides?.channel ?? "C01";
@@ -179,10 +181,11 @@ function buildMentionBody(overrides?: {
     event_id: `Ev${mentionCounter}`,
     event: {
       type: "app_mention",
-      user: "U01",
+      user: overrides?.user ?? "U01",
       text: overrides?.text ?? "hello",
       channel,
       ts,
+      thread_ts: overrides?.threadTs,
       event_ts: ts,
     },
   });
@@ -979,6 +982,32 @@ describe("slackChannel() inbound mention pipeline", () => {
     expect(context[0]).toContain("<slack_context>");
   });
 
+  it("binds resumed-thread HITL prompts to the latest verified Slack actor", async () => {
+    const channel = slackChannel({
+      credentials: { botToken: "xoxb-test" },
+      onAppMention: () => ({ auth: null }),
+    });
+    const threadTs = "1700000000.000001";
+    const { body } = buildMentionBody({
+      threadTs,
+      ts: "1700000000.000002",
+      user: "U_LATEST",
+    });
+    const { send } = await firePost(channel, buildSignedRequest({ body }));
+    const [payload, options] = send.mock.calls[0]!;
+    expect(options.continuationToken).toBe(`C01:${threadTs}`);
+
+    const adapter = withState(getAdapter(channel), {
+      ...THREAD_STATE,
+      threadTs,
+      triggeringUserId: "U_FIRST",
+    });
+    const ctx = buildAdapterContext(adapter, stubAccessor());
+    await adapter.deliver!(payload, ctx);
+
+    expect(ctx.state.triggeringUserId).toBe("U_LATEST");
+  });
+
   it("does not dispatch when onAppMention resolves to null", async () => {
     const channel = slackChannel({
       credentials: { botToken: "xoxb-test" },
@@ -1317,6 +1346,40 @@ describe("slackChannel() HITL interaction pipeline", () => {
 
     expect(send).not.toHaveBeenCalled();
     expect(String(fetchMock.mock.calls[0]![0])).toBe("https://slack.com/api/chat.postEphemeral");
+  });
+
+  it("delivers only the HITL action whose responder binding was validated", async () => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+    const { send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        actions: [
+          {
+            action_id: `${HITL_ACTION_PREFIX}approval_safe:button:0`,
+            block_id: buildHitlResponderBlockId({
+              requestId: "approval_safe",
+              responderUserId: "U_OWNER",
+            }),
+            value: "approve",
+          },
+          {
+            action_id: `${HITL_ACTION_PREFIX}approval_unchecked:button:0`,
+            block_id: "untrusted-block-id",
+            value: "approve",
+          },
+        ],
+        channel: { id: "C01" },
+        message: { ts: "1700000000.000010" },
+        team: { id: "T01" },
+        type: "block_actions",
+        user: { id: "U_OWNER" },
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]![0]).toEqual({
+      inputResponses: [{ optionId: "approve", requestId: "approval_safe" }],
+    });
   });
 
   it("opens a freeform modal for the bound Slack user", async () => {
