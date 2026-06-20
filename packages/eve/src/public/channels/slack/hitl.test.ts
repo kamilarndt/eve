@@ -13,6 +13,7 @@ import {
   HITL_FREEFORM_MODAL_CALLBACK_ID,
   isFreeformAction,
   isHitlAction,
+  parseHitlResponderBinding,
   renderInputRequestBlocks,
 } from "#public/channels/slack/hitl.js";
 import { SLACK_SECTION_TEXT_MAX_LENGTH } from "#public/channels/slack/limits.js";
@@ -88,6 +89,7 @@ describe("renderInputRequestBlocks", () => {
           { id: "deny", label: "Deny", style: "danger" },
         ],
       }),
+      "U01",
     );
 
     expect(blocks).toHaveLength(2);
@@ -98,6 +100,7 @@ describe("renderInputRequestBlocks", () => {
       elements: Array<Record<string, unknown>>;
     };
     expect(actions.type).toBe("actions");
+    expect(actions).toMatchObject({ block_id: "eve_input_responder:U01:call_abc123" });
     expect(actions.elements).toHaveLength(2);
     const actionIds = actions.elements.map((element) => element.action_id);
     expect(new Set(actionIds).size).toBe(actionIds.length);
@@ -124,6 +127,7 @@ describe("renderInputRequestBlocks", () => {
           { id: "weekly", label: "Weekly", description: "Best for low-volume reports" },
         ],
       }),
+      "U01",
     );
 
     const actions = blocks[1] as {
@@ -156,6 +160,7 @@ describe("renderInputRequestBlocks", () => {
         display: "select",
         options,
       }),
+      "U01",
     );
 
     const actions = blocks[1] as {
@@ -172,7 +177,10 @@ describe("renderInputRequestBlocks", () => {
   });
 
   it("renders a 'Type your answer' freeform button when the request has no options", () => {
-    const blocks = renderInputRequestBlocks(makeRequest({ prompt: "What's the date range?" }));
+    const blocks = renderInputRequestBlocks(
+      makeRequest({ prompt: "What's the date range?" }),
+      "U01",
+    );
 
     expect(blocks).toHaveLength(2);
     const actions = blocks[1] as { type: string; elements: Array<Record<string, unknown>> };
@@ -194,6 +202,7 @@ describe("renderInputRequestBlocks", () => {
         allowFreeform: true,
         options: [{ id: "yes", label: "Yes" }],
       }),
+      "U01",
     );
     // current behavior: options take precedence; freeform button is the
     // fallback when no options are supplied. This documents the
@@ -212,7 +221,7 @@ describe("renderInputRequestBlocks", () => {
       options: [{ id: "yes_please", label: "Yes please" }],
     });
 
-    const blocks = renderInputRequestBlocks(request);
+    const blocks = renderInputRequestBlocks(request, "U01");
     const button = (blocks[1] as { elements: Array<{ action_id: string; value: string }> })
       .elements[0]!;
 
@@ -238,7 +247,7 @@ describe("renderInputRequestBlocks", () => {
 
   it("truncates section-block prompts past the Slack 3000-char cap", () => {
     const longPrompt = "x".repeat(SLACK_SECTION_TEXT_MAX_LENGTH + 500);
-    const blocks = renderInputRequestBlocks(makeRequest({ prompt: longPrompt }));
+    const blocks = renderInputRequestBlocks(makeRequest({ prompt: longPrompt }), "U01");
     const promptBlock = blocks[0] as { text: { text: string } };
     expect(promptBlock.text.text.length).toBeLessThanOrEqual(SLACK_SECTION_TEXT_MAX_LENGTH);
     expect(promptBlock.text.text.endsWith("...")).toBe(true);
@@ -251,7 +260,7 @@ describe("renderInputRequestBlocks", () => {
       options: [{ id: "weekly_report", label: "Weekly report" }],
     });
 
-    const blocks = renderInputRequestBlocks(request);
+    const blocks = renderInputRequestBlocks(request, "U01");
     const widget = (
       blocks[1] as { elements: Array<{ action_id: string; options: Array<{ value: string }> }> }
     ).elements[0]!;
@@ -267,6 +276,22 @@ describe("renderInputRequestBlocks", () => {
   });
 });
 
+describe("parseHitlResponderBinding", () => {
+  it("decodes the responder and preserves colons in the request id", () => {
+    expect(parseHitlResponderBinding("eve_input_responder:U01:call_abc:button:0")).toEqual({
+      requestId: "call_abc:button:0",
+      responderUserId: "U01",
+    });
+  });
+
+  it("rejects missing and malformed bindings", () => {
+    expect(parseHitlResponderBinding(undefined)).toBeNull();
+    expect(parseHitlResponderBinding("other:U01:call_abc")).toBeNull();
+    expect(parseHitlResponderBinding("eve_input_responder::call_abc")).toBeNull();
+    expect(parseHitlResponderBinding("eve_input_responder:U01:")).toBeNull();
+  });
+});
+
 describe("buildFreeformModalView", () => {
   it("emits a modal with the canonical callback_id and the prompt as a header block", () => {
     const view = buildFreeformModalView({
@@ -276,6 +301,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
+        responderUserId: "U01",
       },
       prompt: "What's the date range?",
     });
@@ -303,6 +329,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
+        responderUserId: "U01",
       },
       prompt: longPrompt,
     });
@@ -320,6 +347,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
+        responderUserId: "U01",
       },
     });
     const blocks = view.blocks as Array<Record<string, unknown>>;

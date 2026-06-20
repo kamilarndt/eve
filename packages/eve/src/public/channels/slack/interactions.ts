@@ -34,6 +34,7 @@ import {
   HITL_FREEFORM_MODAL_CALLBACK_ID,
   isFreeformAction,
   isHitlAction,
+  parseHitlResponderBinding,
   type HitlFreeformModalMetadata,
 } from "#public/channels/slack/hitl.js";
 import type {
@@ -46,6 +47,7 @@ import type {
 import type { SendFn } from "#public/definitions/defineChannel.js";
 
 const log = createLogger("slack.interactions");
+const UNAUTHORIZED_HITL_RESPONSE = "Only the person who requested this action can respond to it.";
 
 /**
  * Decoded view of a Slack `block_actions` payload. Returned by
@@ -198,9 +200,30 @@ export async function handleInteractionPost(
   const interaction = parseBlockActionsPayload(payload);
   if (!interaction) return ack;
 
+  const unauthorizedAction = interaction.actions
+    .filter((action) => isHitlAction(action.actionId) || isFreeformAction(action.actionId))
+    .find((action) => !isAuthorizedHitlResponder(action));
+  if (unauthorizedAction) {
+    queueUnauthorizedHitlNotice({
+      channelId: interaction.channelId,
+      ctx,
+      deps,
+      teamId: interaction.teamId,
+      threadTs: interaction.threadTs,
+      userId: unauthorizedAction.user.id,
+    });
+    return ack;
+  }
+
   const freeformAction = interaction.actions.find((a) => isFreeformAction(a.actionId));
   if (freeformAction) {
-    await openFreeformModal({ payload, interaction, freeformAction, deps });
+    await openFreeformModal({
+      payload,
+      interaction,
+      freeformAction,
+      responderUserId: freeformAction.user.id,
+      deps,
+    });
     return ack;
   }
 
@@ -274,6 +297,7 @@ async function openFreeformModal(input: {
   readonly payload: Record<string, unknown>;
   readonly interaction: ParsedBlockActionsPayload;
   readonly freeformAction: SlackInteractionAction;
+  readonly responderUserId: string;
   readonly deps: InteractionHandlerDeps;
 }): Promise<void> {
   const triggerId = (input.payload as { trigger_id?: unknown }).trigger_id;
@@ -304,6 +328,7 @@ async function openFreeformModal(input: {
     threadTs: input.interaction.threadTs,
     messageTs,
     requestId,
+    responderUserId: input.responderUserId,
   };
 
   const promptText = readPromptTextFromBlocks(input.interaction.messageBlocks);
@@ -329,7 +354,7 @@ async function handleViewSubmission(
     send: SendFn<SlackChannelState>;
     waitUntil: (task: Promise<unknown>) => void;
   },
-  _deps: InteractionHandlerDeps,
+  deps: InteractionHandlerDeps,
 ): Promise<Response> {
   const ack = new Response("ok", { status: 200 });
   const view = payload.view as
@@ -355,6 +380,7 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
+    !metadata.responderUserId ||
     !metadata.threadTs
   ) {
     return ack;
@@ -371,6 +397,18 @@ async function handleViewSubmission(
   const user = payload.user as { id: string; team_id?: string; username?: string; name?: string };
   const triggeringUserId = user.id;
   const teamId = user.team_id ?? team?.id ?? null;
+
+  if (triggeringUserId !== metadata.responderUserId) {
+    queueUnauthorizedHitlNotice({
+      channelId: metadata.channelId,
+      ctx,
+      deps,
+      teamId: teamId ?? undefined,
+      threadTs: metadata.threadTs,
+      userId: triggeringUserId,
+    });
+    return ack;
+  }
 
   ctx.waitUntil(
     ctx
@@ -404,13 +442,44 @@ async function handleViewSubmission(
       messageTs: metadata.messageTs,
       answerLabel: text,
       userId: triggeringUserId ?? undefined,
-      deps: _deps,
+      deps,
     }).catch((error: unknown) => {
       log.error("freeform answered-card update failed", { error });
     }),
   );
 
   return ack;
+}
+
+function isAuthorizedHitlResponder(action: SlackInteractionAction): boolean {
+  const requestId = isFreeformAction(action.actionId)
+    ? freeformRequestIdFromActionId(action.actionId)
+    : deriveHitlResponse(action)?.requestId;
+  if (!requestId) return false;
+
+  const binding = parseHitlResponderBinding(action.blockId);
+  return binding?.requestId === requestId && binding.responderUserId === action.user.id;
+}
+
+function queueUnauthorizedHitlNotice(input: {
+  readonly channelId: string;
+  readonly ctx: { waitUntil: (task: Promise<unknown>) => void };
+  readonly deps: InteractionHandlerDeps;
+  readonly teamId: string | undefined;
+  readonly threadTs: string;
+  readonly userId: string;
+}): void {
+  const { thread } = buildSlackBinding({
+    botToken: input.deps.config.credentials?.botToken,
+    channelId: input.channelId,
+    teamId: input.teamId,
+    threadTs: input.threadTs,
+  });
+  input.ctx.waitUntil(
+    thread.postEphemeral(input.userId, UNAUTHORIZED_HITL_RESPONSE).catch((error: unknown) => {
+      log.error("unauthorized HITL notice failed", { error });
+    }),
+  );
 }
 
 async function updateAnsweredHitlCard(

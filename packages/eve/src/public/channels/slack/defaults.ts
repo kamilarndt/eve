@@ -94,11 +94,17 @@ function firstNonEmptyLine(text: string): string | undefined {
  * requests. Override by declaring `events["input.requested"]`.
  */
 export function defaultInputRequestedHandler(): NonNullable<SlackChannelEvents["input.requested"]> {
-  return async (data, channel, _ctx) => {
+  return async (data, channel, ctx) => {
     if (data.requests.length === 0) return;
+    const responderUserId = ctx.session.auth.current?.attributes["user_id"];
+    if (typeof responderUserId !== "string" || responderUserId.length === 0) {
+      throw new Error("Slack HITL requires an authenticated caller with a user_id attribute.");
+    }
     const promptText = truncateMessageText(data.requests.map((r) => r.prompt).join("\n"));
     await channel.thread.post({
-      blocks: data.requests.flatMap(renderInputRequestBlocks),
+      blocks: data.requests.flatMap((request) =>
+        renderInputRequestBlocks(request, responderUserId),
+      ),
       text: promptText,
     });
   };

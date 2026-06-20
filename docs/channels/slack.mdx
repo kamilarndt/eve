@@ -103,7 +103,7 @@ export default slackChannel({
 
 ### Human-in-the-loop (HITL)
 
-HITL renders as Slack buttons and selects. When the user responds, the parked session (paused awaiting input) resumes.
+HITL renders as Slack buttons and selects. Each prompt is bound to the authenticated Slack user who caused it. A click from another user is rejected privately and does not resume the parked session. If you override inbound auth while keeping the default `input.requested` handler, preserve the verified Slack user id as the `user_id` auth attribute.
 
 Authorization prompts are private. A sign-in challenge (OAuth URL, device code) is a credential. Anyone who completes it binds their identity to the session's connection. The default `authorization.required` handler delivers the challenge ephemerally to the triggering user, device code included, and posts a public link-free status only when it has no user to target. The handler receives a private-delivery context with `postEphemeral`, `postDirectMessage` (needs the `im:write` scope), and `state`. There is, intentionally, no public `post` and no raw API access.
 
