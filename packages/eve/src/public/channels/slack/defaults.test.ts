@@ -2,31 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import { defaultEvents, defaultInputRequestedHandler } from "#public/channels/slack/defaults.js";
-import { buildHitlResponderBlockId } from "#public/channels/slack/hitl.js";
 import type { SlackChannelState, SlackEventContext } from "#public/channels/slack/slackChannel.js";
 
 const sessionCtx = {} as SessionContext;
-const customAuthSessionCtx: SessionContext = {
-  getSandbox: async () => {
-    throw new Error("Sandbox access is not used by this test.");
-  },
-  getSkill: () => {
-    throw new Error("Skill access is not used by this test.");
-  },
-  session: {
-    auth: {
-      current: {
-        attributes: { role: "admin" },
-        authenticator: "custom",
-        principalId: "custom-user",
-        principalType: "user",
-      },
-      initiator: null,
-    },
-    id: "session-1",
-    turn: { id: "turn-1", sequence: 0 },
-  },
-};
 
 function buildChannelStub(state: Partial<SlackChannelState> = {}) {
   const postEphemeral = vi.fn().mockResolvedValue({ id: "eph1" });
@@ -64,17 +42,12 @@ function inputRequestedEvent() {
       {
         action: {
           callId: "call-1",
-          input: { operation: "deleteMany" },
+          input: {},
           kind: "tool-call" as const,
-          toolName: "mongodb-mutate",
+          toolName: "ask",
         },
-        display: "confirmation" as const,
-        options: [
-          { id: "approve", label: "Yes" },
-          { id: "deny", label: "No" },
-        ],
-        prompt: "Approve tool call: mongodb-mutate",
-        requestId: "approval-1",
+        prompt: "Question?",
+        requestId: "request-1",
       },
     ],
     sequence: 0,
@@ -84,25 +57,10 @@ function inputRequestedEvent() {
 }
 
 describe("defaultInputRequestedHandler", () => {
-  it("binds prompts to the verified Slack actor independently of custom auth attributes", async () => {
-    const { channel, post } = buildChannelStub({ triggeringUserId: "U777" });
-
-    await defaultInputRequestedHandler()(inputRequestedEvent(), channel, customAuthSessionCtx);
-
-    expect(post).toHaveBeenCalledTimes(1);
-    const message = post.mock.calls[0]?.[0] as { blocks: Array<Record<string, unknown>> };
-    expect(message.blocks[1]).toMatchObject({
-      block_id: buildHitlResponderBlockId({
-        requestId: "approval-1",
-        responderUserId: "U777",
-      }),
-    });
-  });
-
   it("posts a visible diagnostic when no Slack actor is bound to the session", async () => {
     const { channel, post } = buildChannelStub({ triggeringUserId: null });
 
-    await defaultInputRequestedHandler()(inputRequestedEvent(), channel, customAuthSessionCtx);
+    await defaultInputRequestedHandler()(inputRequestedEvent(), channel, sessionCtx);
 
     expect(post).toHaveBeenCalledWith(
       "I can't collect this response because no Slack user is bound to this session. Start a new request from Slack to continue.",

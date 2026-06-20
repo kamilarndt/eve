@@ -70,7 +70,6 @@ export const HITL_FREEFORM_MODAL_ACTION_ID = "eve_freeform_text";
  */
 const RADIO_SELECT_OPTION_LIMIT = 6;
 const BUTTON_ACTION_ID_RE = /^(?<requestId>.+):button:\d+$/u;
-const HITL_BINDING_DIGEST_RE = /^[\da-f]{64}$/u;
 
 /**
  * Subset of one Slack interactivity action the HITL decoder reads.
@@ -94,77 +93,19 @@ interface DerivedHitlResponse {
   readonly optionId: string;
 }
 
-/** Fixed-size responder identity decoded from a framework-rendered HITL block id. */
-export interface HitlResponderBinding {
-  readonly requestIdDigest: string;
-  readonly responderUserIdDigest: string;
-}
-
-function hitlBindingDigest(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
-function isHitlResponderBinding(value: unknown): value is HitlResponderBinding {
-  if (!value || typeof value !== "object") return false;
-  const binding = value as Partial<HitlResponderBinding>;
-  return (
-    typeof binding.requestIdDigest === "string" &&
-    HITL_BINDING_DIGEST_RE.test(binding.requestIdDigest) &&
-    typeof binding.responderUserIdDigest === "string" &&
-    HITL_BINDING_DIGEST_RE.test(binding.responderUserIdDigest)
-  );
-}
-
 /**
  * Builds the bounded Slack block id that binds one request to one responder.
- * Hashing both values keeps the wire value below Slack's 255-character limit
+ * Hashing the pair keeps the wire value below Slack's 255-character limit
  * regardless of request-id length.
  */
 export function buildHitlResponderBlockId(input: {
   readonly requestId: string;
   readonly responderUserId: string;
 }): string {
-  return `${HITL_RESPONDER_BLOCK_PREFIX}${hitlBindingDigest(input.responderUserId)}:${hitlBindingDigest(input.requestId)}`;
-}
-
-/**
- * Decodes the responder binding carried by a framework-rendered actions
- * block. Returns `null` for absent or malformed bindings so the interaction
- * boundary can fail closed.
- */
-export function parseHitlResponderBinding(
-  blockId: string | undefined,
-): HitlResponderBinding | null {
-  if (!blockId?.startsWith(HITL_RESPONDER_BLOCK_PREFIX)) return null;
-
-  const encoded = blockId.slice(HITL_RESPONDER_BLOCK_PREFIX.length);
-  const [responderUserIdDigest, requestIdDigest, extra] = encoded.split(":");
-  if (
-    extra !== undefined ||
-    typeof responderUserIdDigest !== "string" ||
-    !HITL_BINDING_DIGEST_RE.test(responderUserIdDigest) ||
-    typeof requestIdDigest !== "string" ||
-    !HITL_BINDING_DIGEST_RE.test(requestIdDigest)
-  ) {
-    return null;
-  }
-
-  return {
-    requestIdDigest,
-    responderUserIdDigest,
-  };
-}
-
-/** Returns whether a decoded binding matches the supplied request and Slack user. */
-export function matchesHitlResponderBinding(
-  binding: unknown,
-  input: { readonly requestId: string; readonly responderUserId: string },
-): binding is HitlResponderBinding {
-  if (!isHitlResponderBinding(binding)) return false;
-  return (
-    binding.requestIdDigest === hitlBindingDigest(input.requestId) &&
-    binding.responderUserIdDigest === hitlBindingDigest(input.responderUserId)
-  );
+  const digest = createHash("sha256")
+    .update(JSON.stringify([input.responderUserId, input.requestId]))
+    .digest("base64url");
+  return `${HITL_RESPONDER_BLOCK_PREFIX}${digest}`;
 }
 
 /**
@@ -292,7 +233,7 @@ export interface HitlFreeformModalMetadata {
   readonly threadTs: string;
   readonly messageTs: string;
   readonly requestId: string;
-  readonly responderBinding: HitlResponderBinding;
+  readonly responderBlockId: string;
 }
 
 /**

@@ -25,6 +25,7 @@ import {
 } from "#public/channels/slack/api.js";
 import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
 import {
+  buildHitlResponderBlockId,
   buildAnsweredBlocks,
   buildFreeformModalView,
   deriveHitlResponse,
@@ -32,12 +33,10 @@ import {
   HITL_FREEFORM_MODAL_ACTION_ID,
   HITL_FREEFORM_MODAL_BLOCK_ID,
   HITL_FREEFORM_MODAL_CALLBACK_ID,
+  HITL_RESPONDER_BLOCK_PREFIX,
   isFreeformAction,
   isHitlAction,
-  matchesHitlResponderBinding,
-  parseHitlResponderBinding,
   type HitlFreeformModalMetadata,
-  type HitlResponderBinding,
 } from "#public/channels/slack/hitl.js";
 import type {
   SlackChannelConfig,
@@ -70,20 +69,6 @@ interface ParsedBlockActionsPayload {
   readonly messageBlocks: readonly unknown[];
 }
 
-interface AuthorizedHitlAction {
-  readonly action: SlackInteractionAction;
-  readonly binding: HitlResponderBinding;
-  readonly kind: "authorized";
-  readonly requestId: string;
-}
-
-interface RejectedHitlAction {
-  readonly action: SlackInteractionAction;
-  readonly kind: "rejected";
-  readonly reason: HitlRejectionReason;
-}
-
-type HitlActionAuthorization = AuthorizedHitlAction | RejectedHitlAction;
 type HitlRejectionReason = "unauthorized" | "unbound";
 
 /**
@@ -220,37 +205,43 @@ export async function handleInteractionPost(
   const interaction = parseBlockActionsPayload(payload);
   if (!interaction) return ack;
 
-  const hitlAuthorizations = interaction.actions
-    .filter((action) => isHitlAction(action.actionId) || isFreeformAction(action.actionId))
-    .map(authorizeHitlAction);
-  const rejectedAction = hitlAuthorizations.find(
-    (authorization) => authorization.kind === "rejected",
+  const hitlAction = interaction.actions.find(
+    (action) => isFreeformAction(action.actionId) || isHitlAction(action.actionId),
   );
-  if (rejectedAction) {
-    queueHitlRejectionNotice({
-      channelId: interaction.channelId,
-      ctx,
-      deps,
-      reason: rejectedAction.reason,
-      teamId: interaction.teamId,
-      threadTs: interaction.threadTs,
-      userId: rejectedAction.action.user.id,
-    });
-    return ack;
-  }
-
-  const freeformAuthorization = hitlAuthorizations.find(
-    (authorization) =>
-      authorization.kind === "authorized" && isFreeformAction(authorization.action.actionId),
-  );
-  if (freeformAuthorization?.kind === "authorized") {
-    await openFreeformModal({
-      payload,
-      interaction,
-      authorization: freeformAuthorization,
-      deps,
-    });
-    return ack;
+  if (hitlAction) {
+    const freeform = isFreeformAction(hitlAction.actionId);
+    const requestId = freeform
+      ? freeformRequestIdFromActionId(hitlAction.actionId)
+      : deriveHitlResponse(hitlAction)?.requestId;
+    if (
+      !requestId ||
+      hitlAction.blockId !==
+        buildHitlResponderBlockId({ requestId, responderUserId: hitlAction.user.id })
+    ) {
+      queueHitlRejectionNotice({
+        channelId: interaction.channelId,
+        ctx,
+        deps,
+        reason: hitlAction.blockId?.startsWith(HITL_RESPONDER_BLOCK_PREFIX)
+          ? "unauthorized"
+          : "unbound",
+        teamId: interaction.teamId,
+        threadTs: interaction.threadTs,
+        userId: hitlAction.user.id,
+      });
+      return ack;
+    }
+    if (freeform) {
+      await openFreeformModal({
+        payload,
+        interaction,
+        freeformAction: hitlAction,
+        requestId,
+        responderBlockId: hitlAction.blockId,
+        deps,
+      });
+      return ack;
+    }
   }
 
   const continuationToken = slackContinuationToken(interaction.channelId, interaction.threadTs);
@@ -322,7 +313,9 @@ export async function handleInteractionPost(
 async function openFreeformModal(input: {
   readonly payload: Record<string, unknown>;
   readonly interaction: ParsedBlockActionsPayload;
-  readonly authorization: AuthorizedHitlAction;
+  readonly freeformAction: SlackInteractionAction;
+  readonly requestId: string;
+  readonly responderBlockId: string;
   readonly deps: InteractionHandlerDeps;
 }): Promise<void> {
   const triggerId = (input.payload as { trigger_id?: unknown }).trigger_id;
@@ -331,7 +324,7 @@ async function openFreeformModal(input: {
     return;
   }
 
-  const messageTs = input.authorization.action.messageTs;
+  const messageTs = input.freeformAction.messageTs;
   if (!messageTs) {
     log.warn("freeform button click missing messageTs");
     return;
@@ -345,8 +338,8 @@ async function openFreeformModal(input: {
     channelId: input.interaction.channelId,
     threadTs: input.interaction.threadTs,
     messageTs,
-    requestId: input.authorization.requestId,
-    responderBinding: input.authorization.binding,
+    requestId: input.requestId,
+    responderBlockId: input.responderBlockId,
   };
 
   const promptText = readPromptTextFromBlocks(input.interaction.messageBlocks);
@@ -398,7 +391,7 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
-    !metadata.responderBinding ||
+    !metadata.responderBlockId ||
     !metadata.threadTs
   ) {
     return ack;
@@ -417,7 +410,8 @@ async function handleViewSubmission(
   const teamId = user.team_id ?? team?.id ?? null;
 
   if (
-    !matchesHitlResponderBinding(metadata.responderBinding, {
+    metadata.responderBlockId !==
+    buildHitlResponderBlockId({
       requestId: metadata.requestId,
       responderUserId: triggeringUserId,
     })
@@ -472,20 +466,6 @@ async function handleViewSubmission(
   );
 
   return ack;
-}
-
-function authorizeHitlAction(action: SlackInteractionAction): HitlActionAuthorization {
-  const requestId = isFreeformAction(action.actionId)
-    ? freeformRequestIdFromActionId(action.actionId)
-    : deriveHitlResponse(action)?.requestId;
-  if (!requestId) return { action, kind: "rejected", reason: "unauthorized" };
-
-  const binding = parseHitlResponderBinding(action.blockId);
-  if (!binding) return { action, kind: "rejected", reason: "unbound" };
-  if (!matchesHitlResponderBinding(binding, { requestId, responderUserId: action.user.id })) {
-    return { action, kind: "rejected", reason: "unauthorized" };
-  }
-  return { action, binding, kind: "authorized", requestId };
 }
 
 function queueHitlRejectionNotice(input: {

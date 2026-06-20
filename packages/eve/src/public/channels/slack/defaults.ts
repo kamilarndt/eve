@@ -100,10 +100,6 @@ export function defaultInputRequestedHandler(): NonNullable<SlackChannelEvents["
     if (data.requests.length === 0) return;
     const responderUserId = channel.state.triggeringUserId;
     if (typeof responderUserId !== "string" || responderUserId.length === 0) {
-      log.error("Slack HITL request has no triggering user", {
-        channelId: channel.slack.channelId,
-        threadTs: channel.slack.threadTs,
-      });
       await channel.thread.post(UNBOUND_HITL_RESPONSE);
       return;
     }

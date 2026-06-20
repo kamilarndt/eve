@@ -14,8 +14,6 @@ import {
   HITL_FREEFORM_MODAL_CALLBACK_ID,
   isFreeformAction,
   isHitlAction,
-  matchesHitlResponderBinding,
-  parseHitlResponderBinding,
   renderInputRequestBlocks,
 } from "#public/channels/slack/hitl.js";
 import { SLACK_SECTION_TEXT_MAX_LENGTH } from "#public/channels/slack/limits.js";
@@ -29,12 +27,8 @@ function makeRequest(overrides: Partial<InputRequest>): InputRequest {
   };
 }
 
-function makeResponderBinding(responderUserId: string, requestId: string) {
-  const binding = parseHitlResponderBinding(
-    buildHitlResponderBlockId({ requestId, responderUserId }),
-  );
-  if (!binding) throw new Error("Expected a valid responder binding.");
-  return binding;
+function makeResponderBlockId(responderUserId: string, requestId: string): string {
+  return buildHitlResponderBlockId({ requestId, responderUserId });
 }
 
 describe("deriveHitlResponse", () => {
@@ -92,25 +86,8 @@ describe("isHitlAction", () => {
 
 describe("renderInputRequestBlocks", () => {
   it("keeps responder block ids bounded and unique for long request ids", () => {
-    const firstRequest = "a".repeat(230);
-    const secondRequest = `${"a".repeat(229)}b`;
-    const firstBlocks = renderInputRequestBlocks(
-      makeRequest({
-        requestId: firstRequest,
-        options: [{ id: "approve", label: "Approve" }],
-      }),
-      "U0123456789",
-    );
-    const secondBlocks = renderInputRequestBlocks(
-      makeRequest({
-        requestId: secondRequest,
-        options: [{ id: "approve", label: "Approve" }],
-      }),
-      "U0123456789",
-    );
-
-    const firstBlockId = (firstBlocks[1] as { block_id: string }).block_id;
-    const secondBlockId = (secondBlocks[1] as { block_id: string }).block_id;
+    const firstBlockId = makeResponderBlockId("U0123456789", "a".repeat(230));
+    const secondBlockId = makeResponderBlockId("U0123456789", `${"a".repeat(229)}b`);
     expect(firstBlockId.length).toBeLessThanOrEqual(255);
     expect(secondBlockId).not.toBe(firstBlockId);
   });
@@ -315,41 +292,6 @@ describe("renderInputRequestBlocks", () => {
   });
 });
 
-describe("parseHitlResponderBinding", () => {
-  it("matches only the responder and request used to build the binding", () => {
-    const binding = parseHitlResponderBinding(
-      buildHitlResponderBlockId({ requestId: "call_abc:button:0", responderUserId: "U01" }),
-    );
-
-    expect(
-      matchesHitlResponderBinding(binding, {
-        requestId: "call_abc:button:0",
-        responderUserId: "U01",
-      }),
-    ).toBe(true);
-    expect(
-      matchesHitlResponderBinding(binding, {
-        requestId: "call_abc:button:0",
-        responderUserId: "U02",
-      }),
-    ).toBe(false);
-    expect(
-      matchesHitlResponderBinding(binding, {
-        requestId: "call_other",
-        responderUserId: "U01",
-      }),
-    ).toBe(false);
-  });
-
-  it("rejects missing and malformed bindings", () => {
-    expect(parseHitlResponderBinding(undefined)).toBeNull();
-    expect(parseHitlResponderBinding("other:U01:call_abc")).toBeNull();
-    expect(parseHitlResponderBinding("eve_input_responder::call_abc")).toBeNull();
-    expect(parseHitlResponderBinding("eve_input_responder:U01:")).toBeNull();
-    expect(parseHitlResponderBinding("eve_input_responder:abc:def:ghi")).toBeNull();
-  });
-});
-
 describe("buildFreeformModalView", () => {
   it("emits a modal with the canonical callback_id and the prompt as a header block", () => {
     const view = buildFreeformModalView({
@@ -359,7 +301,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
-        responderBinding: makeResponderBinding("U01", "call_abc"),
+        responderBlockId: makeResponderBlockId("U01", "call_abc"),
       },
       prompt: "What's the date range?",
     });
@@ -387,7 +329,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
-        responderBinding: makeResponderBinding("U01", "call_abc"),
+        responderBlockId: makeResponderBlockId("U01", "call_abc"),
       },
       prompt: longPrompt,
     });
@@ -405,7 +347,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
-        responderBinding: makeResponderBinding("U01", "call_abc"),
+        responderBlockId: makeResponderBlockId("U01", "call_abc"),
       },
     });
     const blocks = view.blocks as Array<Record<string, unknown>>;
