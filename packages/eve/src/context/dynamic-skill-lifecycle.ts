@@ -40,7 +40,8 @@ function qualifyDynamicSkillNames(
 
   if (keys.length === 0) return result;
 
-  if (isSingle || keys.length === 1) {
+  // A single-entry map still qualifies as `slug__key`; only isSingle collapses.
+  if (isSingle) {
     result.push({ name: slug, entryKey: keys[0]!, entry: entries[keys[0]!]! });
     return result;
   }
