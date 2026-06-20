@@ -78,28 +78,8 @@ function callEvent(
   adapter: ChannelAdapter,
   event: HandleMessageStreamEvent,
   ctx: any,
-  currentUserId?: string,
 ): Promise<HandleMessageStreamEvent> {
-  const alsContext =
-    currentUserId === undefined ? stubAlsContext : slackUserAlsContext(currentUserId);
-  return contextStorage.run(alsContext, () => callAdapterEventHandler(adapter, event, ctx));
-}
-
-function slackUserAlsContext(userId: string): ContextContainer {
-  const ctx = new ContextContainer();
-  const auth = {
-    attributes: { team_id: "T01", user_id: userId },
-    authenticator: "slack-webhook",
-    issuer: "slack:T01",
-    principalId: `slack:T01:${userId}`,
-    principalType: "user",
-  };
-  ctx.setVirtualContext(SessionKey, {
-    sessionId: "test-session",
-    auth: { current: auth, initiator: auth },
-    turn: { id: "test-turn", sequence: 0 },
-  });
-  return ctx;
+  return contextStorage.run(stubAlsContext, () => callAdapterEventHandler(adapter, event, ctx));
 }
 
 /**
@@ -144,6 +124,7 @@ const THREAD_STATE = {
   channelId: "C01",
   threadTs: "1700000000.000001",
   teamId: "T01",
+  triggeringUserId: "U_REQUESTER",
 };
 
 const SIGNING_SECRET = "test-signing-secret";
@@ -449,7 +430,6 @@ describe("slackChannel() default event handlers", () => {
         turnId: "t1",
       }),
       ctx,
-      "U_REQUESTER",
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -508,7 +488,6 @@ describe("slackChannel() default event handlers", () => {
         turnId: "t1",
       }),
       ctx,
-      "U_REQUESTER",
     );
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
