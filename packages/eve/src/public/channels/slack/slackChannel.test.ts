@@ -11,11 +11,13 @@ import { SessionKey } from "#context/keys.js";
 import type { HandleMessageStreamEvent } from "#protocol/message.js";
 import { decodeSlackApiBody } from "#public/channels/slack/api-encoding.js";
 import {
+  buildHitlResponderBlockId,
   HITL_ACTION_PREFIX,
   HITL_FREEFORM_ACTION_PREFIX,
   HITL_FREEFORM_MODAL_ACTION_ID,
   HITL_FREEFORM_MODAL_BLOCK_ID,
   HITL_FREEFORM_MODAL_CALLBACK_ID,
+  parseHitlResponderBinding,
 } from "#public/channels/slack/hitl.js";
 import {
   SLACK_MESSAGE_TEXT_MAX_LENGTH,
@@ -51,6 +53,14 @@ function parseSlackRequestBody(init: RequestInit | undefined): Record<string, un
   if (!init?.body) return {};
   const contentType = init.headers ? new Headers(init.headers).get("content-type") : null;
   return decodeSlackApiBody(init.body, contentType) as Record<string, unknown>;
+}
+
+function makeResponderBinding(responderUserId: string, requestId: string) {
+  const binding = parseHitlResponderBinding(
+    buildHitlResponderBlockId({ requestId, responderUserId }),
+  );
+  if (!binding) throw new Error("Expected a valid responder binding.");
+  return binding;
 }
 
 function withState(
@@ -171,13 +181,19 @@ function buildHitlBlockActionPayload(input: {
     input.kind === "button"
       ? {
           action_id: `${HITL_ACTION_PREFIX}${requestId}:button:0`,
-          block_id: `eve_input_responder:${input.responderUserId}:${requestId}`,
+          block_id: buildHitlResponderBlockId({
+            requestId,
+            responderUserId: input.responderUserId,
+          }),
           text: { type: "plain_text", text: "Approve" },
           value: "approve",
         }
       : {
           action_id: `${HITL_FREEFORM_ACTION_PREFIX}${requestId}`,
-          block_id: `eve_input_responder:${input.responderUserId}:${requestId}`,
+          block_id: buildHitlResponderBlockId({
+            requestId,
+            responderUserId: input.responderUserId,
+          }),
           text: { type: "plain_text", text: "Type your answer" },
           value: requestId,
         };
@@ -223,7 +239,7 @@ function buildFreeformSubmissionPayload(input: {
         continuationToken: "C01:1700000000.000001",
         messageTs: "1700000000.000010",
         requestId: "call_abc123",
-        responderUserId: input.responderUserId,
+        responderBinding: makeResponderBinding(input.responderUserId, "call_abc123"),
         threadTs: "1700000000.000001",
       }),
       state: {
@@ -449,7 +465,10 @@ describe("slackChannel() default event handlers", () => {
 
     const actions = body.blocks.find((block) => Array.isArray(block.elements));
     expect(actions).toMatchObject({
-      block_id: "eve_input_responder:U_REQUESTER:approval_abc123",
+      block_id: buildHitlResponderBlockId({
+        requestId: "approval_abc123",
+        responderUserId: "U_REQUESTER",
+      }),
     });
     const actionIds = actions?.elements?.map((element) => element.action_id) ?? [];
     expect(actionIds).toEqual([
@@ -1317,7 +1336,10 @@ describe("slackChannel() HITL interaction pipeline", () => {
         actions: [
           {
             action_id: `${HITL_ACTION_PREFIX}approval_abc123:button:0`,
-            block_id: "eve_input_responder:U_APPROVER:approval_abc123",
+            block_id: buildHitlResponderBlockId({
+              requestId: "approval_abc123",
+              responderUserId: "U_APPROVER",
+            }),
             text: { type: "plain_text", text: "Approve" },
             value: "approve",
           },
@@ -1420,10 +1442,12 @@ describe("slackChannel() HITL interaction pipeline", () => {
     const requestBody = JSON.parse(String((init as RequestInit).body)) as {
       view: { private_metadata: string };
     };
-    expect(JSON.parse(requestBody.view.private_metadata)).toMatchObject({
+    const metadata = JSON.parse(requestBody.view.private_metadata) as Record<string, unknown>;
+    expect(metadata).toMatchObject({
       requestId: "call_abc123",
-      responderUserId: "U_OWNER",
+      responderBinding: makeResponderBinding("U_OWNER", "call_abc123"),
     });
+    expect(metadata).not.toHaveProperty("responderUserId");
   });
 
   it("resumes freeform modal answers with the submitting Slack user auth", async () => {
@@ -1447,7 +1471,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
             continuationToken: "C01:1700000000.000001",
             messageTs: "1700000000.000010",
             requestId: "call_abc123",
-            responderUserId: "U_SUBMITTER",
+            responderBinding: makeResponderBinding("U_SUBMITTER", "call_abc123"),
             threadTs: "1700000000.000001",
           }),
           state: {

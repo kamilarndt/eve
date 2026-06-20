@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import { defaultEvents, defaultInputRequestedHandler } from "#public/channels/slack/defaults.js";
+import { buildHitlResponderBlockId } from "#public/channels/slack/hitl.js";
 import type { SlackChannelState, SlackEventContext } from "#public/channels/slack/slackChannel.js";
 
 const sessionCtx = {} as SessionContext;
@@ -91,7 +92,10 @@ describe("defaultInputRequestedHandler", () => {
     expect(post).toHaveBeenCalledTimes(1);
     const message = post.mock.calls[0]?.[0] as { blocks: Array<Record<string, unknown>> };
     expect(message.blocks[1]).toMatchObject({
-      block_id: "eve_input_responder:U777:approval-1",
+      block_id: buildHitlResponderBlockId({
+        requestId: "approval-1",
+        responderUserId: "U777",
+      }),
     });
   });
 
