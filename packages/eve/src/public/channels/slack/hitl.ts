@@ -4,7 +4,8 @@
  * Wire format: select-style HITL widgets mint `action_id =
  * HITL_ACTION_PREFIX + requestId`. Button widgets add a stable suffix so
  * every button in the same Slack actions block has a unique `action_id`.
- * The decoder requires that suffix for button payloads.
+ * The decoder requires that suffix for button payloads. The parent actions
+ * block carries the Slack user id allowed to respond.
  *
  * Buttons surface the selected option on `action.value`; radio and
  * static selects surface it on `selected_option.value`. The decoder
@@ -34,6 +35,9 @@ export const HITL_ACTION_PREFIX = "eve_input:";
  * (call `views.open`, then resolve on `view_submission`).
  */
 export const HITL_FREEFORM_ACTION_PREFIX = "eve_input_freeform:";
+
+/** Block id prefix binding a framework-rendered HITL control to one Slack user. */
+export const HITL_RESPONDER_BLOCK_PREFIX = "eve_input_responder:";
 
 /**
  * `view.callback_id` carried on the freeform-answer modal. Used to
@@ -70,6 +74,19 @@ interface SlackHitlAction {
   readonly value?: string;
   /** `selected_option.value` field on radio / static-select payloads. */
   readonly selectedOptionValue?: string;
+}
+
+/** Returns a request-unique Block Kit block id that authorizes one Slack user. */
+export function hitlResponderBlockId(userId: string, requestId: string): string {
+  return `${HITL_RESPONDER_BLOCK_PREFIX}${userId}:${requestId}`;
+}
+
+/** Whether the action came from a HITL block owned by its Slack actor. */
+export function canRespondToHitlAction(action: {
+  readonly blockId?: string;
+  readonly user: { readonly id: string };
+}): boolean {
+  return action.blockId?.startsWith(`${HITL_RESPONDER_BLOCK_PREFIX}${action.user.id}:`) === true;
 }
 
 /**
@@ -132,12 +149,16 @@ export function isHitlAction(actionId: string): boolean {
  *
  * Always emits at least the prompt section.
  */
-export function renderInputRequestBlocks(request: InputRequest): unknown[] {
+export function renderInputRequestBlocks(
+  request: InputRequest,
+  responderUserId: string,
+): unknown[] {
   const prompt = {
     text: { text: truncateSectionText(request.prompt), type: "mrkdwn" },
     type: "section",
   };
   const actionId = `${HITL_ACTION_PREFIX}${request.requestId}`;
+  const blockId = hitlResponderBlockId(responderUserId, request.requestId);
 
   const options = request.options;
   const acceptsFreeform = request.allowFreeform === true || !options || options.length === 0;
@@ -152,7 +173,7 @@ export function renderInputRequestBlocks(request: InputRequest): unknown[] {
             options: options.map(buildOption),
             placeholder: { type: "plain_text", text: "Choose an option" },
           };
-    return [prompt, { type: "actions", elements: [widget] }];
+    return [prompt, { type: "actions", block_id: blockId, elements: [widget] }];
   }
 
   if (options && options.length > 0) {
@@ -160,6 +181,7 @@ export function renderInputRequestBlocks(request: InputRequest): unknown[] {
       prompt,
       {
         type: "actions",
+        block_id: blockId,
         elements: options.map((opt, index) => buildButton(opt, actionId, index)),
       },
     ];
@@ -170,6 +192,7 @@ export function renderInputRequestBlocks(request: InputRequest): unknown[] {
       prompt,
       {
         type: "actions",
+        block_id: blockId,
         elements: [
           {
             type: "button",
@@ -198,6 +221,7 @@ export interface HitlFreeformModalMetadata {
   readonly threadTs: string;
   readonly messageTs: string;
   readonly requestId: string;
+  readonly responderUserId: string;
 }
 
 /**

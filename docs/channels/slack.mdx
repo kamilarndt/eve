@@ -103,7 +103,9 @@ export default slackChannel({
 
 ### Human-in-the-loop (HITL)
 
-HITL renders as Slack buttons and selects. When the user responds, the parked session (paused awaiting input) resumes.
+HITL renders as Slack buttons and selects in the thread. By default, only the Slack user who initiated the current turn can use those controls; clicks from other users are acknowledged but ignored. The responder is derived from the current caller's Slack `user_id`, so each new turn can have a different responder. When a turn has no Slack user associated with its caller, eve posts the prompt without actionable controls.
+
+When the allowed user responds, the parked session (paused awaiting input) resumes.
 
 Authorization prompts are private. A sign-in challenge (OAuth URL, device code) is a credential. Anyone who completes it binds their identity to the session's connection. The default `authorization.required` handler delivers the challenge ephemerally to the triggering user, device code included, and posts a public link-free status only when it has no user to target. The handler receives a private-delivery context with `postEphemeral`, `postDirectMessage` (needs the `im:write` scope), and `state`. There is, intentionally, no public `post` and no raw API access.
 

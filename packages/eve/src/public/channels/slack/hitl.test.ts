@@ -4,6 +4,7 @@ import type { InputRequest } from "#runtime/input/types.js";
 import {
   buildAnsweredBlocks,
   buildFreeformModalView,
+  canRespondToHitlAction,
   deriveHitlResponse,
   freeformRequestIdFromActionId,
   HITL_ACTION_PREFIX,
@@ -11,6 +12,7 @@ import {
   HITL_FREEFORM_MODAL_ACTION_ID,
   HITL_FREEFORM_MODAL_BLOCK_ID,
   HITL_FREEFORM_MODAL_CALLBACK_ID,
+  hitlResponderBlockId,
   isFreeformAction,
   isHitlAction,
   renderInputRequestBlocks,
@@ -25,6 +27,22 @@ function makeRequest(overrides: Partial<InputRequest>): InputRequest {
     ...overrides,
   };
 }
+
+const RESPONDER_USER_ID = "U_CALLER";
+
+function renderRequest(request: InputRequest): unknown[] {
+  return renderInputRequestBlocks(request, RESPONDER_USER_ID);
+}
+
+describe("canRespondToHitlAction", () => {
+  it("accepts only the Slack user encoded in the action block", () => {
+    const blockId = hitlResponderBlockId(RESPONDER_USER_ID, "call_abc123");
+
+    expect(canRespondToHitlAction({ blockId, user: { id: RESPONDER_USER_ID } })).toBe(true);
+    expect(canRespondToHitlAction({ blockId, user: { id: "U_OTHER" } })).toBe(false);
+    expect(canRespondToHitlAction({ user: { id: RESPONDER_USER_ID } })).toBe(false);
+  });
+});
 
 describe("deriveHitlResponse", () => {
   it("decodes a button click with a requestId that contains underscores", () => {
@@ -81,7 +99,7 @@ describe("isHitlAction", () => {
 
 describe("renderInputRequestBlocks", () => {
   it("emits a section + buttons block for an option list with no display hint", () => {
-    const blocks = renderInputRequestBlocks(
+    const blocks = renderRequest(
       makeRequest({
         options: [
           { id: "approve", label: "Approve", style: "primary" },
@@ -98,6 +116,9 @@ describe("renderInputRequestBlocks", () => {
       elements: Array<Record<string, unknown>>;
     };
     expect(actions.type).toBe("actions");
+    expect((actions as { block_id?: string }).block_id).toBe(
+      hitlResponderBlockId(RESPONDER_USER_ID, "call_abc123"),
+    );
     expect(actions.elements).toHaveLength(2);
     const actionIds = actions.elements.map((element) => element.action_id);
     expect(new Set(actionIds).size).toBe(actionIds.length);
@@ -116,7 +137,7 @@ describe("renderInputRequestBlocks", () => {
   });
 
   it("renders a radio_buttons widget for select-display requests with ≤6 options", () => {
-    const blocks = renderInputRequestBlocks(
+    const blocks = renderRequest(
       makeRequest({
         display: "select",
         options: [
@@ -151,7 +172,7 @@ describe("renderInputRequestBlocks", () => {
   it("falls back to a static_select dropdown when the option count exceeds the radio limit", () => {
     const options = Array.from({ length: 8 }, (_, i) => ({ id: `o${i}`, label: `Option ${i}` }));
 
-    const blocks = renderInputRequestBlocks(
+    const blocks = renderRequest(
       makeRequest({
         display: "select",
         options,
@@ -172,7 +193,7 @@ describe("renderInputRequestBlocks", () => {
   });
 
   it("renders a 'Type your answer' freeform button when the request has no options", () => {
-    const blocks = renderInputRequestBlocks(makeRequest({ prompt: "What's the date range?" }));
+    const blocks = renderRequest(makeRequest({ prompt: "What's the date range?" }));
 
     expect(blocks).toHaveLength(2);
     const actions = blocks[1] as { type: string; elements: Array<Record<string, unknown>> };
@@ -189,7 +210,7 @@ describe("renderInputRequestBlocks", () => {
   });
 
   it("emits the freeform button alongside options when allowFreeform is set", () => {
-    const blocks = renderInputRequestBlocks(
+    const blocks = renderRequest(
       makeRequest({
         allowFreeform: true,
         options: [{ id: "yes", label: "Yes" }],
@@ -212,7 +233,7 @@ describe("renderInputRequestBlocks", () => {
       options: [{ id: "yes_please", label: "Yes please" }],
     });
 
-    const blocks = renderInputRequestBlocks(request);
+    const blocks = renderRequest(request);
     const button = (blocks[1] as { elements: Array<{ action_id: string; value: string }> })
       .elements[0]!;
 
@@ -238,7 +259,7 @@ describe("renderInputRequestBlocks", () => {
 
   it("truncates section-block prompts past the Slack 3000-char cap", () => {
     const longPrompt = "x".repeat(SLACK_SECTION_TEXT_MAX_LENGTH + 500);
-    const blocks = renderInputRequestBlocks(makeRequest({ prompt: longPrompt }));
+    const blocks = renderRequest(makeRequest({ prompt: longPrompt }));
     const promptBlock = blocks[0] as { text: { text: string } };
     expect(promptBlock.text.text.length).toBeLessThanOrEqual(SLACK_SECTION_TEXT_MAX_LENGTH);
     expect(promptBlock.text.text.endsWith("...")).toBe(true);
@@ -251,7 +272,7 @@ describe("renderInputRequestBlocks", () => {
       options: [{ id: "weekly_report", label: "Weekly report" }],
     });
 
-    const blocks = renderInputRequestBlocks(request);
+    const blocks = renderRequest(request);
     const widget = (
       blocks[1] as { elements: Array<{ action_id: string; options: Array<{ value: string }> }> }
     ).elements[0]!;
@@ -276,6 +297,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
+        responderUserId: RESPONDER_USER_ID,
       },
       prompt: "What's the date range?",
     });
@@ -303,6 +325,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
+        responderUserId: RESPONDER_USER_ID,
       },
       prompt: longPrompt,
     });
@@ -320,6 +343,7 @@ describe("buildFreeformModalView", () => {
         threadTs: "1.0",
         messageTs: "1.1",
         requestId: "call_abc",
+        responderUserId: RESPONDER_USER_ID,
       },
     });
     const blocks = view.blocks as Array<Record<string, unknown>>;

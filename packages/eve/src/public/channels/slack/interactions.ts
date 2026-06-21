@@ -27,6 +27,7 @@ import { buildSlackAuthContext } from "#public/channels/slack/auth.js";
 import {
   buildAnsweredBlocks,
   buildFreeformModalView,
+  canRespondToHitlAction,
   deriveHitlResponse,
   freeformRequestIdFromActionId,
   HITL_FREEFORM_MODAL_ACTION_ID,
@@ -200,12 +201,14 @@ export async function handleInteractionPost(
 
   const freeformAction = interaction.actions.find((a) => isFreeformAction(a.actionId));
   if (freeformAction) {
+    if (!canRespondToHitlAction(freeformAction)) return ack;
     await openFreeformModal({ payload, interaction, freeformAction, deps });
     return ack;
   }
 
   const continuationToken = slackContinuationToken(interaction.channelId, interaction.threadTs);
   const inputResponses = interaction.actions
+    .filter(canRespondToHitlAction)
     .map(deriveHitlResponse)
     .filter((r): r is { requestId: string; optionId: string } => r !== null);
 
@@ -304,6 +307,7 @@ async function openFreeformModal(input: {
     threadTs: input.interaction.threadTs,
     messageTs,
     requestId,
+    responderUserId: input.freeformAction.user.id,
   };
 
   const promptText = readPromptTextFromBlocks(input.interaction.messageBlocks);
@@ -355,7 +359,8 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
-    !metadata.threadTs
+    !metadata.threadTs ||
+    !metadata.responderUserId
   ) {
     return ack;
   }
@@ -368,7 +373,10 @@ async function handleViewSubmission(
   // `user` is Required on view_submission payloads; `team_id` is on the
   // user object in modern payloads but not guaranteed in all examples.
   const team = payload.team as { id?: string } | null | undefined;
-  const user = payload.user as { id: string; team_id?: string; username?: string; name?: string };
+  const user = payload.user as
+    | { id: string; team_id?: string; username?: string; name?: string }
+    | undefined;
+  if (user?.id !== metadata.responderUserId) return ack;
   const triggeringUserId = user.id;
   const teamId = user.team_id ?? team?.id ?? null;
 

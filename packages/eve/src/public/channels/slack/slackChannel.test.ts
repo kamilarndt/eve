@@ -8,13 +8,16 @@ import { isCompiledChannel, type CompiledChannel } from "#channel/compiled-chann
 import { isHttpRouteDefinition } from "#channel/routes.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import { SessionKey } from "#context/keys.js";
+import type { SessionAuthContext } from "#channel/types.js";
 import type { HandleMessageStreamEvent } from "#protocol/message.js";
 import { decodeSlackApiBody } from "#public/channels/slack/api-encoding.js";
 import {
   HITL_ACTION_PREFIX,
+  HITL_FREEFORM_ACTION_PREFIX,
   HITL_FREEFORM_MODAL_ACTION_ID,
   HITL_FREEFORM_MODAL_BLOCK_ID,
   HITL_FREEFORM_MODAL_CALLBACK_ID,
+  hitlResponderBlockId,
 } from "#public/channels/slack/hitl.js";
 import {
   SLACK_MESSAGE_TEXT_MAX_LENGTH,
@@ -63,22 +66,38 @@ function stubAccessor() {
   return { get: () => undefined, set: () => {} } as any;
 }
 
-const stubAlsContext = (() => {
+const STUB_SLACK_AUTH: SessionAuthContext = {
+  attributes: { user_id: "U_CALLER" },
+  authenticator: "slack-webhook",
+  issuer: "slack:T01",
+  principalId: "slack:T01:U_CALLER",
+  principalType: "user",
+};
+const STUB_SESSION_INITIATOR: SessionAuthContext = {
+  ...STUB_SLACK_AUTH,
+  attributes: { user_id: "U_INITIATOR" },
+  principalId: "slack:T01:U_INITIATOR",
+};
+
+function buildAlsContext(auth: SessionAuthContext | null): ContextContainer {
   const ctx = new ContextContainer();
   ctx.setVirtualContext(SessionKey, {
     sessionId: "test-session",
-    auth: { current: null, initiator: null },
+    auth: { current: auth, initiator: STUB_SESSION_INITIATOR },
     turn: { id: "test-turn", sequence: 0 },
   });
   return ctx;
-})();
+}
 
 function callEvent(
   adapter: ChannelAdapter,
   event: HandleMessageStreamEvent,
   ctx: any,
+  auth: SessionAuthContext | null = STUB_SLACK_AUTH,
 ): Promise<HandleMessageStreamEvent> {
-  return contextStorage.run(stubAlsContext, () => callAdapterEventHandler(adapter, event, ctx));
+  return contextStorage.run(buildAlsContext(auth), () =>
+    callAdapterEventHandler(adapter, event, ctx),
+  );
 }
 
 /**
@@ -358,7 +377,10 @@ describe("slackChannel() default event handlers", () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
     const body = parseSlackRequestBody(init as RequestInit) as {
-      blocks: Array<{ elements?: Array<{ action_id: string; value: string }> }>;
+      blocks: Array<{
+        block_id?: string;
+        elements?: Array<{ action_id: string; value: string }>;
+      }>;
       channel: string;
       text: string;
       thread_ts: string;
@@ -370,12 +392,56 @@ describe("slackChannel() default event handlers", () => {
     });
 
     const actions = body.blocks.find((block) => Array.isArray(block.elements));
+    expect(actions?.block_id).toBe(hitlResponderBlockId("U_CALLER", "approval_abc123"));
     const actionIds = actions?.elements?.map((element) => element.action_id) ?? [];
     expect(actionIds).toEqual([
       `${HITL_ACTION_PREFIX}approval_abc123:button:0`,
       `${HITL_ACTION_PREFIX}approval_abc123:button:1`,
     ]);
     expect(new Set(actionIds).size).toBe(actionIds.length);
+  });
+
+  it("input.requested posts no controls when the current caller has no Slack user id", async () => {
+    const adapter = withState(
+      getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
+      THREAD_STATE,
+    );
+    const ctx = buildAdapterContext(adapter, stubAccessor());
+
+    await callEvent(
+      adapter,
+      makeEvent("input.requested", {
+        requests: [
+          {
+            action: {
+              callId: "call_abc123",
+              input: {},
+              kind: "tool-call",
+              toolName: "ask_question",
+            },
+            display: "confirmation",
+            options: [{ id: "approve", label: "Approve" }],
+            prompt: "Approve?",
+            requestId: "approval_abc123",
+          },
+        ],
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "t1",
+      }),
+      ctx,
+      null,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = parseSlackRequestBody(init as RequestInit);
+    expect(body).toMatchObject({
+      channel: "C01",
+      markdown_text: "Approve?",
+      thread_ts: "1700000000.000001",
+    });
+    expect(body).not.toHaveProperty("blocks");
   });
 
   it("input.requested caps section and fallback text so Slack does not reject the post", async () => {
@@ -1236,6 +1302,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
         actions: [
           {
             action_id: `${HITL_ACTION_PREFIX}approval_abc123:button:0`,
+            block_id: hitlResponderBlockId("U_APPROVER", "approval_abc123"),
             text: { type: "plain_text", text: "Approve" },
             value: "approve",
           },
@@ -1273,6 +1340,143 @@ describe("slackChannel() HITL interaction pipeline", () => {
     });
   });
 
+  it.each([
+    ["belongs to another user", hitlResponderBlockId("U_CALLER", "approval_abc123")],
+    ["has no responder marker", undefined],
+  ])("ignores a HITL button that %s", async (_description, blockId) => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+    const action: Record<string, unknown> = {
+      action_id: `${HITL_ACTION_PREFIX}approval_abc123:button:0`,
+      text: { type: "plain_text", text: "Approve" },
+      value: "approve",
+    };
+    if (blockId !== undefined) action.block_id = blockId;
+
+    const { response, send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        team: { id: "T01" },
+        user: { id: "U_OTHER", team_id: "T01" },
+        channel: { id: "C01" },
+        message: {
+          ts: "1700000000.000010",
+          thread_ts: "1700000000.000001",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Approve?" } }],
+        },
+        actions: [action],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(send).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resumes a HITL select answer from the current turn caller", async () => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+
+    const { send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        team: { id: "T01" },
+        user: { id: "U_CALLER", team_id: "T01" },
+        channel: { id: "C01" },
+        message: {
+          ts: "1700000000.000010",
+          thread_ts: "1700000000.000001",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Frequency?" } }],
+        },
+        actions: [
+          {
+            action_id: `${HITL_ACTION_PREFIX}call_abc123`,
+            block_id: hitlResponderBlockId("U_CALLER", "call_abc123"),
+            selected_option: {
+              text: { type: "plain_text", text: "Weekly" },
+              value: "weekly",
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]).toEqual({
+      inputResponses: [{ optionId: "weekly", requestId: "call_abc123" }],
+    });
+  });
+
+  it("opens a freeform modal for the current turn caller and preserves its identity", async () => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+
+    const { send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        trigger_id: "trigger-1",
+        team: { id: "T01" },
+        user: { id: "U_CALLER", team_id: "T01" },
+        channel: { id: "C01" },
+        message: {
+          ts: "1700000000.000010",
+          thread_ts: "1700000000.000001",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Why?" } }],
+        },
+        actions: [
+          {
+            action_id: `${HITL_FREEFORM_ACTION_PREFIX}call_abc123`,
+            block_id: hitlResponderBlockId("U_CALLER", "call_abc123"),
+            value: "call_abc123",
+          },
+        ],
+      }),
+    );
+
+    expect(send).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toBe("https://slack.com/api/views.open");
+    const body = JSON.parse(String((init as RequestInit).body)) as {
+      view: { private_metadata: string };
+    };
+    expect(JSON.parse(body.view.private_metadata)).toMatchObject({
+      requestId: "call_abc123",
+      responderUserId: "U_CALLER",
+    });
+  });
+
+  it("does not open a freeform modal for a different Slack user", async () => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+
+    const { response, send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        trigger_id: "trigger-1",
+        team: { id: "T01" },
+        user: { id: "U_OTHER", team_id: "T01" },
+        channel: { id: "C01" },
+        message: {
+          ts: "1700000000.000010",
+          thread_ts: "1700000000.000001",
+          blocks: [{ type: "section", text: { type: "mrkdwn", text: "Why?" } }],
+        },
+        actions: [
+          {
+            action_id: `${HITL_FREEFORM_ACTION_PREFIX}call_abc123`,
+            block_id: hitlResponderBlockId("U_CALLER", "call_abc123"),
+            value: "call_abc123",
+          },
+        ],
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(send).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("resumes freeform modal answers with the submitting Slack user auth", async () => {
     const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
 
@@ -1294,6 +1498,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
             continuationToken: "C01:1700000000.000001",
             messageTs: "1700000000.000010",
             requestId: "call_abc123",
+            responderUserId: "U_SUBMITTER",
             threadTs: "1700000000.000001",
           }),
           state: {
@@ -1335,6 +1540,41 @@ describe("slackChannel() HITL interaction pipeline", () => {
         triggeringUserId: "U_SUBMITTER",
       },
     });
+  });
+
+  it("ignores a freeform modal submission from a different Slack user", async () => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+
+    const { response, send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "view_submission",
+        team: { id: "T01" },
+        user: { id: "U_OTHER", team_id: "T01" },
+        view: {
+          callback_id: HITL_FREEFORM_MODAL_CALLBACK_ID,
+          private_metadata: JSON.stringify({
+            channelId: "C01",
+            continuationToken: "C01:1700000000.000001",
+            messageTs: "1700000000.000010",
+            requestId: "call_abc123",
+            responderUserId: "U_CALLER",
+            threadTs: "1700000000.000001",
+          }),
+          state: {
+            values: {
+              [HITL_FREEFORM_MODAL_BLOCK_ID]: {
+                [HITL_FREEFORM_MODAL_ACTION_ID]: { value: "not authorized" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(send).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

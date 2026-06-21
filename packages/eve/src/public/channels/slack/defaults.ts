@@ -91,14 +91,21 @@ function firstNonEmptyLine(text: string): string | undefined {
  * Default `input.requested` handler — renders each pending HITL
  * request as Slack `block_actions`. Buttons by default; radio for
  * ≤6-option select requests; static_select for >6-option select
- * requests. Override by declaring `events["input.requested"]`.
+ * requests. Controls are bound to the current caller's Slack user id;
+ * callers without one receive the prompt without controls. Override by
+ * declaring `events["input.requested"]`.
  */
 export function defaultInputRequestedHandler(): NonNullable<SlackChannelEvents["input.requested"]> {
-  return async (data, channel, _ctx) => {
+  return async (data, channel, ctx) => {
     if (data.requests.length === 0) return;
     const promptText = truncateMessageText(data.requests.map((r) => r.prompt).join("\n"));
+    const userId = ctx.session.auth.current?.attributes.user_id;
+    if (typeof userId !== "string") {
+      await channel.thread.post(promptText);
+      return;
+    }
     await channel.thread.post({
-      blocks: data.requests.flatMap(renderInputRequestBlocks),
+      blocks: data.requests.flatMap((request) => renderInputRequestBlocks(request, userId)),
       text: promptText,
     });
   };
