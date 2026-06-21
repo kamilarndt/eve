@@ -55,6 +55,21 @@ function parseSlackRequestBody(init: RequestInit | undefined): Record<string, un
   return decodeSlackApiBody(init.body, contentType) as Record<string, unknown>;
 }
 
+function expectUnauthorizedHitlEphemeral(
+  fetchMock: ReturnType<typeof vi.fn>,
+  userId: string,
+): void {
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const [url, init] = fetchMock.mock.calls[0]!;
+  expect(String(url)).toBe("https://slack.com/api/chat.postEphemeral");
+  expect(parseSlackRequestBody(init as RequestInit)).toMatchObject({
+    channel: "C01",
+    markdown_text: "Only the person who started this turn can respond.",
+    thread_ts: "1700000000.000001",
+    user: userId,
+  });
+}
+
 function withState(
   adapter: ChannelAdapter<any>,
   state: Record<string, unknown>,
@@ -1370,7 +1385,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
 
     expect(response.status).toBe(200);
     expect(send).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expectUnauthorizedHitlEphemeral(fetchMock, "U_OTHER");
   });
 
   it("resumes a HITL select answer from the current turn caller", async () => {
@@ -1474,7 +1489,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
 
     expect(response.status).toBe(200);
     expect(send).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expectUnauthorizedHitlEphemeral(fetchMock, "U_OTHER");
   });
 
   it("resumes freeform modal answers with the submitting Slack user auth", async () => {
@@ -1574,7 +1589,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
 
     expect(response.status).toBe(200);
     expect(send).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expectUnauthorizedHitlEphemeral(fetchMock, "U_OTHER");
   });
 });
 

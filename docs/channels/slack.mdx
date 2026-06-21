@@ -103,7 +103,7 @@ export default slackChannel({
 
 ### Human-in-the-loop (HITL)
 
-HITL renders as Slack buttons and selects in the thread. By default, only the Slack user who initiated the current turn can use those controls; clicks from other users are acknowledged but ignored. The responder is derived from the current caller's Slack `user_id`, so each new turn can have a different responder. When a turn has no Slack user associated with its caller, eve posts the prompt without actionable controls.
+HITL renders as Slack buttons and selects in the thread. By default, only the Slack user who initiated the current turn can use those controls; other users receive a short ephemeral explanation and their response is ignored. The responder is derived from the current caller's Slack `user_id`, so each new turn can have a different responder. When a turn has no Slack user associated with its caller, eve posts the prompt without actionable controls.
 
 When the allowed user responds, the parked session (paused awaiting input) resumes.
 

@@ -47,6 +47,7 @@ import type {
 import type { SendFn } from "#public/definitions/defineChannel.js";
 
 const log = createLogger("slack.interactions");
+const UNAUTHORIZED_HITL_RESPONSE = "Only the person who started this turn can respond.";
 
 /**
  * Decoded view of a Slack `block_actions` payload. Returned by
@@ -201,13 +202,21 @@ export async function handleInteractionPost(
 
   const freeformAction = interaction.actions.find((a) => isFreeformAction(a.actionId));
   if (freeformAction) {
-    if (!canRespondToHitlAction(freeformAction)) return ack;
+    if (!canRespondToHitlAction(freeformAction)) {
+      notifyUnauthorizedHitlResponder(interaction, freeformAction.user.id, ctx.waitUntil, deps);
+      return ack;
+    }
     await openFreeformModal({ payload, interaction, freeformAction, deps });
     return ack;
   }
 
   const continuationToken = slackContinuationToken(interaction.channelId, interaction.threadTs);
-  const inputResponses = interaction.actions
+  const hitlActions = interaction.actions.filter((action) => isHitlAction(action.actionId));
+  const unauthorizedAction = hitlActions.find((action) => !canRespondToHitlAction(action));
+  if (unauthorizedAction) {
+    notifyUnauthorizedHitlResponder(interaction, unauthorizedAction.user.id, ctx.waitUntil, deps);
+  }
+  const inputResponses = hitlActions
     .filter(canRespondToHitlAction)
     .map(deriveHitlResponse)
     .filter((r): r is { requestId: string; optionId: string } => r !== null);
@@ -333,7 +342,7 @@ async function handleViewSubmission(
     send: SendFn<SlackChannelState>;
     waitUntil: (task: Promise<unknown>) => void;
   },
-  _deps: InteractionHandlerDeps,
+  deps: InteractionHandlerDeps,
 ): Promise<Response> {
   const ack = new Response("ok", { status: 200 });
   const view = payload.view as
@@ -376,9 +385,18 @@ async function handleViewSubmission(
   const user = payload.user as
     | { id: string; team_id?: string; username?: string; name?: string }
     | undefined;
-  if (user?.id !== metadata.responderUserId) return ack;
+  const teamId = user?.team_id ?? team?.id ?? null;
+  if (!user) return ack;
+  if (user.id !== metadata.responderUserId) {
+    notifyUnauthorizedHitlResponder(
+      { channelId: metadata.channelId, threadTs: metadata.threadTs, teamId },
+      user.id,
+      ctx.waitUntil,
+      deps,
+    );
+    return ack;
+  }
   const triggeringUserId = user.id;
-  const teamId = user.team_id ?? team?.id ?? null;
 
   ctx.waitUntil(
     ctx
@@ -412,13 +430,36 @@ async function handleViewSubmission(
       messageTs: metadata.messageTs,
       answerLabel: text,
       userId: triggeringUserId ?? undefined,
-      deps: _deps,
+      deps,
     }).catch((error: unknown) => {
       log.error("freeform answered-card update failed", { error });
     }),
   );
 
   return ack;
+}
+
+function notifyUnauthorizedHitlResponder(
+  target: {
+    readonly channelId: string;
+    readonly threadTs: string;
+    readonly teamId: string | null | undefined;
+  },
+  userId: string,
+  waitUntil: (task: Promise<unknown>) => void,
+  deps: InteractionHandlerDeps,
+): void {
+  const { thread } = buildSlackBinding({
+    botToken: deps.config.credentials?.botToken,
+    channelId: target.channelId,
+    threadTs: target.threadTs,
+    teamId: target.teamId ?? undefined,
+  });
+  waitUntil(
+    thread.postEphemeral(userId, UNAUTHORIZED_HITL_RESPONSE).catch((error: unknown) => {
+      log.error("unauthorized HITL response notification failed", { error });
+    }),
+  );
 }
 
 async function updateAnsweredHitlCard(
