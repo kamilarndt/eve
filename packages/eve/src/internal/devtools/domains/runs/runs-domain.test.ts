@@ -115,6 +115,28 @@ describe("createDevToolsRunsDomain", () => {
     expect(run.title).toBe("Compare the weather across Berlin, Paris, Amste…");
   });
 
+  it("lists the most recently created runs first", async () => {
+    mocks.responses.push(
+      createResponse("session-1", undefined, []),
+      createResponse("session-2", undefined, []),
+      createResponse("session-3", undefined, []),
+    );
+    const domain = createDevToolsRunsDomain({
+      assertInteractive: () => "http://127.0.0.1:3000/",
+      eventHub: createDevToolsEventHub({ replayLimit: 10 }),
+    });
+
+    await domain.create("first");
+    await domain.create("second");
+    await domain.create("third");
+
+    expect(domain.list().map(({ sessionId }) => sessionId)).toEqual([
+      "session-3",
+      "session-2",
+      "session-1",
+    ]);
+  });
+
   it("distinguishes pending actions from an ordinary input boundary", async () => {
     mocks.responses.push(
       createResponse("session-1", "continue-1", [

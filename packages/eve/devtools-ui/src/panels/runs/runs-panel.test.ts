@@ -8,8 +8,16 @@ import { createTestController } from "@ui/controllers/fixture/test-controller.te
 import { activateRunsView, RunsPanel } from "@ui/panels/runs/runs-panel";
 
 describe("RunsPanel", () => {
-  it("keeps the toolbar context limited to the selected run title", () => {
-    const scenario = createPrototypeScenario("running");
+  it("shows the selected run title and complete copyable session id", () => {
+    const baseScenario = createPrototypeScenario("running");
+    const sessionId = "session-1234567890-abcdefghijklmnopqrstuvwxyz";
+    const scenario = {
+      ...baseScenario,
+      runs: baseScenario.runs.map((run) =>
+        run.id === baseScenario.selectedRunId ? { ...run, id: sessionId } : run,
+      ),
+      selectedRunId: sessionId,
+    };
     const controller = createTestController({
       scenario,
       selectedRunId: scenario.selectedRunId,
@@ -22,9 +30,11 @@ describe("RunsPanel", () => {
     );
     const toolbarContext = html.match(/<div class="toolbar-context">.*?<\/div>/u)?.[0];
 
-    expect(toolbarContext).toBe(
-      '<div class="toolbar-context"><span>Runs</span><span class="toolbar-separator">/</span><strong>Berlin weather</strong></div>',
-    );
+    expect(toolbarContext).toContain("<strong>Berlin weather</strong>");
+    expect(toolbarContext).toContain(sessionId);
+    expect(toolbarContext).toContain(`aria-label="Copy session ID ${sessionId}"`);
+    expect(toolbarContext).toContain("</strong><button");
+    expect(toolbarContext).not.toContain("Live");
   });
 
   it("defaults to chat and keeps the timeline available as a tab", () => {

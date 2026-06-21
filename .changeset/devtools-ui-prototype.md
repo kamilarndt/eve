@@ -10,6 +10,8 @@ The Runs composer can create a session from its first message, and retained even
 
 Runs now defaults to a streaming Chat view with optimistic user messages, assistant markdown, reasoning, and tool-call lifecycles, while the detailed event Timeline remains available from the view switcher.
 
+The Runs navigator now lists newly created sessions first, and the selected session's complete ID is visible and copyable from the Runs header without truncation.
+
 Multi-turn DevTools sessions now preserve continuation state when later runtime responses omit an unchanged continuation token, and runtime request failures surface their original message.
 
 Nested pnpm projects outside an ancestor workspace are now detected from pnpm's recursive workspace set, avoiding accidental execution of an unrelated ancestor workspace's lifecycle scripts.

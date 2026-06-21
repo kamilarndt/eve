@@ -1,6 +1,10 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { findCoordinateEvent } from "@ui/components/coordinates-strip";
+import { CoordinatesStrip, findCoordinateEvent } from "@ui/components/coordinates-strip";
+import { DevToolsControllerProvider } from "@ui/controllers/devtools-controller-context";
+import { createTestController } from "@ui/controllers/fixture/test-controller.test-helper";
 import type { Coordinates, TimelineEvent } from "@ui/model/devtools-model";
 
 const coordinates: Coordinates = {
@@ -23,6 +27,20 @@ describe("findCoordinateEvent", () => {
   it("falls back to session navigation when no matching event is retained", () => {
     expect(findCoordinateEvent([], coordinates, "action")).toBeUndefined();
     expect(findCoordinateEvent([event("event")], coordinates, "session")).toBeUndefined();
+  });
+
+  it("renders the complete session id", () => {
+    const session = "session-1234567890-abcdefghijklmnopqrstuvwxyz";
+    const html = renderToStaticMarkup(
+      createElement(DevToolsControllerProvider, {
+        children: createElement(CoordinatesStrip, {
+          coordinates: { ...coordinates, session },
+        }),
+        controller: createTestController(),
+      }),
+    );
+
+    expect(html).toContain(session);
   });
 });
 

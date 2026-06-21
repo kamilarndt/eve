@@ -376,6 +376,22 @@ pre,
   padding: 0 8px 0 12px;
 }
 
+.runs-toolbar {
+  flex-basis: auto;
+  height: auto;
+  min-height: 36px;
+  padding-block: 5px;
+}
+
+.runs-toolbar .toolbar-context {
+  flex: 1;
+  flex-wrap: wrap;
+}
+
+.runs-toolbar .toolbar-context > strong {
+  flex: 1 1 120px;
+}
+
 .toolbar-context,
 .toolbar-actions,
 .debugger-controls {
@@ -403,6 +419,38 @@ pre,
   color: var(--text-disabled);
 }
 
+.session-id-copy {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 1 auto;
+  font-size: 10px;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+.session-id-copy:hover,
+.session-id-copy:focus-visible {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.session-id-copy code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.session-id-copy svg {
+  flex: 0 0 auto;
+}
+
 .toolbar-actions {
   gap: 3px;
   margin-left: auto;
@@ -417,7 +465,6 @@ pre,
 
 .revision-label,
 .loaded-label,
-.live-indicator,
 .provenance-label,
 .definition-provenance {
   align-items: center;
@@ -432,12 +479,6 @@ pre,
   line-height: 1;
   padding: 0 7px;
   white-space: nowrap;
-}
-
-.live-indicator {
-  border-color: transparent;
-  color: var(--status-info);
-  font-weight: 500;
 }
 
 .panel-workspace {
@@ -2559,7 +2600,6 @@ body.is-resizing {
   }
 
   .toolbar-context .status-indicator,
-  .live-indicator,
   .pause-coordinates {
     display: none;
   }

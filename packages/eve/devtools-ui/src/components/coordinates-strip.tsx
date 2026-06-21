@@ -10,7 +10,7 @@ interface CoordinatesStripProps {
 export function CoordinatesStrip({ coordinates }: CoordinatesStripProps) {
   const controller = useDevToolsController();
   const segments = [
-    ["session", shortId(coordinates.session)],
+    ["session", coordinates.session],
     ["turn", coordinates.turn],
     ["step", coordinates.step],
     ["action", coordinates.action],
@@ -58,8 +58,4 @@ export function findCoordinateEvent(
     }
     return label === "turn" && event.coordinates.turn === coordinates.turn;
   });
-}
-
-function shortId(value: string): string {
-  return value.length > 14 ? value.slice(0, 14) : value;
 }

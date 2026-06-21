@@ -1,5 +1,5 @@
-import { Radio } from "lucide-react";
-import { type KeyboardEvent, useLayoutEffect, useRef, useState } from "react";
+import { Check, Copy } from "lucide-react";
+import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { ThreePaneLayout } from "@ui/components/three-pane-layout";
 import { useDevToolsController } from "@ui/controllers/devtools-controller-context";
@@ -11,6 +11,7 @@ import { RunTimeline } from "@ui/panels/runs/run-timeline";
 
 export function RunsPanel() {
   const controller = useDevToolsController();
+  const [copiedSessionId, setCopiedSessionId] = useState<string>();
   const [view, setView] = useState<"chat" | "timeline">("chat");
   const chatTabRef = useRef<HTMLButtonElement>(null);
   const timelineTabRef = useRef<HTMLButtonElement>(null);
@@ -32,6 +33,12 @@ export function RunsPanel() {
       message.sessionId === controller.selectedRunId ||
       (controller.selectedRunId === undefined && message.optimistic === true),
   ).length;
+
+  useEffect(() => {
+    if (copiedSessionId === undefined) return;
+    const timeout = window.setTimeout(() => setCopiedSessionId(undefined), 2_000);
+    return () => window.clearTimeout(timeout);
+  }, [copiedSessionId]);
 
   useLayoutEffect(() => {
     if (activatedRunKey.current !== activeViewKey) {
@@ -63,18 +70,43 @@ export function RunsPanel() {
     (nextView === "chat" ? chatTabRef : timelineTabRef).current?.focus();
   }
 
+  async function copySessionId(): Promise<void> {
+    if (run === undefined) return;
+    try {
+      await navigator.clipboard.writeText(run.id);
+      setCopiedSessionId(run.id);
+    } catch {
+      setCopiedSessionId(undefined);
+    }
+  }
+
+  const sessionIdCopied = run !== undefined && copiedSessionId === run.id;
+
   return (
     <section aria-label="Runs" className="panel-view">
-      <header className="panel-toolbar">
+      <header className="panel-toolbar runs-toolbar">
         <div className="toolbar-context">
           <span>Runs</span>
           {run !== undefined && <span className="toolbar-separator">/</span>}
           {run !== undefined && <strong>{run.label}</strong>}
-        </div>
-        <div className="toolbar-actions">
-          <span className="live-indicator">
-            <Radio aria-hidden="true" size={12} /> Live
-          </span>
+          {run !== undefined && (
+            <button
+              aria-label={
+                sessionIdCopied ? `Copied session ID ${run.id}` : `Copy session ID ${run.id}`
+              }
+              className="session-id-copy"
+              onClick={() => void copySessionId()}
+              title={sessionIdCopied ? "Session ID copied" : "Copy session ID"}
+              type="button"
+            >
+              <code>{run.id}</code>
+              {sessionIdCopied ? (
+                <Check aria-hidden="true" size={12} />
+              ) : (
+                <Copy aria-hidden="true" size={12} />
+              )}
+            </button>
+          )}
         </div>
       </header>
       <div className="panel-workspace">

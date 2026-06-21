@@ -179,7 +179,7 @@ export function createDevToolsRunsDomain(input: {
       return snapshot(requireRun(runs, sessionId));
     },
     list() {
-      return [...runs.values()].map(snapshot);
+      return [...runs.values()].reverse().map(snapshot);
     },
   };
 }
