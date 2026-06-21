@@ -70,10 +70,15 @@ export type GatewayToEveEvent =
 /** Events Eve sends to AI Gateway. */
 export type EveToGatewayEvent =
   | { readonly type: "session.ready"; readonly data?: Record<string, never> }
-  | { readonly type: "turn.started"; readonly data?: Record<string, never> }
-  | { readonly type: "response.delta"; readonly data: { readonly text: string } }
-  | { readonly type: "response.done"; readonly data?: Record<string, never> }
-  | { readonly type: "response.cancel"; readonly data?: Record<string, never> }
+  // `turnId` correlates a turn's lifecycle frames so the Gateway can drop frames
+  // from a superseded turn (after barge-in) by id rather than relying on ordering.
+  | { readonly type: "turn.started"; readonly data: { readonly turnId: string } }
+  | {
+      readonly type: "response.delta";
+      readonly data: { readonly text: string; readonly turnId: string };
+    }
+  | { readonly type: "response.done"; readonly data: { readonly turnId: string } }
+  | { readonly type: "response.cancel"; readonly data: { readonly turnId: string } }
   | {
       readonly type: "error";
       readonly data: { readonly code?: string; readonly message?: string };

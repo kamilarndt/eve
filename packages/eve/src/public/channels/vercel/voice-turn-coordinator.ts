@@ -108,6 +108,7 @@ export class VoiceTurnCoordinator {
   readonly #processedTextFingerprints = new Map<string, number>();
 
   #seq = 0;
+  #turnSeq = 0;
   #disposed = false;
   #continuationToken: string;
   #lastSessionId: string | undefined;
@@ -116,7 +117,9 @@ export class VoiceTurnCoordinator {
   #pendingText = "";
   #settleTimer: ReturnType<typeof setTimeout> | undefined;
   #queue: Promise<void> = Promise.resolve();
-  #activeTurn: { readonly abort: AbortController; cancelStream: () => void } | undefined;
+  #activeTurn:
+    | { readonly abort: AbortController; cancelStream: () => void; readonly turnId: string }
+    | undefined;
   #responseInFlight = false;
   #capabilities: RealtimeControlCapabilities = DEFAULT_CONTROL_CAPABILITIES;
 
@@ -202,13 +205,16 @@ export class VoiceTurnCoordinator {
   #bargeIn(): void {
     this.#clearSettle();
     this.#pendingText = "";
+    const cancelledTurnId = this.#activeTurn?.turnId;
     const hadResponse = this.#responseInFlight || this.#activeTurn !== undefined;
     this.#activeTurn?.abort.abort();
     if (hadResponse) {
       // Skip the cancel frame when the engine can't act on it; the local relay
       // is already aborted above either way. The durable stream is still drained
       // to its boundary so the next turn cannot race the same continuation.
-      if (this.#capabilities["output.cancel"]) this.#emit({ type: "response.cancel" });
+      if (this.#capabilities["output.cancel"] && cancelledTurnId !== undefined) {
+        this.#emit({ type: "response.cancel", data: { turnId: cancelledTurnId } });
+      }
       this.#responseInFlight = false;
     }
   }
@@ -217,14 +223,15 @@ export class VoiceTurnCoordinator {
     if (this.#disposed) return;
     await this.#stateReady;
     const abort = new AbortController();
-    const turn = { abort, cancelStream: () => undefined as void };
+    const turnId = `turn_${(this.#turnSeq += 1)}`;
+    const turn = { abort, cancelStream: () => undefined as void, turnId };
     this.#activeTurn = turn;
     let session: Session | undefined;
     let consumed = 0;
     let failed = false;
 
     try {
-      this.#emit({ type: "turn.started" });
+      this.#emit({ type: "turn.started", data: { turnId } });
       const payload: { message: string; context?: readonly string[] } = { message };
       if (this.#options.context !== undefined) payload.context = this.#options.context;
       session = await this.#options.send(payload, {
@@ -266,7 +273,7 @@ export class VoiceTurnCoordinator {
             // The durable turn always runs; only stream the spoken readout when
             // the engine can actually speak it (`output.audio`).
             if (text.length > 0 && !abort.signal.aborted && this.#capabilities["output.audio"]) {
-              this.#emit({ type: "response.delta", data: { text } });
+              this.#emit({ type: "response.delta", data: { text, turnId } });
               this.#responseInFlight = true;
             }
           } else if (isCurrentTurnBoundaryEvent(event)) {
@@ -292,7 +299,7 @@ export class VoiceTurnCoordinator {
       }
 
       if (!abort.signal.aborted && !this.#disposed) {
-        this.#emit({ type: "response.done" });
+        this.#emit({ type: "response.done", data: { turnId } });
         this.#responseInFlight = false;
       }
     } catch {

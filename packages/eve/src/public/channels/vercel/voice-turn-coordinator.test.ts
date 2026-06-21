@@ -100,7 +100,11 @@ describe("VoiceTurnCoordinator", () => {
       expect.objectContaining({ auth, mode: "conversation" }),
     );
     const delta = packets.find((p) => p.type === "response.delta");
-    expect(delta?.data).toEqual({ text: "Hello there" });
+    expect(delta?.data).toEqual({ text: "Hello there", turnId: "turn_1" });
+    // turn.started / response.delta / response.done share the turn id so the
+    // Gateway can correlate frames and drop a superseded turn's frames by id.
+    expect(packets.find((p) => p.type === "turn.started")?.data.turnId).toBe("turn_1");
+    expect(packets.find((p) => p.type === "response.done")?.data.turnId).toBe("turn_1");
   });
 
   it("does not speak intermediate tool-call text", async () => {
