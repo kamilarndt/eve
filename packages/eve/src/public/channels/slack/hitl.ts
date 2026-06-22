@@ -81,12 +81,13 @@ export function hitlResponderBlockId(userId: string, requestId: string): string 
   return `${HITL_RESPONDER_BLOCK_PREFIX}${userId}:${requestId}`;
 }
 
-/** Whether the action came from a HITL block owned by its Slack actor. */
+/** Whether a legacy action is unbound or a framework-bound action belongs to its Slack actor. */
 export function canRespondToHitlAction(action: {
   readonly blockId?: string;
   readonly user: { readonly id: string };
 }): boolean {
-  return action.blockId?.startsWith(`${HITL_RESPONDER_BLOCK_PREFIX}${action.user.id}:`) === true;
+  if (!action.blockId?.startsWith(HITL_RESPONDER_BLOCK_PREFIX)) return true;
+  return action.blockId.startsWith(`${HITL_RESPONDER_BLOCK_PREFIX}${action.user.id}:`);
 }
 
 /**
@@ -221,7 +222,7 @@ export interface HitlFreeformModalMetadata {
   readonly threadTs: string;
   readonly messageTs: string;
   readonly requestId: string;
-  readonly responderUserId: string;
+  readonly responderUserId?: string;
 }
 
 /**

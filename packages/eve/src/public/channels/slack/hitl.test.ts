@@ -35,12 +35,15 @@ function renderRequest(request: InputRequest): unknown[] {
 }
 
 describe("canRespondToHitlAction", () => {
-  it("accepts only the Slack user encoded in the action block", () => {
+  it("accepts legacy actions and only the encoded Slack user for bound actions", () => {
     const blockId = hitlResponderBlockId(RESPONDER_USER_ID, "call_abc123");
 
     expect(canRespondToHitlAction({ blockId, user: { id: RESPONDER_USER_ID } })).toBe(true);
     expect(canRespondToHitlAction({ blockId, user: { id: "U_OTHER" } })).toBe(false);
-    expect(canRespondToHitlAction({ user: { id: RESPONDER_USER_ID } })).toBe(false);
+    expect(canRespondToHitlAction({ user: { id: RESPONDER_USER_ID } })).toBe(true);
+    expect(
+      canRespondToHitlAction({ blockId: "slack-generated", user: { id: RESPONDER_USER_ID } }),
+    ).toBe(true);
   });
 });
 

@@ -368,8 +368,7 @@ async function handleViewSubmission(
     !metadata.requestId ||
     !metadata.messageTs ||
     !metadata.channelId ||
-    !metadata.threadTs ||
-    !metadata.responderUserId
+    !metadata.threadTs
   ) {
     return ack;
   }
@@ -387,7 +386,7 @@ async function handleViewSubmission(
     | undefined;
   const teamId = user?.team_id ?? team?.id ?? null;
   if (!user) return ack;
-  if (user.id !== metadata.responderUserId) {
+  if (metadata.responderUserId !== undefined && user.id !== metadata.responderUserId) {
     notifyUnauthorizedHitlResponder(
       { channelId: metadata.channelId, threadTs: metadata.threadTs, teamId },
       user.id,

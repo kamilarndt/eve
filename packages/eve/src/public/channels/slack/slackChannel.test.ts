@@ -1356,9 +1356,9 @@ describe("slackChannel() HITL interaction pipeline", () => {
   });
 
   it.each([
-    ["belongs to another user", hitlResponderBlockId("U_CALLER", "approval_abc123")],
-    ["has no responder marker", undefined],
-  ])("ignores a HITL button that %s", async (_description, blockId) => {
+    ["belongs to another user", hitlResponderBlockId("U_CALLER", "approval_abc123"), false],
+    ["has no responder marker", undefined, true],
+  ])("handles a HITL button that %s", async (_description, blockId, accepted) => {
     const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
     const action: Record<string, unknown> = {
       action_id: `${HITL_ACTION_PREFIX}approval_abc123:button:0`,
@@ -1384,8 +1384,16 @@ describe("slackChannel() HITL interaction pipeline", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(send).not.toHaveBeenCalled();
-    expectUnauthorizedHitlEphemeral(fetchMock, "U_OTHER");
+    if (accepted) {
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0]?.[0]).toEqual({
+        inputResponses: [{ optionId: "approve", requestId: "approval_abc123" }],
+      });
+      expect(String(fetchMock.mock.calls[0]?.[0])).toBe("https://slack.com/api/chat.update");
+    } else {
+      expect(send).not.toHaveBeenCalled();
+      expectUnauthorizedHitlEphemeral(fetchMock, "U_OTHER");
+    }
   });
 
   it("resumes a HITL select answer from the current turn caller", async () => {
@@ -1492,7 +1500,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
     expectUnauthorizedHitlEphemeral(fetchMock, "U_OTHER");
   });
 
-  it("resumes freeform modal answers with the submitting Slack user auth", async () => {
+  it("resumes legacy freeform modal answers with the submitting Slack user auth", async () => {
     const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
 
     const { send } = await firePost(
@@ -1513,7 +1521,6 @@ describe("slackChannel() HITL interaction pipeline", () => {
             continuationToken: "C01:1700000000.000001",
             messageTs: "1700000000.000010",
             requestId: "call_abc123",
-            responderUserId: "U_SUBMITTER",
             threadTs: "1700000000.000001",
           }),
           state: {
