@@ -42,7 +42,7 @@ export type { ToolModelOutput } from "#shared/tool-definition.js";
  * `auth` field. Accepts the same shapes as a connection's `auth`:
  * - a `getToken`-only object (static API keys, pre-provisioned JWTs);
  *   `principalType` may be omitted and defaults to `"app"`.
- * - a full interactive OAuth definition (e.g. `connect("okta")` from
+ * - a full interactive OAuth definition (e.g. `connect("okta/myagent")` from
  *   `@vercel/connect/eve`, or {@link defineInteractiveAuthorization}).
  */
 export type ToolAuthDefinition =
@@ -54,15 +54,27 @@ export type ToolAuthDefinition =
 export type ToolAuthProvider = ToolAuthDefinition;
 
 /**
- * Controls how an inline tool auth provider is scoped and presented.
- *
- * The scope keys token caches, callback URLs, pending authorization state,
- * and authorization completion. When omitted, eve derives a stable
- * tool-qualified scope from the provider metadata.
+ * Controls Eve runtime behavior for an inline tool auth provider.
  */
-export interface ToolAuthScopeOptions {
+export interface ToolAuthOptions {
+  /**
+   * Connection metadata passed through to provider callbacks. Tool-only
+   * providers usually leave this unset; connection-backed helpers can use it
+   * to receive the upstream server URL.
+   */
   readonly connection?: ConnectionAuthorizationContext;
+  /**
+   * Optional human-readable provider name shown in sign-in UI. Presentation
+   * only; it does not affect OAuth scopes, token cache keys, or callback URLs.
+   */
   readonly displayName?: string;
+  /**
+   * Optional Eve scope override for token caches, callback URLs, pending
+   * authorization state, and authorization completion. This is not an OAuth
+   * scope. For Vercel Connect OAuth targeting such as `scopes`, `resources`,
+   * or `authorizationDetails`, configure the provider with
+   * `connect({ connector, tokenParams })`.
+   */
   readonly scope?: string;
 }
 
@@ -96,7 +108,7 @@ export type ToolContext = SessionContext & {
    * auth shapes as a connection's `auth` field, including `connect("...")`
    * from `@vercel/connect/eve`.
    */
-  getToken(provider: ToolAuthProvider, options?: ToolAuthScopeOptions): Promise<TokenResult>;
+  getToken(provider: ToolAuthProvider, options?: ToolAuthOptions): Promise<TokenResult>;
   /**
    * Signals that the caller must complete this tool's authorization flow.
    * Throws `ConnectionAuthorizationRequiredError`, which the runtime converts
@@ -113,7 +125,7 @@ export type ToolContext = SessionContext & {
    * provider before proceeding. Use this after a downstream `401` rejects a
    * token returned by {@link getToken}.
    */
-  requireAuth(provider: ToolAuthProvider, options?: ToolAuthScopeOptions): never;
+  requireAuth(provider: ToolAuthProvider, options?: ToolAuthOptions): never;
 };
 
 /**

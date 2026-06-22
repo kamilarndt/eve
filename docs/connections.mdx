@@ -124,11 +124,11 @@ import { defineMcpClientConnection } from "eve/connections";
 export default defineMcpClientConnection({
   url: "https://mcp.linear.app/sse",
   description: "Linear workspace: issues, projects, cycles, and comments.",
-  auth: connect("linear"),
+  auth: connect("linear/myagent"),
 });
 ```
 
-`"linear"` is the UID you chose when registering the Connect client. Connect-managed OAuth is user-scoped by default, so the runtime resolves the per-user token before each tool call. The full setup (Connect client provisioning, project linking, the runtime consent flow) lives in [Auth & route protection](./guides/auth-and-route-protection).
+`"linear/myagent"` is the UID you chose when registering the Connect client. Connect-managed OAuth is user-scoped by default, so the runtime resolves the per-user token before each tool call. The full setup (Connect client provisioning, project linking, the runtime consent flow) lives in [Auth & route protection](./guides/auth-and-route-protection).
 
 ## Self-hosted interactive OAuth
 
@@ -183,7 +183,7 @@ export default defineMcpClientConnection({
 
 Drop `resume` when the provider keeps flow state server-side, so nothing has to cross the step boundary.
 
-`displayName` is presentation-only. The connection's path-derived name still keys the authorization scope, token cache, and callback URL. You can also set `displayName` on the `auth` definition itself (e.g. `auth: { ...connect("sfdc"), displayName: "Salesforce" }`); that definition-level value wins over one the strategy stamps on the challenge, and channels fall back to title-casing the connection name when neither is set.
+`displayName` is presentation-only. The connection's path-derived name still keys the authorization scope, token cache, and callback URL. You can also set `displayName` on the `auth` definition itself (e.g. `auth: { ...connect("salesforce/myagent"), displayName: "Salesforce" }`); that definition-level value wins over one the strategy stamps on the challenge, and channels fall back to title-casing the connection name when neither is set.
 
 ### Signaling authorization state
 
@@ -212,7 +212,7 @@ import { connect } from "@vercel/connect/eve";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-const linearAuth = connect("oauth/linear");
+const linearAuth = connect("linear/myagent");
 
 export default defineTool({
   description: "List open Linear issues.",

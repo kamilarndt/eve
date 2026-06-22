@@ -18,11 +18,7 @@ import {
   ConnectionAuthorizationRequiredError,
   isConnectionAuthorizationRequiredError,
 } from "#public/connections/errors.js";
-import type {
-  ToolAuthProvider,
-  ToolAuthScopeOptions,
-  ToolContext,
-} from "#public/definitions/tool.js";
+import type { ToolAuthOptions, ToolAuthProvider, ToolContext } from "#public/definitions/tool.js";
 import { type AuthorizationChallenge, requestAuthorization } from "#harness/authorization.js";
 import {
   type AuthorizationDefinition,
@@ -149,10 +145,7 @@ function buildToolContext(input: {
   const base = buildCallbackContext();
   return {
     ...base,
-    async getToken(
-      provider?: ToolAuthProvider,
-      options?: ToolAuthScopeOptions,
-    ): Promise<TokenResult> {
+    async getToken(provider?: ToolAuthProvider, options?: ToolAuthOptions): Promise<TokenResult> {
       if (provider === undefined) {
         if (topLevelScoped === undefined) throw noAuthError(scope);
         return resolveScopedToken(topLevelScoped);
@@ -166,7 +159,7 @@ function buildToolContext(input: {
         toolScope: scope,
       });
     },
-    requireAuth(provider?: ToolAuthProvider, options?: ToolAuthScopeOptions): never {
+    requireAuth(provider?: ToolAuthProvider, options?: ToolAuthOptions): never {
       if (provider === undefined) {
         if (topLevelScoped === undefined) throw noAuthError(scope);
         throw new ConnectionAuthorizationRequiredError(topLevelScoped.scope);
@@ -191,7 +184,7 @@ function buildToolContext(input: {
 async function resolveInlineToken(input: {
   readonly toolScope: string;
   readonly provider: ToolAuthProvider;
-  readonly options?: ToolAuthScopeOptions;
+  readonly options?: ToolAuthOptions;
   readonly justAuthorizedScopes: Set<string>;
   readonly inlineAuthState: InlineAuthState;
 }): Promise<TokenResult> {
@@ -283,7 +276,7 @@ async function handleAuthorizationRequests(
 function buildInlineScopedAuthorization(input: {
   readonly toolScope: string;
   readonly provider: ToolAuthProvider;
-  readonly options?: ToolAuthScopeOptions;
+  readonly options?: ToolAuthOptions;
   readonly inlineAuthState: InlineAuthState;
 }): ScopedAuthorization {
   const authorization = normalizeInlineProvider(input.provider, input.options);
@@ -304,7 +297,7 @@ function buildInlineScopedAuthorization(input: {
 
 function normalizeInlineProvider(
   provider: ToolAuthProvider,
-  options: ToolAuthScopeOptions | undefined,
+  options: ToolAuthOptions | undefined,
 ): AuthorizationDefinition {
   const authorization = normalizeAuthorizationSpec(provider, "ctx.getToken:", "provider");
   if (options?.displayName === undefined) {
@@ -332,7 +325,8 @@ function deriveInlineScope(input: {
   } else if (input.inlineAuthState.anonymousProvider !== input.provider) {
     throw new Error(
       `ctx.getToken: Multiple inline auth providers without provider metadata need explicit scopes. ` +
-        `Pass options.scope for each provider, for example ctx.getToken(auth, { scope: "github" }).`,
+        `Pass options.scope (an Eve scope key) for each provider, for example ` +
+        `ctx.getToken(auth, { scope: "github" }).`,
     );
   }
 

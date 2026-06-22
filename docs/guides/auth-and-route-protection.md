@@ -236,7 +236,7 @@ import { once } from "eve/tools/approval";
 export default defineMcpClientConnection({
   url: "https://mcp.linear.app/mcp",
   description: "Linear: project management, issue tracking, and team workflows.",
-  auth: connect("oauth/linear"),
+  auth: connect("linear/myagent"),
   approval: once(),
 });
 ```
@@ -252,13 +252,13 @@ import { defineTool } from "eve/tools";
 import { connect } from "@vercel/connect/eve";
 import { z } from "zod";
 
-const oktaAuth = connect("okta");
+const oktaAuth = connect("okta/myagent");
 
 export default defineTool({
   description: "List the caller's Okta groups.",
   inputSchema: z.object({}),
   async execute(_input, ctx) {
-    const { token } = await ctx.getToken(oktaAuth, { displayName: "Okta" });
+    const { token } = await ctx.getToken(oktaAuth);
     const res = await fetch("https://api.okta-proxy.internal/groups", {
       headers: { authorization: `Bearer ${token}` },
     });
@@ -274,19 +274,15 @@ import { connect } from "@vercel/connect/eve";
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
-const githubAuth = connect("github");
-const linearAuth = connect("oauth/linear");
+const githubAuth = connect("github/myagent");
+const linearAuth = connect("linear/myagent");
 
 export default defineTool({
   description: "Sync GitHub context into Linear.",
   inputSchema: z.object({ issueId: z.string() }),
   async execute({ issueId }, ctx) {
-    const { token: githubToken } = await ctx.getToken(githubAuth, {
-      displayName: "GitHub",
-    });
-    const { token: linearToken } = await ctx.getToken(linearAuth, {
-      displayName: "Linear",
-    });
+    const { token: githubToken } = await ctx.getToken(githubAuth);
+    const { token: linearToken } = await ctx.getToken(linearAuth);
 
     const repo = await fetch("https://api.github.com/user/repos", {
       headers: { authorization: `Bearer ${githubToken}` },
@@ -298,18 +294,35 @@ export default defineTool({
 });
 ```
 
+Configure provider-specific OAuth targeting on the provider itself. For Vercel Connect, pass `tokenParams` to `connect(...)` when you need explicit OAuth scopes, resource indicators, or rich authorization requests:
+
+```ts
+const githubAuth = connect({
+  connector: "github/myagent",
+  tokenParams: {
+    authorizationDetails: [
+      {
+        type: "github_app_installation",
+        org: "acme",
+        repositories: ["agent-runtime"],
+      },
+    ],
+  },
+});
+```
+
 The tool's `ctx` exposes provider-scoped auth accessors:
 
-- `ctx.getToken(provider, options?)` resolves an inline provider such as `connect("github")`. It uses the same cache, callback, and sign-in machinery, but scopes the flow to that provider instead of the tool's legacy top-level `auth`.
-- `ctx.requireAuth(provider, options?)` does the same for an inline provider. Use it after a downstream `401` rejects a token returned by `ctx.getToken(provider)`.
+- `ctx.getToken(provider, options?)` resolves an inline provider such as `connect("github/myagent")`. It uses the same cache, callback, and sign-in machinery as connection auth, scoped to that provider instead of the tool's legacy top-level `auth`.
+- `ctx.requireAuth(provider, options?)` evicts the cached token for that inline provider and starts a fresh authorization challenge. Use it after a downstream `401` rejects a token returned by `ctx.getToken(provider)`.
 
 Throw `ConnectionAuthorizationRequiredError` from an inline provider's `getToken` to trigger the consent flow for that provider. If a downstream request later rejects an already-resolved token, call `ctx.requireAuth(provider)` to evict and re-authorize it.
 
-By default the sign-in affordance title-cases the provider scope. Set `displayName` in the inline options to control what users see instead, for example `ctx.getToken(connect("sfdc"), { displayName: "Salesforce" })`. It is presentation-only.
+Vercel Connect providers usually supply their own display name in the authorization challenge. Set `displayName` in the inline options only when you need to override what users see, for example `ctx.getToken(customAuth, { displayName: "Salesforce" })`. It is presentation-only.
 
-Inline providers derive a stable tool-qualified scope from Vercel Connect metadata when available. If you pass multiple custom providers that do not carry provider metadata, give each one an explicit `scope`, for example `ctx.getToken(auth, { scope: "github" })`.
+Inline providers derive a stable tool-qualified Eve scope from Vercel Connect metadata when available. If you pass multiple custom providers that do not carry provider metadata, give each one an explicit Eve scope, for example `ctx.getToken(auth, { scope: "github" })`. This `scope` controls Eve's cache and callback keys; it is not an OAuth scope.
 
-Older tools may still declare a top-level `auth` field and call `ctx.getToken()` or `ctx.requireAuth()` without arguments. That shortcut is deprecated; prefer inline providers for new tools.
+Older tools may still declare a top-level `auth` field and call `ctx.getToken()` or `ctx.requireAuth()` without arguments. That compatibility path is deprecated; prefer inline providers for new tools.
 
 ## What to read next
 
