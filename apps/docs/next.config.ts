@@ -29,32 +29,6 @@ const config: NextConfig = {
       },
     ],
   },
-
-  async redirects() {
-    return [
-      {
-        source: "/docs",
-        destination: "/docs/introduction",
-        permanent: true,
-      },
-      {
-        source: "/:lang/docs",
-        destination: "/:lang/docs/introduction",
-        permanent: true,
-      },
-      // Evals moved from a single Advanced page to a top-level section.
-      {
-        source: "/docs/advanced/evals",
-        destination: "/docs/evals/overview",
-        permanent: true,
-      },
-      {
-        source: "/:lang/docs/advanced/evals",
-        destination: "/:lang/docs/evals/overview",
-        permanent: true,
-      },
-    ];
-  },
 };
 
 export default withMDX(config);

@@ -1,0 +1,57 @@
+---
+title: "EveAgentStore"
+description: "Use the framework-agnostic reactive store beneath the React, Vue, and Svelte bindings."
+---
+
+Start with `useEveAgent` when eve supports your UI framework. Use `EveAgentStore` directly for
+another framework or when you need to own the reactive adapter. It is the shared state machine
+beneath every provided hook.
+
+```ts
+import { EveAgentStore, defaultMessageReducer } from "eve/client";
+
+const store = new EveAgentStore({
+  host: "http://127.0.0.1:2000",
+  reducer: defaultMessageReducer,
+  maxReconnectAttempts: 3,
+});
+
+const unsubscribe = store.subscribe(() => {
+  render(store.snapshot);
+});
+
+store.setCallbacks({
+  onError(error) {
+    console.error(error);
+  },
+  onSessionChange(session) {
+    localStorage.setItem("eve-session", JSON.stringify(session));
+  },
+});
+
+await store.send({ message: "Hello" });
+
+unsubscribe();
+```
+
+## Constructor modes
+
+Pass connection options (`host`, `auth`, `headers`, `initialSession`) and the store owns its `ClientSession`. Alternatively, pass an existing `session`. In external-session mode, `reset()` clears projected state but continues to use that same external session object.
+
+`initialEvents` replays existing events through the reducer. `initialSession` supplies the serializable cursor for a store-owned session.
+
+## Snapshot and subscriptions
+
+`snapshot` contains `data`, `events`, `session`, `status`, and `error`. `subscribe(callback)` returns an unsubscribe function. The store publishes immutable snapshots; adapters should read `store.snapshot` inside their subscription callback.
+
+## Turn control
+
+- `send(payload)` runs one turn and resolves after its stream settles.
+- `stop()` aborts the active request.
+- `reset()` invalidates the local operation and clears projection state.
+- `setCallbacks()` replaces the observe-only callbacks and optional `prepareSend` function.
+
+The store rejects concurrent sends so one local cursor cannot race two turns. Client abort is not a
+transactional cancellation of server-side side effects. See
+[Client State](../frontend/client-state) for status, reconnection, input requests, and cursor
+persistence.

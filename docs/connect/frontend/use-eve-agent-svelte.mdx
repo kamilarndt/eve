@@ -1,0 +1,78 @@
+---
+title: "useEveAgent for Svelte"
+description: "Svelte 5 reactivity and lifecycle behavior for the shared eve client state."
+---
+
+`useEveAgent` from `eve/svelte` wraps the shared `EveAgentStore` in Svelte 5 rune-friendly getters. [Client State](./client-state) owns the protocol, status, input-request, persistence, and reconnection behavior; this page covers Svelte differences.
+
+## Component example
+
+```svelte
+<script lang="ts">
+  import { useEveAgent } from "eve/svelte";
+
+  const agent = useEveAgent();
+  let message = $state("");
+
+  async function submit() {
+    const text = message.trim();
+    if (!text) return;
+    message = "";
+    await agent.send({ message: text });
+  }
+</script>
+
+<form onsubmit={(event) => { event.preventDefault(); void submit(); }}>
+  {#each agent.data.messages as item}
+    <article>
+      <strong>{item.role}</strong>
+      {#each item.parts as part}
+        {#if part.type === "text"}<p>{part.text}</p>{/if}
+      {/each}
+    </article>
+  {/each}
+  <input bind:value={message} disabled={agent.status !== "ready"} />
+  <button type="submit" disabled={agent.status !== "ready"}>Send</button>
+</form>
+```
+
+`data`, `status`, `error`, `events`, and `session` are reactive getters. Read them directly in templates, `$derived`, or `$effect`; they are not Svelte stores and do not use a `$agent` prefix. `send`, `stop`, and `reset` are methods.
+
+## Lifecycle
+
+The binding reads host, reducer, session, and initial state once. Create a new binding to replace them. Supply credential and header functions when values rotate between requests.
+
+Subscription begins in a browser reactive consumer. When that consumer is destroyed, the binding unsubscribes and aborts the active client request.
+
+```ts
+const agent = useEveAgent({
+  host: "https://agent.example.com",
+  headers: async () => ({
+    authorization: `Bearer ${await getAccessToken()}`,
+  }),
+  initialSession: savedSession,
+  onSessionChange(session) {
+    localStorage.setItem("eve-session", JSON.stringify(session));
+  },
+});
+```
+
+## SvelteKit
+
+The [SvelteKit plugin](./sveltekit) mounts same-origin routes. Components still import the binding from `eve/svelte`.
+
+## Custom projections
+
+Pass an `EveAgentReducer<TData>` from `eve/svelte` to change `agent.data`:
+
+```ts title="src/eve-state.ts" check
+import { useEveAgent, type EveAgentReducer } from "eve/svelte";
+
+const reducer: EveAgentReducer<{ toolCalls: number }> = {
+  initial: () => ({ toolCalls: 0 }),
+  reduce: (data, event) =>
+    event.type === "actions.requested" ? { toolCalls: data.toolCalls + 1 } : data,
+};
+
+const agent = useEveAgent({ reducer });
+```

@@ -1,0 +1,64 @@
+---
+title: "Browser Frontends"
+description: "Mount eve routes in a web framework and render one shared client-state model."
+---
+
+We recommend keeping the frontend and agent on the same origin. The browser can then use
+`/eve/v1/*` without a public service URL, CORS policy, or a second deployment to coordinate.
+
+An eve frontend has two layers:
+
+1. A host-framework integration mounts the eve HTTP routes on the application's origin.
+2. A reactive binding wraps `EveAgentStore` and projects stream events into renderable state.
+
+The framework integrations below mount both layers together:
+
+| Application              | Route integration                   | Reactive API                    |
+| ------------------------ | ----------------------------------- | ------------------------------- |
+| [Next.js](./nextjs)      | `withEve` from `eve/next`           | `useEveAgent` from `eve/react`  |
+| [Nuxt](./nuxt)           | module from `eve/nuxt`              | `useEveAgent` from `eve/vue`    |
+| [SvelteKit](./sveltekit) | `eveSvelteKit` from `eve/sveltekit` | `useEveAgent` from `eve/svelte` |
+| Other React application  | Existing or remote eve HTTP routes  | `useEveAgent` from `eve/react`  |
+
+The framework pages document only mounting, server configuration, and framework-specific reactivity. Session state, statuses, optimistic messages, input requests, reconnection, and reset behavior are shared and documented once in [Client State](./client-state).
+
+For scripts, jobs, tests, or a UI with its own state machine, use the [TypeScript Client](../typescript-client) instead of a framework hook. For a framework-agnostic reactive store, use [`EveAgentStore`](../typescript-client/store).
+
+## Minimal React client
+
+```tsx title="app/agent-chat.tsx" check
+"use client";
+
+import { useEveAgent } from "eve/react";
+
+export function AgentChat() {
+  const agent = useEveAgent();
+  const busy = agent.status === "submitted" || agent.status === "streaming";
+
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        const form = new FormData(event.currentTarget);
+        const message = String(form.get("message") ?? "").trim();
+        if (message) void agent.send({ message });
+      }}
+    >
+      {agent.data.messages.map((message) => (
+        <article key={message.id}>
+          <strong>{message.role}</strong>
+          {message.parts.map((part, index) =>
+            part.type === "text" ? <p key={index}>{part.text}</p> : null,
+          )}
+        </article>
+      ))}
+      <input name="message" disabled={busy} />
+      <button type="submit" disabled={busy}>
+        Send
+      </button>
+    </form>
+  );
+}
+```
+
+Production browser traffic must authenticate at the eve channel. Same-origin routing does not establish user identity; see [Authentication](../../operate/authentication).

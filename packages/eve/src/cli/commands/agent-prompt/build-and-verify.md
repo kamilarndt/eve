@@ -3,8 +3,9 @@
 Work from the project directory. Once eve is installed, the full docs are bundled
 at `node_modules/eve/docs/` and match the installed version exactly. Read
 `README.md` there first, then the guide for what you're adding, such as
-`connections`, `channels/slack`, or `guides/auth-and-route-protection` for the
-Vercel Connect flow.
+`connect/connections/index.mdx`, `connect/channels/slack.mdx`, or
+`operate/authentication.md`. Use the HTTP and TypeScript references for exact
+contracts rather than inferring an API from examples.
 
 - Put the purpose in `agent/instructions.md` (the always-on system prompt),
   replacing the scaffold's placeholder with what the user said the agent should

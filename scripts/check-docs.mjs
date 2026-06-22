@@ -1,272 +1,317 @@
 #!/usr/bin/env node
-/**
- * CI lint that validates the markdown roots the docs site renders, before the
- * site build consumes them.
- *
- * Two classes of failure are caught here so Vercel preview deploys don't have
- * to catch them:
- *
- *   1. Every site-page markdown file (anything under a configured root that
- *      is not explicitly excluded) must start with YAML frontmatter
- *      containing the fields required by that root. Missing fields crash
- *      fumadocs' schema validation at build time.
- *
- *   2. For roots whose ordering is driven by `meta.json` (i.e. /docs),
- *      every site-page markdown file must be reachable from the sidebar nav
- *      — either listed by slug in an ancestor `meta.json#pages`, covered
- *      by a `"..."` token in that array, or explicitly allowed as a
- *      footer-only page. Otherwise the page renders at its URL but never
- *      appears in the sidebar (easy to miss in review).
- *
- * Files intentionally not part of the site (the top-level engineer-facing
- * README.md in each root) are skipped via isExcluded().
- */
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { relative, resolve } from "node:path";
+/** Validate the published docs as both site pages and package-local Markdown. */
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, extname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const ROOTS = [
-  {
-    label: "docs",
-    dir: resolve(fileURLToPath(new URL("../docs", import.meta.url))),
-    requireSidebarCoverage: true,
-    requiredFrontmatter: ["title", "description"],
-  },
-];
+const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const docsDir = resolve(repoRoot, "docs");
+const packageJsonPath = resolve(repoRoot, "packages/eve/package.json");
+const excludedSiteFiles = new Set(["README.md", "STYLE.md"]);
+const failures = [];
+let validatedCount = 0;
 
-const SIDEBAR_EXEMPT_PAGES = new Set([
-  // Linked from the global footer instead of the docs sidebar.
-  "responsible-use.md",
-]);
+function toPosix(value) {
+  return value.split("\\").join("/");
+}
 
-// Only the top-level README.md is excluded. Nested READMEs (e.g.
-// channels/README.md) are site pages and must carry a `url:` frontmatter
-// override, validated below.
-const isExcluded = (relPath) => relPath === "README.md";
-const isSidebarExempt = (relPath) => SIDEBAR_EXEMPT_PAGES.has(relPath);
-
-function walkMarkdown(dir) {
+function walk(dir, predicate = () => true) {
   const out = [];
   for (const entry of readdirSync(dir)) {
-    const full = `${dir}/${entry}`;
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
-      out.push(...walkMarkdown(full));
-    } else if (entry.endsWith(".md") || entry.endsWith(".mdx")) {
-      out.push(full);
-    }
+    const full = resolve(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...walk(full, predicate));
+    else if (predicate(full)) out.push(full);
   }
   return out;
 }
+
+const markdownFiles = walk(docsDir, (file) => /\.mdx?$/.test(file));
+const siteFiles = markdownFiles.filter(
+  (file) => !excludedSiteFiles.has(toPosix(relative(docsDir, file))),
+);
 
 function parseFrontmatter(source) {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match) return null;
   const data = {};
   for (const line of match[1].split(/\r?\n/)) {
-    const m = line.match(/^([\w-]+):\s*(.*)$/);
-    if (!m) continue;
-    const [, key, rawValue] = m;
-    const value = rawValue.trim().replace(/^["']|["']$/g, "");
-    data[key] = value;
+    const field = line.match(/^([\w-]+):\s*(.*)$/);
+    if (!field) continue;
+    data[field[1]] = field[2].trim().replace(/^["']|["']$/g, "");
   }
   return data;
 }
 
-function loadMetaJson(dir) {
+function normalizeRoute(route) {
+  const normalized = route.replace(/\/{2,}/g, "/").replace(/\/$/, "");
+  return normalized || "/docs";
+}
+
+function renderedRoute(relPath, source) {
+  const override = parseFrontmatter(source)?.url;
+  if (override) {
+    return normalizeRoute(override.startsWith("/docs") ? override : `/docs/${override}`);
+  }
+  let slug = relPath.replace(/\.mdx?$/, "");
+  if (slug === "index") slug = "";
+  else slug = slug.replace(/\/index$/, "");
+  return normalizeRoute(`/docs/${slug}`);
+}
+
+const pages = siteFiles.map((abs) => {
+  const rel = toPosix(relative(docsDir, abs));
+  const source = readFileSync(abs, "utf8");
+  return { abs, rel, source, route: renderedRoute(rel, source) };
+});
+const pageByRoute = new Map();
+const pageByAbs = new Map(pages.map((page) => [page.abs, page]));
+
+for (const page of pages) {
+  validatedCount += 1;
+  const frontmatter = parseFrontmatter(page.source);
+  if (!frontmatter) {
+    failures.push({ file: page.rel, issue: "no frontmatter block" });
+    continue;
+  }
+  for (const field of ["title", "description"]) {
+    if (!frontmatter[field]) {
+      failures.push({ file: page.rel, issue: `frontmatter missing \`${field}\`` });
+    }
+  }
+
+  const duplicate = pageByRoute.get(page.route);
+  if (duplicate) {
+    failures.push({
+      file: page.rel,
+      issue: `duplicate rendered route \`${page.route}\` (also ${duplicate.rel})`,
+    });
+  } else {
+    pageByRoute.set(page.route, page);
+  }
+}
+
+function readMeta(dir) {
+  const path = resolve(dir, "meta.json");
+  if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(`${dir}/meta.json`, "utf8"));
-  } catch {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    failures.push({
+      file: toPosix(relative(docsDir, path)),
+      issue: `invalid JSON: ${String(error.message ?? error)}`,
+    });
     return null;
   }
 }
 
-// Collect every slug a meta.json references, plus whether that folder uses
-// a `"..."` wildcard. Sibling files in a wildcard folder are auto-included.
-function collectNavReferences(rootDir) {
-  const result = { explicit: new Set(), wildcardFolders: new Set() };
+function isMetaControl(entry) {
+  return (
+    entry === "..." ||
+    entry === "z...z" ||
+    entry === "---" ||
+    /^---.+---$/.test(entry) ||
+    entry.startsWith("[")
+  );
+}
 
-  const visit = (dir) => {
-    const meta = loadMetaJson(dir);
-    const relDir = relative(rootDir, dir);
-    if (meta && Array.isArray(meta.pages)) {
-      for (const entry of meta.pages) {
-        if (typeof entry !== "string") continue;
-        if (entry === "..." || entry === "z...z") {
-          result.wildcardFolders.add(relDir);
-          continue;
-        }
-        if (entry === "---") continue;
-        if (/^---.+---$/.test(entry)) continue; // labeled separator: ---Group name---
-        if (entry.startsWith("[")) continue; // [Title](url) custom link
-        const slug = entry.startsWith("!") ? entry.slice(1) : entry;
-        const key = relDir ? `${relDir}/${slug}` : slug;
-        result.explicit.add(key);
+function resolveMarkdownTarget(base) {
+  const candidates = extname(base)
+    ? [base]
+    : [`${base}.md`, `${base}.mdx`, resolve(base, "index.md"), resolve(base, "index.mdx")];
+  return candidates.find((candidate) => existsSync(candidate) && statSync(candidate).isFile());
+}
+
+const navExplicit = new Set();
+const navWildcardDirs = new Set();
+
+function inspectMetaTree(dir) {
+  const relDir = toPosix(relative(docsDir, dir));
+  const meta = readMeta(dir);
+  if (meta && Array.isArray(meta.pages)) {
+    const localEntries = new Set();
+    for (const rawEntry of meta.pages) {
+      if (typeof rawEntry !== "string" || isMetaControl(rawEntry)) {
+        if (rawEntry === "..." || rawEntry === "z...z") navWildcardDirs.add(relDir);
+        continue;
       }
-    } else if (dir !== rootDir) {
-      // A folder with no meta.json behaves like an implicit wildcard — every
-      // sibling .md is auto-included by fumadocs.
-      result.wildcardFolders.add(relDir);
+      const entry = rawEntry.startsWith("!") ? rawEntry.slice(1) : rawEntry;
+      if (localEntries.has(entry)) {
+        failures.push({
+          file: toPosix(relative(docsDir, resolve(dir, "meta.json"))),
+          issue: `duplicate meta.json entry \`${entry}\``,
+        });
+      }
+      localEntries.add(entry);
+      const rawTarget = resolve(dir, entry);
+      const target = resolveMarkdownTarget(rawTarget);
+      const targetIsGroup = existsSync(rawTarget) && statSync(rawTarget).isDirectory();
+      if (!target && !targetIsGroup) {
+        failures.push({
+          file: toPosix(relative(docsDir, resolve(dir, "meta.json"))),
+          issue: `meta.json entry \`${entry}\` does not resolve to a page or folder index`,
+        });
+      }
+      navExplicit.add(relDir ? `${relDir}/${entry}` : entry);
     }
-    for (const entry of readdirSync(dir)) {
-      const full = `${dir}/${entry}`;
-      if (statSync(full).isDirectory()) visit(full);
-    }
-  };
+  } else if (dir !== docsDir) {
+    navWildcardDirs.add(relDir);
+  }
 
-  visit(rootDir);
-  return result;
+  for (const entry of readdirSync(dir)) {
+    const full = resolve(dir, entry);
+    if (statSync(full).isDirectory()) inspectMetaTree(full);
+  }
 }
 
-function isCoveredByNav(relPath, nav) {
-  // relPath looks like "foo.md", "tools/human-in-the-loop.mdx",
-  // "channels/index.md". We map to the slug form meta.json uses.
+inspectMetaTree(docsDir);
+
+function coveredByNav(relPath) {
   const slug = relPath.replace(/\.mdx?$/, "");
-
-  // Direct match: slug listed in an ancestor meta.json pages[].
-  if (nav.explicit.has(slug)) return true;
-
-  // Folder-indexes: fumadocs treats `channels/index.md` as the landing for
-  // the `channels` folder; a `"channels"` entry in root meta.json covers it.
-  if (slug.endsWith("/index")) {
-    const folderSlug = slug.slice(0, -"/index".length);
-    if (nav.explicit.has(folderSlug)) return true;
-  }
-
-  // A root-level file is covered by the root "..." wildcard.
-  const lastSlash = slug.lastIndexOf("/");
-  const folder = lastSlash === -1 ? "" : slug.slice(0, lastSlash);
-  if (nav.wildcardFolders.has(folder)) return true;
-
-  // A folder reference in an ancestor meta pulls in the whole folder.
-  if (lastSlash !== -1 && nav.explicit.has(folder)) return true;
-
-  return false;
+  if (navExplicit.has(slug)) return true;
+  if (slug.endsWith("/index") && navExplicit.has(slug.slice(0, -"/index".length))) return true;
+  const slash = slug.lastIndexOf("/");
+  const folder = slash === -1 ? "" : slug.slice(0, slash);
+  return navWildcardDirs.has(folder) || (slash !== -1 && navExplicit.has(folder));
 }
 
-const failures = [];
-let validatedCount = 0;
-
-for (const root of ROOTS) {
-  const allFiles = walkMarkdown(root.dir);
-  const nav = root.requireSidebarCoverage ? collectNavReferences(root.dir) : null;
-
-  for (const absPath of allFiles) {
-    const relPath = relative(root.dir, absPath).split("\\").join("/");
-    if (isExcluded(relPath)) continue;
-    if (root.include && !root.include(relPath)) continue;
-
-    validatedCount += 1;
-    const source = readFileSync(absPath, "utf8");
-    const fm = parseFrontmatter(source);
-
-    if (!fm) {
-      failures.push({
-        root: root.label,
-        file: relPath,
-        issue: "no frontmatter block (expected `---` ... `---` at top)",
-      });
-      continue;
-    }
-    for (const field of root.requiredFrontmatter) {
-      if (fm[field]) continue;
-      failures.push({
-        root: root.label,
-        file: relPath,
-        issue: `frontmatter missing \`${field}\``,
-      });
-    }
-    if (nav && !isSidebarExempt(relPath) && !isCoveredByNav(relPath, nav)) {
-      failures.push({
-        root: root.label,
-        file: relPath,
-        issue:
-          "not referenced in any meta.json#pages and not covered by a `...` wildcard — page would be orphaned from the sidebar",
-      });
-    }
+for (const page of pages) {
+  if (!coveredByNav(page.rel)) {
+    failures.push({ file: page.rel, issue: "page is orphaned from meta.json navigation" });
   }
 }
 
-// 3. Internal links resolve. Every relative (./ ../) or site-absolute (/docs/)
-//    markdown link in a doc page must point at a rendered doc URL or folder.
-//    fumadocs renders broken links as dead clicks; CI should catch them.
-function renderedUrl(relPath, source) {
-  const slug = relPath.replace(/\.mdx?$/, "").replace(/(^|\/)index$/, "");
-  const override = parseFrontmatter(source)?.url;
-  const route = override || `/${slug}`;
-  return `/docs${route}`.replace(/\/$/, "");
+function headingIds(source) {
+  const ids = new Set();
+  const duplicates = new Map();
+  for (const line of source.split(/\r?\n/)) {
+    const match = line.match(/^#{1,6}\s+(.+?)\s*#*$/);
+    if (!match) continue;
+    const plain = match[1]
+      .replace(/<[^>]+>/g, "")
+      .replace(/[`*_~]/g, "")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .toLowerCase()
+      .trim()
+      .replace(/[^\p{L}\p{N}\s-]/gu, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-");
+    const count = duplicates.get(plain) ?? 0;
+    duplicates.set(plain, count + 1);
+    ids.add(count === 0 ? plain : `${plain}-${count}`);
+  }
+  return ids;
 }
 
-function checkLinks(rootDir) {
-  const files = walkMarkdown(rootDir);
-  const renderedUrls = new Set();
-  const renderedDirs = new Set();
-  for (const abs of files) {
-    const rel = relative(rootDir, abs).split("\\").join("/");
-    if (isExcluded(rel)) continue;
+function parseLinkTarget(raw) {
+  let value = raw.trim();
+  if (value.startsWith("<") && value.includes(">")) value = value.slice(1, value.indexOf(">"));
+  else value = value.split(/\s+["']/)[0];
+  const hashAt = value.indexOf("#");
+  return {
+    path: hashAt === -1 ? value : value.slice(0, hashAt),
+    anchor: hashAt === -1 ? "" : decodeURIComponent(value.slice(hashAt + 1)),
+  };
+}
+
+function validateAnchor(sourceFile, targetPage, anchor, raw) {
+  if (!anchor || !targetPage) return;
+  if (!headingIds(targetPage.source).has(anchor)) {
+    failures.push({
+      file: sourceFile,
+      issue: `link \`${raw}\` points to missing heading \`#${anchor}\` in ${targetPage.rel}`,
+    });
+  }
+}
+
+function checkLinks(absFiles) {
+  const markdownLink = /\]\((\s*[^)]+?)\s*\)/g;
+  for (const abs of absFiles) {
+    const rel = toPosix(relative(docsDir, abs));
+    if (rel === "STYLE.md") continue;
     const source = readFileSync(abs, "utf8");
-    renderedUrls.add(renderedUrl(rel, source));
-    let dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-    while (dir) {
-      renderedDirs.add(`/docs/${dir}`);
-      dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
-    }
-  }
-  const linkRe = /\]\((\s*[^)]+?)\s*\)/g;
-  for (const abs of files) {
-    const rel = relative(rootDir, abs).split("\\").join("/");
-    if (isExcluded(rel)) continue;
-    const source = readFileSync(abs, "utf8");
-    const sourceUrl = renderedUrl(rel, source);
-    let m;
-    while ((m = linkRe.exec(source)) !== null) {
-      let target = m[1].trim();
-      if (!target) continue;
-      // Only validate doc-internal links.
-      const isRel = target.startsWith("./") || target.startsWith("../");
-      const isSite = target.startsWith("/docs/") || target === "/docs";
-      if (!isRel && !isSite) continue; // external, mailto, #anchor, bare /eve/* runtime route, etc.
-      target = target.split("#")[0].split("?")[0];
-      if (!target) continue; // pure in-page anchor
-      const resolvedUrl = new URL(target, `https://eve.dev${sourceUrl}`).pathname
-        .replace(/\/$/, "")
-        .replace(/\.mdx?$/, "");
-      if (resolvedUrl === "/docs") continue; // docs root / index
-      if (renderedUrls.has(resolvedUrl)) continue;
-      if (renderedDirs.has(resolvedUrl)) continue; // folder link (sidebar group)
-      failures.push({
-        root: "docs",
-        file: rel,
-        issue: `broken internal link → \`${m[1].trim()}\` (resolves to \`${resolvedUrl}\`, no such page)`,
-      });
+    const sourcePage = pageByAbs.get(abs);
+    let match;
+    while ((match = markdownLink.exec(source)) !== null) {
+      const raw = match[1].trim();
+      const { path, anchor } = parseLinkTarget(raw);
+      if (!path && anchor) {
+        validateAnchor(rel, sourcePage, anchor, raw);
+        continue;
+      }
+
+      const absoluteSite = path === "/docs" || path.startsWith("/docs/");
+      const eveSite = /^https:\/\/(?:www\.)?eve\.dev\/docs(?:\/|$)/.test(path);
+      if (absoluteSite || eveSite) {
+        const route = normalizeRoute(eveSite ? new URL(path).pathname : path);
+        const target = pageByRoute.get(route);
+        if (!target) failures.push({ file: rel, issue: `broken site link \`${raw}\`` });
+        else validateAnchor(rel, target, anchor, raw);
+        continue;
+      }
+
+      if (!path.startsWith("./") && !path.startsWith("../")) continue;
+      const rawBase = resolve(dirname(abs), path);
+      const targetAbs = resolveMarkdownTarget(rawBase);
+      if (!targetAbs) {
+        failures.push({ file: rel, issue: `broken relative link \`${raw}\`` });
+        continue;
+      }
+      if (!targetAbs.startsWith(`${docsDir}/`) && targetAbs !== docsDir) {
+        if (rel !== "README.md") {
+          failures.push({ file: rel, issue: `site page links outside docs with \`${raw}\`` });
+        }
+        continue;
+      }
+      const targetPage = pageByAbs.get(targetAbs);
+      if (!targetPage && !excludedSiteFiles.has(toPosix(relative(docsDir, targetAbs)))) {
+        failures.push({
+          file: rel,
+          issue: `relative link \`${raw}\` does not resolve to a rendered page`,
+        });
+        continue;
+      }
+      validateAnchor(rel, targetPage, anchor, raw);
     }
   }
 }
 
-checkLinks(ROOTS[0].dir);
+checkLinks(markdownFiles);
+
+// Every package export must be discoverable from the authored API entrypoint.
+const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+const apiReference = readFileSync(resolve(docsDir, "reference/typescript-api.md"), "utf8");
+for (const subpath of Object.keys(packageJson.exports ?? {})) {
+  const specifier = subpath === "." ? "eve" : `eve/${subpath.slice(2)}`;
+  if (!apiReference.includes(`\`${specifier}\``)) {
+    failures.push({
+      file: "reference/typescript-api.md",
+      issue: `package export \`${specifier}\` is missing from the API export map`,
+    });
+  }
+}
+
+const packageFiles = new Set(packageJson.files ?? []);
+for (const required of ["docs", "README.md"]) {
+  if (!packageFiles.has(required)) {
+    failures.push({
+      file: "../packages/eve/package.json",
+      issue: `package files omits \`${required}\``,
+    });
+  }
+}
+if (!existsSync(resolve(docsDir, "README.md"))) {
+  failures.push({ file: "README.md", issue: "package-local task index is missing" });
+}
 
 if (failures.length === 0) {
   process.stdout.write(
-    `[docs:check] ok — ${validatedCount} file${validatedCount === 1 ? "" : "s"} validated.\n`,
+    `[docs:check] ok — ${validatedCount} rendered pages, navigation, links, anchors, exports, and package inputs validated.\n`,
   );
   process.exit(0);
 }
 
 process.stderr.write("[docs:check] FAIL\n\n");
-for (const { root, file, issue } of failures) {
-  process.stderr.write(`  ${root}/${file}\n    → ${issue}\n\n`);
+for (const { file, issue } of failures) {
+  process.stderr.write(`  docs/${file}\n    → ${issue}\n\n`);
 }
-process.stderr.write(
-  [
-    "Every site-page markdown file under /docs must:",
-    "  1. Start with frontmatter containing `title` and `description`.",
-    "  2. Be reachable from the sidebar nav via an ancestor meta.json —",
-    '     either listed by slug in `pages[]`, or covered by a `"..."`',
-    "     wildcard entry, unless explicitly allowed as footer-only.",
-    "",
-    "Files intentionally kept off the site (engineer-facing READMEs, etc.)",
-    "should be excluded by updating isExcluded() in scripts/check-docs.mjs.",
-    "",
-  ].join("\n"),
-);
 process.exit(1);

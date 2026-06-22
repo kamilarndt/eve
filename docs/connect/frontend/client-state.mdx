@@ -1,0 +1,127 @@
+---
+title: "Client State"
+description: "Understand the shared useEveAgent state machine, input requests, persistence, reconnection, and reset behavior."
+---
+
+React, Vue, and Svelte expose the same client state because they all wrap one `EveAgentStore`. We
+keep session cursors, reconnects, input requests, and status transitions in that shared store so a
+framework adapter cannot quietly change protocol behavior. Only the reactive syntax differs.
+
+| Field     | Meaning                                                                               |
+| --------- | ------------------------------------------------------------------------------------- |
+| `data`    | Reducer output. The default is `{ messages }`.                                        |
+| `status`  | `"ready"`, `"submitted"`, `"streaming"`, or `"error"`.                                |
+| `error`   | Last `Error`, when status is `"error"`.                                               |
+| `events`  | Authoritative server stream events received for this local store.                     |
+| `session` | Serializable `{ sessionId, continuationToken, streamIndex }` cursor.                  |
+| `send`    | Send a message, file parts, input responses, and per-turn options.                    |
+| `stop`    | Abort the active HTTP request.                                                        |
+| `reset`   | Clear local projection and, for a store-owned session, create a fresh session cursor. |
+
+Only one turn may be active per store. Calling `send` while status is `submitted` or `streaming` rejects with `eve session is already processing a turn.`
+
+## Status transitions
+
+`send` moves the store from `ready` to `submitted`. The first stream event moves it to `streaming`. A cleanly exhausted stream returns it to `ready`; a request or terminal stream failure moves it to `error`.
+
+With `optimistic: true` (the default), a submitted user message is projected before the server confirms it. Client projection events do not appear in the authoritative `events` array.
+
+## Messages and files
+
+```ts
+await agent.send({ message: "Summarize this session." });
+
+await agent.send({
+  message: [
+    { type: "text", text: "Summarize this file." },
+    {
+      type: "file",
+      data: fileDataUrl,
+      mediaType: "application/pdf",
+      filename: "report.pdf",
+    },
+  ],
+});
+```
+
+The default reducer produces `EveMessage[]` with text, reasoning, tool, result, and input-request parts. File acceptance also depends on the server channel's upload policy.
+
+## Human input
+
+An `input.requested` event is projected onto the relevant dynamic-tool part at `part.toolMetadata?.eve?.inputRequest`. Submit the response through the same store:
+
+```ts
+await agent.send({
+  inputResponses: [{ requestId: request.requestId, optionId: "approve" }],
+});
+```
+
+The store supplies its current continuation token. A stale token or response to an old request is rejected by the server rather than resuming the wrong turn.
+
+## One-turn browser context
+
+`clientContext` adds context to the next model call without writing it into durable session history:
+
+```ts
+await agent.send({
+  message: "What should I do on this page?",
+  clientContext: { route: "/billing", plan: "pro" },
+});
+```
+
+Use `prepareSend` for fresh context on every send:
+
+```ts
+const agent = useEveAgent({
+  prepareSend: (input) => ({
+    ...input,
+    clientContext: { route: location.pathname },
+  }),
+});
+```
+
+## Persist and reconnect
+
+Persist the complete session cursor, not only `sessionId`:
+
+```tsx
+const [initialSession] = useState(() => {
+  const value = localStorage.getItem("eve-session");
+  return value ? JSON.parse(value) : undefined;
+});
+
+const agent = useEveAgent({
+  initialSession,
+  onSessionChange(session) {
+    localStorage.setItem("eve-session", JSON.stringify(session));
+  },
+  maxReconnectAttempts: 3,
+});
+```
+
+The stream cursor lets the client request events after the last processed index. Reconnection has a finite retry budget and cannot recover an event stream the server no longer retains. Treat `onError` as a real UI state and offer an explicit retry or reset.
+
+`stop()` aborts the current client request. It does not promise that already-accepted server work is cancelled. The store ignores events from the invalidated local operation; use server-side idempotency for consequential tools.
+
+## Custom reducers
+
+Pass an `EveAgentReducer<TData>` when `{ messages }` is not the right projection:
+
+```ts
+import type { EveAgentReducer } from "eve/react";
+import { useEveAgent } from "eve/react";
+
+interface ToolState {
+  readonly requested: number;
+}
+
+const reducer: EveAgentReducer<ToolState> = {
+  initial: () => ({ requested: 0 }),
+  reduce: (data, event) =>
+    event.type === "actions.requested" ? { requested: data.requested + 1 } : data,
+};
+
+const agent = useEveAgent({ reducer });
+```
+
+A custom reducer receives server events plus `client.message.submitted`, `client.message.failed`, and `client.input.responded` projection events. Return the existing state for event types you do not handle.

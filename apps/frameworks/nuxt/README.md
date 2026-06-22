@@ -23,4 +23,4 @@ pnpm --filter framework-nuxt dev
 
 `vercel.json` declares two services: the Nuxt app at `/` and eve behind the
 private `/_eve_internal/eve` service prefix. See
-[the Nuxt frontend docs](../../../docs/guides/frontend/nuxt.mdx) for details.
+[the Nuxt frontend docs](../../../docs/connect/frontend/nuxt.mdx) for details.

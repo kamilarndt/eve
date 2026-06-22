@@ -1,0 +1,15 @@
+{
+  "title": "Channels",
+  "pages": [
+    "index",
+    "eve",
+    "slack",
+    "discord",
+    "teams",
+    "telegram",
+    "twilio",
+    "github",
+    "linear",
+    "custom"
+  ]
+}

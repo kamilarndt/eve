@@ -39,7 +39,7 @@ export const docs = defineDocs({
     // and excluded from the site. A directory that should render as a clickable
     // sidebar folder uses an `index.md` (e.g. channels/index.md), which
     // Fumadocs auto-detects as the folder index.
-    files: ["**/*.{md,mdx}", "!README.md"],
+    files: ["**/*.{md,mdx}", "!README.md", "!STYLE.md"],
     schema: sharedDocsSchema,
     postprocess: {
       includeProcessedMarkdown: true,

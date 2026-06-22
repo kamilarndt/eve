@@ -1,26 +1,35 @@
 ---
-title: "How It Runs"
-description: "Part 2 of the Build an Agent tutorial. Session, turn, and durable steps, and why a turn survives a crash."
+title: "2. Understand the Runtime"
+description: "Learn the session, turn, and durable-step model used by the rest of the tutorial."
 ---
 
-The analytics assistant sent one message and got one answer. Three terms describe the model behind that.
+Three terms explain what happened when you sent the first message:
 
-| Term        | Meaning                                           |
-| ----------- | ------------------------------------------------- |
-| **session** | Your whole conversation (durable, can span days). |
-| **turn**    | One message you send and the work it triggers.    |
-| **step**    | A durable checkpoint within the turn.             |
+| Term    | Meaning                                                             |
+| ------- | ------------------------------------------------------------------- |
+| Session | The durable conversation, identified publicly by `sessionId`.       |
+| Turn    | One user message and the work it triggers.                          |
+| Step    | A checkpoint inside a turn, such as a model call or tool execution. |
 
-Each turn runs as a durable workflow, and eve saves progress at every step. Completed steps never re-run; eve replays the recorded result. A step interrupted mid-execution re-runs, so make non-idempotent side effects like charges or emails idempotent, or gate them with approval. A turn that's waiting on you (an approval, a question) resumes whenever you answer, even if that's much later.
+eve runs each turn as a durable workflow. We record completed steps so a restart can resume without
+repeating finished work. An interrupted step may run again. That distinction matters when a tool
+charges a card, sends a message, or performs another external side effect: the tool must be
+idempotent even when it also requires approval.
 
-That's why the features in the rest of this tutorial work the way they do:
+A turn can stop in a waiting state. Approval and question prompts do not hold a server process open. A client later submits the requested input with the current continuation token, and the workflow resumes.
 
-- The warehouse sign-in in Step 4 parks the turn until you authorize in the browser. A few minutes is fine.
-- The metric glossary in Step 6 survives across turns. State is checkpointed at step boundaries, so it sticks.
-- The spend approval in Step 8 pauses the turn on your yes/no, then picks up exactly where it left off.
+The model loop is framework-owned. You provide instructions and capabilities; eve calls the model,
+executes selected tools, records results, and decides whether another model step is required. We
+keep this in the runtime so durability and stream events do not depend on application-specific loop
+code. One user turn can therefore produce several model calls.
 
-You author capabilities, including tools, instructions, channels, and skills. eve drives the model-to-tool loop and decides when a turn continues, waits, or ends. You never write that loop yourself.
+You will use each part of this model in later steps:
 
-→ Next: [Step 3: Query sample data](./query-sample-data)
+- State survives between turns in the same session.
+- A subagent runs in a child session.
+- Approval parks a turn until you respond.
+- Sandbox files survive between turns in the same session.
 
-Depth: [Execution model & durability](../concepts/execution-model-and-durability)
+Next: [3. Add a Typed Tool](./add-a-tool)
+
+Concepts: [Execution and Durability](../concepts/execution-and-durability) · [Sessions, Turns, and Steps](../concepts/sessions-turns-and-steps)

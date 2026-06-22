@@ -99,7 +99,7 @@ interface ConnectionPresentation extends Presentation {
 const channelPresentations: Record<string, ChannelPresentation> = {
   slack: {
     logo: "slack",
-    docsHref: "/docs/channels/slack",
+    docsHref: "/docs/connect/channels/slack",
     keywords: ["chat", "messaging", "bot", "webhook"],
     install: `The eve CLI scaffolds the channel for you. \`eve channels add slack\` writes \`agent/channels/slack.ts\`, adds \`@vercel/connect\`, and runs the Connect setup flow:
 
@@ -136,11 +136,11 @@ vercel env pull
 vercel connect create slack --triggers
 \`\`\`
 
-The channel handles mentions, DMs, typing indicators, delivery, and human-in-the-loop consent with sensible defaults. See the [Slack channel docs](/docs/channels/slack) for customizing each behavior.`,
+The channel handles mentions, DMs, typing indicators, delivery, and human-in-the-loop consent with sensible defaults. See the [Slack channel docs](/docs/connect/channels/slack) for customizing each behavior.`,
   },
   discord: {
     logo: "discord",
-    docsHref: "/docs/channels/discord",
+    docsHref: "/docs/connect/channels/discord",
     keywords: ["chat", "messaging", "bot", "guild"],
     install: `Install the framework. The Discord channel ships with it:
 
@@ -158,11 +158,11 @@ export default discordChannel({
   publicKey: () => process.env.DISCORD_PUBLIC_KEY!,
 });
 \`\`\``,
-    configure: `Create a Discord application, add a bot, and set the interactions endpoint URL to the route eve serves (\`/eve/v1/discord\`). Provide the bot token and public key through environment variables. See the [Discord channel docs](/docs/channels/discord) for intents and slash-command setup.`,
+    configure: `Create a Discord application, add a bot, and set the interactions endpoint URL to the route eve serves (\`/eve/v1/discord\`). Provide the bot token and public key through environment variables. See the [Discord channel docs](/docs/connect/channels/discord) for intents and slash-command setup.`,
   },
   teams: {
     logo: "teams",
-    docsHref: "/docs/channels/teams",
+    docsHref: "/docs/connect/channels/teams",
     keywords: ["chat", "messaging", "bot", "microsoft"],
     install: `Install the framework:
 
@@ -180,11 +180,11 @@ export default teamsChannel({
   appPassword: () => process.env.TEAMS_APP_PASSWORD!,
 });
 \`\`\``,
-    configure: `Register an Azure Bot, configure the messaging endpoint to eve's route (\`/eve/v1/teams\`), and supply the app ID and password via environment variables. See the [Teams channel docs](/docs/channels/teams) for the full provisioning checklist.`,
+    configure: `Register an Azure Bot, configure the messaging endpoint to eve's route (\`/eve/v1/teams\`), and supply the app ID and password via environment variables. See the [Teams channel docs](/docs/connect/channels/teams) for the full provisioning checklist.`,
   },
   telegram: {
     logo: "telegram",
-    docsHref: "/docs/channels/telegram",
+    docsHref: "/docs/connect/channels/telegram",
     keywords: ["chat", "messaging", "bot"],
     install: `Install the framework:
 
@@ -201,11 +201,11 @@ export default telegramChannel({
   botToken: () => process.env.TELEGRAM_BOT_TOKEN!,
 });
 \`\`\``,
-    configure: `Create a bot with [@BotFather](https://t.me/botfather), then register the webhook to point at eve's route (\`/eve/v1/telegram\`). Store the bot token in an environment variable. See the [Telegram channel docs](/docs/channels/telegram) for group privacy and command setup.`,
+    configure: `Create a bot with [@BotFather](https://t.me/botfather), then register the webhook to point at eve's route (\`/eve/v1/telegram\`). Store the bot token in an environment variable. See the [Telegram channel docs](/docs/connect/channels/telegram) for group privacy and command setup.`,
   },
   twilio: {
     logo: "twilio",
-    docsHref: "/docs/channels/twilio",
+    docsHref: "/docs/connect/channels/twilio",
     keywords: ["sms", "whatsapp", "messaging", "phone"],
     install: `Install the framework:
 
@@ -223,11 +223,11 @@ export default twilioChannel({
   authToken: () => process.env.TWILIO_AUTH_TOKEN!,
 });
 \`\`\``,
-    configure: `In the Twilio console, point your messaging service or phone number webhook at eve's route (\`/eve/v1/twilio\`). Provide the account SID and auth token via environment variables. See the [Twilio channel docs](/docs/channels/twilio) for SMS vs. WhatsApp specifics.`,
+    configure: `In the Twilio console, point your messaging service or phone number webhook at eve's route (\`/eve/v1/twilio\`). Provide the account SID and auth token via environment variables. See the [Twilio channel docs](/docs/connect/channels/twilio) for SMS vs. WhatsApp specifics.`,
   },
   github: {
     logo: "github",
-    docsHref: "/docs/channels/github",
+    docsHref: "/docs/connect/channels/github",
     keywords: ["issues", "pull requests", "app", "webhook", "code"],
     install: `Install the framework:
 
@@ -246,11 +246,11 @@ export default githubChannel({
   webhookSecret: () => process.env.GITHUB_WEBHOOK_SECRET!,
 });
 \`\`\``,
-    configure: `Create a GitHub App, subscribe to issue and pull-request events, and set the webhook URL to eve's route (\`/eve/v1/github\`). Provide the app ID, private key, and webhook secret through environment variables. See the [GitHub channel docs](/docs/channels/github) for required permissions.`,
+    configure: `Create a GitHub App, subscribe to issue and pull-request events, and set the webhook URL to eve's route (\`/eve/v1/github\`). Provide the app ID, private key, and webhook secret through environment variables. See the [GitHub channel docs](/docs/connect/channels/github) for required permissions.`,
   },
   "linear-agent": {
     logo: "linear",
-    docsHref: "/docs/channels/linear",
+    docsHref: "/docs/connect/channels/linear",
     keywords: ["issues", "comments", "agent sessions", "developer preview", "webhook"],
     install: `Install the framework. The Linear channel ships with it:
 
@@ -270,11 +270,11 @@ export default linearChannel({
   },
 });
 \`\`\``,
-    configure: `Create a Linear OAuth app with Agent Session events enabled, make the app assignable and mentionable, and point the webhook at eve's route (\`/eve/v1/linear\`). Provide the app access token and webhook secret through environment variables. See the [Linear channel docs](/docs/channels/linear) for scopes and Agent Activity behavior.`,
+    configure: `Create a Linear OAuth app with Agent Session events enabled, make the app assignable and mentionable, and point the webhook at eve's route (\`/eve/v1/linear\`). Provide the app access token and webhook secret through environment variables. See the [Linear channel docs](/docs/connect/channels/linear) for scopes and Agent Activity behavior.`,
   },
   eve: {
     logo: "eve",
-    docsHref: "/docs/channels/eve",
+    docsHref: "/docs/connect/channels/eve",
     keywords: ["web", "chat", "ui", "embed", "frontend"],
     install: `The eve CLI scaffolds the full Next.js web chat app alongside \`agent/channels/eve.ts\`:
 
@@ -297,7 +297,7 @@ export default eveChannel();
 \`\`\`
 
 Point your frontend at the session routes eve serves (\`/eve/v1/session\`) and stream responses with the eve web client.`,
-    configure: `The eve channel is the lowest-friction way to talk to your agent, with no third-party provisioning required. Layer in auth and route protection as needed. See the [eve channel docs](/docs/channels/eve) and the [Frontend guide](/docs/guides/frontend/overview).`,
+    configure: `The eve channel is the lowest-friction way to talk to your agent, with no third-party provisioning required. Layer in auth and route protection as needed. See the [eve channel docs](/docs/connect/channels/eve) and the [Frontend guide](/docs/connect/frontend).`,
   },
 };
 
@@ -310,13 +310,13 @@ Point your frontend at the session routes eve serves (\`/eve/v1/session\`) and s
 const connectionPresentations: Record<string, ConnectionPresentation> = {
   linear: {
     logo: "linear",
-    docsHref: "/docs/connections",
+    docsHref: "/docs/connect/connections",
     keywords: ["mcp", "issues", "project management", "oauth", "connect"],
     authModes: ["user", "app"],
   },
   notion: {
     logo: "notion",
-    docsHref: "/docs/connections",
+    docsHref: "/docs/connect/connections",
     keywords: ["mcp", "openapi", "docs", "wiki", "knowledge base", "connect"],
     authModes: ["user", "app", "jwtBearer"],
     configureNote:
@@ -324,7 +324,7 @@ const connectionPresentations: Record<string, ConnectionPresentation> = {
   },
   datadog: {
     logo: "datadog",
-    docsHref: "/docs/connections",
+    docsHref: "/docs/connect/connections",
     keywords: ["mcp", "observability", "metrics", "monitoring", "logs"],
     authModes: ["jwtBearer"],
     configureNote:
@@ -332,7 +332,7 @@ const connectionPresentations: Record<string, ConnectionPresentation> = {
   },
   honeycomb: {
     logo: "honeycomb",
-    docsHref: "/docs/connections",
+    docsHref: "/docs/connect/connections",
     keywords: ["mcp", "observability", "traces", "queries"],
     authModes: ["jwtBearer"],
   },

@@ -1,0 +1,38 @@
+---
+title: "7. Add a Skill"
+description: "Add an on-demand analysis procedure and verify that the model loads it only when relevant."
+---
+
+Instructions are always present, so putting every procedure there makes every model call larger.
+We use a skill for this executive-summary checklist because the model needs it only for that kind of
+request.
+
+Create `agent/skills/executive-summary/SKILL.md`:
+
+```md title="agent/skills/executive-summary/SKILL.md"
+---
+description: Use when preparing a revenue summary for an executive audience.
+---
+
+# Executive revenue summary
+
+1. Lead with the total and inclusive date range.
+2. Name the largest customer and its share of the total.
+3. Use dollars with two decimal places.
+4. Keep the final answer under 120 words.
+5. State that this sample contains orders only; it does not include refunds.
+```
+
+The directory name registers the skill as `executive-summary`. The framework advertises its description; the complete Markdown enters context only after a `load_skill` call.
+
+Restart the dev server and ask:
+
+```text
+Give our CEO a May 1–6 revenue summary.
+```
+
+The trace should show `load_skill` for `executive-summary`, followed by `revenue_by_customer`. The final answer should be concise and mention the missing refunds data.
+
+Next: [8. Require Approval](./require-approval)
+
+Reference: [Skills](../build/skills)

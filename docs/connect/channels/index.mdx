@@ -1,0 +1,53 @@
+---
+title: "Channels"
+description: "Choose how users reach an agent and compare each channel's transport, files, input requests, and proactive delivery."
+---
+
+Choose a channel for where people already work: HTTP for your own frontend or client, or a provider
+adapter for Slack, GitHub, Teams, and the other supported platforms. The channel translates that
+transport into the same eve sessions and stream events; it does not create a different agent loop.
+
+Channels own inbound request verification, message-to-session mapping, native replies, and the way
+approval or question prompts appear on that platform.
+
+Files under `agent/channels/` override or add channels. Identity is path-derived:
+
+```text
+agent/channels/eve.ts       → eve
+agent/channels/slack.ts     → slack
+agent/channels/internal.ts  → internal
+```
+
+The built-in eve HTTP channel is enabled even when `agent/channels/eve.ts` does not exist. Most
+applications should keep it. Add the file only when you need to change its authentication or upload
+policy.
+
+## Capability matrix
+
+| Channel                | Inbound transport        | Files                                  | Human input                   | Proactive delivery              | Credential or hosting constraint                                          |
+| ---------------------- | ------------------------ | -------------------------------------- | ----------------------------- | ------------------------------- | ------------------------------------------------------------------------- |
+| [eve HTTP](./eve)      | HTTP + event stream      | Client uploads                         | Native protocol               | Client starts sessions          | Production browser auth is application-owned.                             |
+| [Slack](./slack)       | Events and interactions  | Yes                                    | Buttons and selects           | Channel ID                      | Uses Vercel Connect setup.                                                |
+| [Discord](./discord)   | HTTP interactions        | No                                     | Components and modals         | Channel ID                      | Public-key verification; bot token for replies.                           |
+| [Teams](./teams)       | Bot Framework activities | Opt-in                                 | Adaptive Cards                | Existing conversation reference | Microsoft app and bot credentials required.                               |
+| [Telegram](./telegram) | Bot API webhook          | Photos and documents                   | Inline buttons and ForceReply | Chat ID                         | You register the webhook.                                                 |
+| [Twilio](./twilio)     | SMS and voice webhooks   | No                                     | Application maps text replies | Phone number                    | Consent, messaging, and recording rules are application responsibilities. |
+| [GitHub](./github)     | GitHub App webhooks      | Repository checkout, not message files | Comment reply                 | Issue or pull request           | GitHub App installation and webhook secret required.                      |
+| [Linear](./linear)     | Agent Session webhooks   | No                                     | Elicitation activity          | Agent Session target            | Linear OAuth app and webhook configuration required.                      |
+
+“Files” means inbound user attachments. Sandbox files are available independently. “Proactive” means a schedule or another channel can call `receive(...)` with the provider-specific target; it does not mean eve can discover recipients by itself.
+
+## Operational order
+
+Provider guides follow the same sequence: prerequisites, permissions and events, credentials,
+channel file, webhook configuration, deployment, verification, then limitations. We recommend
+testing against the immutable deployed URL the provider will actually call; webhook signatures are
+often bound to that exact URL.
+
+Local development works only when the provider can reach your webhook, usually through a deliberate tunnel. Some providers reject changing callback URLs frequently. A self-hosted deployment must supply the same public HTTPS routes, durable workflow storage, secrets, and background execution assumed by the adapter.
+
+## Custom transports
+
+Use `defineChannel` from `eve/channels` when no built-in adapter fits. A custom channel declares HTTP or WebSocket routes, verifies its own inbound requests, and calls `send` to create or resume a session. [Custom Channels](./custom) covers route verbs, continuation tokens, cross-channel handoff, metadata, and uploads.
+
+Shared baseline safety requirements live in [Responsible Use](../../operate/responsible-use). Provider-specific guides retain warnings that depend on the transport, such as Twilio consent and GitHub repository permissions.

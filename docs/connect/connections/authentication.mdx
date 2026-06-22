@@ -1,0 +1,126 @@
+---
+title: "Connection Authentication"
+description: "Resolve app or user credentials for connection tools without exposing tokens to the model."
+---
+
+There are two different trust decisions in a connected agent: who may talk to the agent, and which
+credential the agent may use upstream. This page covers the second one. Connection authentication
+chooses the credential eve uses for MCP or OpenAPI calls;
+[route authentication](../../operate/authentication) decides who may start or resume a session.
+
+> **Security consequence:** Authenticating the caller does not automatically authorize an upstream
+> action. Scope app credentials narrowly, and resolve user credentials from the authenticated
+> principal when the upstream action should run as that person.
+
+## Static or server-managed tokens
+
+Return a bearer token from `getToken`:
+
+```ts title="agent/connections/crm.ts"
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://crm.example.com/mcp",
+  description: "Customer accounts and support history.",
+  auth: {
+    principalType: "app",
+    getToken: async () => ({
+      token: process.env.CRM_TOKEN!,
+      expiresAt: Date.now() + 50 * 60 * 1000,
+    }),
+  },
+});
+```
+
+`expiresAt` is milliseconds since the Unix epoch. eve refreshes an expiring token before use. `principalType` defaults to `"app"`; set `"user"` only when `getToken` resolves a credential for the authenticated caller.
+
+Tokens are resolved and cached per workflow step. They are not written into conversation history or shown to the model.
+
+## Vercel Connect OAuth
+
+For a user-scoped OAuth client managed by Vercel Connect, install its package and pass `connect()`:
+
+```bash
+npm install @vercel/connect
+```
+
+```ts title="agent/connections/linear.ts"
+import { connect } from "@vercel/connect/eve";
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.linear.app/sse",
+  description: "The signed-in user's Linear workspace.",
+  auth: connect("linear/myagent"),
+});
+```
+
+The UID must match a provisioned Connect client. On first use, eve emits `authorization.required`, parks the turn, and lets the channel present the authorization URL. A successful callback resumes the same durable turn.
+
+## Self-hosted interactive OAuth
+
+Use `defineInteractiveAuthorization` when your application owns token storage and OAuth exchange. The following is an illustrative fragment; `lookupToken`, `authorizeUrl`, and `exchangeCode` are application functions you must implement:
+
+```ts title="agent/connections/linear.ts"
+import {
+  ConnectionAuthorizationRequiredError,
+  defineInteractiveAuthorization,
+  defineMcpClientConnection,
+} from "eve/connections";
+
+const auth = defineInteractiveAuthorization<{ verifier: string }>({
+  async getToken({ principal }) {
+    const token = await lookupToken(principal);
+    if (!token) throw new ConnectionAuthorizationRequiredError("linear");
+    return { token };
+  },
+  async startAuthorization({ callbackUrl }) {
+    const verifier = createPkceVerifier();
+    return {
+      challenge: { url: authorizeUrl({ callbackUrl, verifier }) },
+      resume: { verifier },
+    };
+  },
+  async completeAuthorization({ resume, callback }) {
+    return {
+      token: await exchangeCode({
+        code: callback.params.code!,
+        verifier: resume!.verifier,
+      }),
+    };
+  },
+});
+
+export default defineMcpClientConnection({
+  url: "https://mcp.linear.app/sse",
+  description: "The signed-in user's Linear workspace.",
+  auth,
+});
+```
+
+`startAuthorization` and `completeAuthorization` are a pair. The optional `resume` value is durably recorded while the turn waits. Keep it free of access tokens when possible.
+
+An authorization challenge may contain `url`, `userCode`, `instructions`, and `displayName`. Channels decide how to present it.
+
+## Failures and revocation
+
+Throw `ConnectionAuthorizationFailedError` for a known failure:
+
+```ts
+import { ConnectionAuthorizationFailedError } from "eve/connections";
+
+throw new ConnectionAuthorizationFailedError("linear", {
+  reason: "access_denied",
+  retryable: false,
+});
+```
+
+Use `isConnectionAuthorizationRequiredError` and `isConnectionAuthorizationFailedError` to narrow caught errors across bundle boundaries.
+
+For an authored tool with an auth provider, map an upstream `401` to `ctx.requireAuth(provider)`. This evicts the rejected step-local token and starts authorization again. Returning the `401` as an ordinary tool error leaves the rejected token cached for the step.
+
+## Approval ordering
+
+When an action needs both approval and authorization, approval runs first. We ask for intent before
+starting a sign-in flow so a person does not authenticate for an action they would reject. The
+approval record survives the wait, so the resumed action is not approved twice.

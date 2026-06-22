@@ -1,4 +1,11 @@
 {
   "title": "Reference",
-  "pages": ["http-api", "typescript-api", "cli", "project-layout"]
+  "pages": [
+    "cli",
+    "typescript-api",
+    "http-api",
+    "stream-events",
+    "environment-and-compatibility",
+    "glossary"
+  ]
 }

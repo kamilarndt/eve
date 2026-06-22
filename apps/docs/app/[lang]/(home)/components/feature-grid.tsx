@@ -14,7 +14,7 @@ const features = [
       "Workflows survive crashes and restarts. Every step is checkpointed. Agents park when waiting, resume on the next message.",
     icon: <Database className="h-4 w-4 text-green-600" />,
     visual: <DurabilityVisual />,
-    href: "/docs/concepts/sessions-runs-and-streaming",
+    href: "/docs/concepts/sessions-turns-and-steps",
   },
   {
     title: "Sandboxed Compute",
@@ -22,14 +22,14 @@ const features = [
       "Agents spin up isolated VMs on demand. File system access, bash execution, and code runs, all completely isolated.",
     icon: <Terminal className="h-4 w-4 text-orange-600" />,
     visual: <SandboxVisual />,
-    href: "/docs/sandbox",
+    href: "/docs/build/sandbox",
   },
   {
     title: "Multi-Channel Delivery",
     description: "One agent codebase deploys to web chat, Slack, API, cron, CLI, and custom apps.",
     icon: <MessageSquare className="h-4 w-4 text-cyan-600" />,
     visual: <ChannelsVisual />,
-    href: "/docs/channels/overview",
+    href: "/docs/connect/channels",
   },
   {
     title: "Human-in-the-Loop",
@@ -37,7 +37,7 @@ const features = [
       "Tools that need confirmation trigger approval gates. Sessions park until resolved, then resume seamlessly.",
     icon: <Shield className="h-4 w-4 text-amber-600" />,
     visual: <HITLVisual />,
-    href: "/docs/tools",
+    href: "/docs/build/tools",
   },
   {
     title: "Subagents",
@@ -45,7 +45,7 @@ const features = [
       "Delegate specialized work to child agents with their own prompts, tools, and sandbox.",
     icon: <Bot className="h-4 w-4 text-indigo-600" />,
     visual: <SubagentsVisual />,
-    href: "/docs/subagents",
+    href: "/docs/build/subagents",
   },
   {
     title: "Evaluations",
@@ -53,7 +53,7 @@ const features = [
       "Define test suites with scoring rubrics. Run evals on every deployment and on a schedule.",
     icon: <FlaskConical className="h-4 w-4 text-pink-600" />,
     visual: <EvalsVisual />,
-    href: "/docs/evals/overview",
+    href: "/docs/operate/evals",
   },
 ];
 

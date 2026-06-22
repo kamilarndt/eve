@@ -1,0 +1,60 @@
+---
+title: "OpenAPI Connections"
+description: "Turn OpenAPI 3.x operations into qualified connection tools."
+---
+
+Use an OpenAPI connection when the document is stable enough to be the model's tool contract.
+`defineOpenAPIConnection` creates one remote tool per operation. If the document exposes a large or
+inconsistent API, allowlist the small set the agent needs—or write a purpose-built tool instead.
+
+```ts title="agent/connections/petstore.ts"
+import { defineOpenAPIConnection } from "eve/connections";
+
+export default defineOpenAPIConnection({
+  spec: "https://petstore3.swagger.io/api/v3/openapi.json",
+  description: "Pet store inventory and orders.",
+  auth: {
+    getToken: async () => ({ token: process.env.PETSTORE_TOKEN! }),
+  },
+});
+```
+
+`petstore.ts` registers `petstore`. An operation with `operationId: "getInventory"` becomes `petstore__getInventory`. When `operationId` is absent, eve derives a deterministic name from the HTTP method and sanitized path.
+
+`spec` may be an HTTPS URL fetched at runtime or an inline parsed OpenAPI object. A remote URL must be reachable from the eve server in every deployment environment.
+
+## Base URL
+
+By default, requests use the first usable entry in the document's `servers` array. Set `baseUrl` when the published document points at the wrong environment:
+
+```ts title="agent/connections/orders.ts"
+import { defineOpenAPIConnection } from "eve/connections";
+
+export default defineOpenAPIConnection({
+  spec: "https://api.example.com/openapi.json",
+  baseUrl: "https://staging-api.example.com",
+  description: "Staging order service.",
+});
+```
+
+## Limit operations
+
+Set exactly one of `operations.allow` and `operations.block`. The values are OpenAPI `operationId` strings.
+
+```ts title="agent/connections/orders.ts"
+import { defineOpenAPIConnection } from "eve/connections";
+
+export default defineOpenAPIConnection({
+  spec: "https://api.example.com/openapi.json",
+  description: "Read-only order lookup.",
+  operations: { allow: ["getOrder", "listOrders"] },
+});
+```
+
+Documents without stable `operationId` values are harder to filter and more likely to change tool
+names when paths change. We recommend fixing the source document when you control it rather than
+depending on eve's derived names.
+
+## Auth, headers, and approval
+
+`auth`, `headers`, and `approval` have the same behavior as an [MCP connection](./mcp). Credentials stay in the server process. Use operation filters and upstream scopes together; a filtered schema is not an authorization boundary on the remote API.

@@ -1,0 +1,97 @@
+---
+title: "Quickstart"
+description: "Create an eve agent, add a typed tool, run it locally, and verify a real turn."
+---
+
+Use this guide when you want the shortest path from an empty directory to a verified agent. You
+will create one typed tool, run the agent locally, and confirm that eve discovered the file you
+authored. You need Node.js 24 or newer, npm, and a model credential.
+
+We route string model IDs through Vercel AI Gateway by default so you can change providers without
+rewriting agent code. Set `AI_GATEWAY_API_KEY`, or run `/model` in the terminal UI and link a
+Vercel project. If you specifically need direct billing or a provider-only option, follow
+[Models and Providers](./build/models-and-providers) before starting the server.
+
+## Create the project
+
+Run from the directory that should contain the new project:
+
+```bash
+npx eve@latest init weather-agent
+```
+
+`eve init` creates `weather-agent/`, installs its dependencies, initializes Git, and either opens
+an available coding-agent REPL or starts the local terminal UI. A coding-agent invocation prints the
+project-specific development command instead of taking over the terminal.
+
+If the terminal UI starts, send a message to confirm the model credential works, then press Ctrl+C.
+Continue from the new project directory:
+
+```bash
+cd weather-agent
+```
+
+To add eve to an existing project instead, run `npx eve@latest init .` from a directory with a
+`package.json` and no existing `agent/` tree.
+
+## Add a tool
+
+Create `agent/tools/get_weather.ts`:
+
+```ts title="agent/tools/get_weather.ts" check
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Return the current weather for a city.",
+  inputSchema: z.object({
+    city: z.string().min(1),
+  }),
+  async execute({ city }) {
+    return {
+      city,
+      condition: "Sunny",
+      temperatureF: 72,
+    };
+  },
+});
+```
+
+The filename is the model-visible name: this file defines `get_weather`. We derive the name from
+the path so there is no separate tool registry to keep in sync. Tool slugs must start with an ASCII
+letter, may contain ASCII letters, digits, `_`, and `-`, and may be at most 64 characters. We
+recommend snake_case because it is portable across providers.
+
+Tools run in the application runtime and can read `process.env`; shell and file work runs in the
+separate [sandbox](./build/sandbox). That split keeps your application integrations close to their
+credentials while isolating model-directed filesystem work.
+
+## Run and verify
+
+Start the server from `weather-agent/`:
+
+```bash
+npm run dev
+```
+
+Ask `What is the weather in Brooklyn?` The transcript should show a `get_weather` call followed by
+an answer using the returned data.
+
+For non-interactive verification, run the server without the terminal UI:
+
+```bash
+npx eve dev --no-ui
+```
+
+The command prints the server URL; the default is `http://127.0.0.1:2000`. In another terminal,
+inspect what eve discovered:
+
+```bash
+npx eve info --json
+```
+
+The `tools.authored` collection should contain `get_weather`. To exercise the HTTP protocol, follow
+the exact create, stream, and continue sequence in the [HTTP API reference](./reference/http-api).
+
+Next, build one application end to end in [Build an Agent](./tutorial/first-agent), or choose the
+capability you need from [Project Structure](./build/project-structure).

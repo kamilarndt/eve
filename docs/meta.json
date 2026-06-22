@@ -1,23 +1,13 @@
 {
   "pages": [
-    "introduction",
-    "getting-started",
-    "---",
-    "agent-config",
-    "instructions",
-    "tools",
-    "skills",
-    "channels",
-    "connections",
-    "sandbox",
-    "subagents",
-    "schedules",
-    "evals",
-    "---",
-    "guides",
+    "---Start---",
+    "index",
+    "quickstart",
+    "tutorial",
+    "build",
+    "connect",
+    "operate",
     "concepts",
-    "---",
-    "reference",
-    "tutorial"
+    "reference"
   ]
 }

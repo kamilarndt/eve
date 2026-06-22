@@ -1,0 +1,14 @@
+{
+  "title": "Operate",
+  "pages": [
+    "evals",
+    "authentication",
+    "security",
+    "observability",
+    "deployment",
+    "terminal-ui",
+    "troubleshooting",
+    "upgrading",
+    "responsible-use"
+  ]
+}

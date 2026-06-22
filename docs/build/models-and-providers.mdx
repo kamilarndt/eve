@@ -1,0 +1,121 @@
+---
+title: "Models and Providers"
+description: "Choose AI Gateway or a direct AI SDK provider, configure credentials, and set context limits."
+---
+
+We recommend Vercel AI Gateway for most agents. A `provider/model` string keeps routing and
+credentials separate from the agent code and gives eve the model metadata it needs for compaction.
+Use a direct AI SDK provider when you need provider-specific routing, direct billing, or a model the
+Gateway does not offer.
+
+The `model` field in `agent/agent.ts` makes that choice: a string uses Gateway, while an AI SDK
+model object calls the provider directly.
+
+## Vercel AI Gateway
+
+A gateway model uses a `provider/model` string:
+
+```ts title="agent/agent.ts"
+import { defineAgent } from "eve";
+
+export default defineAgent({
+  model: "anthropic/claude-sonnet-4.6",
+});
+```
+
+On Vercel, project OIDC can authenticate the request. Elsewhere, set `AI_GATEWAY_API_KEY` or a
+valid `VERCEL_OIDC_TOKEN`. The initializer writes the model selected during setup; inspect
+`agent/agent.ts` instead of assuming a fixed scaffold default.
+
+Use `/model` in the local terminal UI to select a catalog model and configure Gateway access.
+
+## Direct provider
+
+> **Recommendation:** Stay on Gateway unless direct provider control solves a concrete requirement.
+> With a direct provider, you own the provider package, credential, model identifier, and context
+> metadata for unlisted models.
+
+Install the provider package you import. It is not bundled with eve:
+
+```bash
+npm install @ai-sdk/anthropic
+```
+
+Then pass the provider model object and set the provider's credential:
+
+```bash
+export ANTHROPIC_API_KEY=...
+```
+
+```ts title="agent/agent.ts" check
+import { anthropic } from "@ai-sdk/anthropic";
+import { defineAgent } from "eve";
+
+export default defineAgent({
+  model: anthropic("claude-sonnet-4-6"),
+});
+```
+
+This request goes directly to Anthropic; it does not pass through AI Gateway. The same pattern works
+with any AI SDK-compatible provider.
+
+## Unlisted and compatible providers
+
+eve needs the model's context-window size to decide when to compact a long session. Gateway catalog
+models provide that metadata. For a custom, self-hosted, OpenRouter, LiteLLM, or otherwise unlisted
+model, set it explicitly:
+
+```ts title="agent/agent.ts"
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { defineAgent } from "eve";
+
+const provider = createOpenAICompatible({
+  name: "internal",
+  apiKey: process.env.INTERNAL_MODEL_API_KEY,
+  baseURL: "https://models.example.com/v1",
+});
+
+export default defineAgent({
+  model: provider("company-model"),
+  modelContextWindowTokens: 128_000,
+});
+```
+
+Use the provider's documented context limit. An inflated value delays compaction past the real model
+limit; a value that is too small compacts more often than necessary.
+
+## Provider options
+
+`modelOptions.providerOptions` is forwarded to the AI SDK model call:
+
+```ts title="agent/agent.ts"
+import { defineAgent } from "eve";
+
+export default defineAgent({
+  model: "anthropic/claude-sonnet-4.6",
+  modelOptions: {
+    providerOptions: {
+      anthropic: {
+        thinking: { type: "enabled", budgetTokens: 4_000 },
+      },
+    },
+  },
+});
+```
+
+Provider option names and values belong to the selected AI SDK provider. eve forwards them but does
+not validate their semantics.
+
+## Calls, limits, and cost
+
+One user turn is not necessarily one model request. A tool loop can make another request after every
+batch of tool results. Subagents have their own loops. Compaction can make a summary request, and
+LLM-backed eval assertions call their judge model separately. Provider rate limits and cost should
+therefore be sized for steps, not only user messages.
+
+`step.completed` stream events report token usage for each model step. Use
+[Observability](../operate/observability) to export traces and [Evals](../operate/evals) to measure
+behavior before changing models.
+
+Review the selected provider's terms, retention policy, and data controls before sending production
+or regulated data.

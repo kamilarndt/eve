@@ -1,0 +1,89 @@
+---
+title: "5. Create a Sandbox Report"
+description: "Write an analysis artifact into /workspace without depending on Python or system binaries."
+---
+
+The sandbox is the right place for model-controlled working files. This step writes the report
+through the sandbox API instead of invoking a language runtime or shell binary. That keeps the
+example portable across Vercel Sandbox, Docker, microsandbox, and the dependency-free just-bash
+fallback.
+
+## Seed a reference file
+
+Create this directory and file:
+
+```text
+agent/sandbox/
+  workspace/
+    report-format.md
+```
+
+```md title="agent/sandbox/workspace/report-format.md"
+# Required report format
+
+- State the inclusive date range.
+- State the currency.
+- Sort customers by revenue, descending.
+- End with the total across customers.
+```
+
+Files under `agent/sandbox/workspace/` appear under `/workspace` for every new session.
+
+## Add a report tool
+
+Create `agent/tools/write_revenue_report.ts`:
+
+```ts title="agent/tools/write_revenue_report.ts"
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Write a verified customer-revenue report to the sandbox workspace.",
+  inputSchema: z.object({
+    from: z.string(),
+    to: z.string(),
+    customers: z.array(
+      z.object({ customer: z.string(), amountCents: z.number().int().nonnegative() }),
+    ),
+  }),
+  async execute({ from, to, customers }, ctx) {
+    const sandbox = await ctx.getSandbox();
+    const totalCents = customers.reduce((sum, row) => sum + row.amountCents, 0);
+    const rows = customers.map(
+      (row) => `| ${row.customer} | $${(row.amountCents / 100).toFixed(2)} |`,
+    );
+    const report = [
+      "# Revenue by customer",
+      "",
+      `Inclusive range: ${from} through ${to}`,
+      "",
+      "| Customer | Revenue (USD) |",
+      "| --- | ---: |",
+      ...rows,
+      "",
+      `Total: $${(totalCents / 100).toFixed(2)}`,
+      "",
+    ].join("\n");
+
+    await sandbox.writeTextFile({ path: "reports/revenue.md", content: report });
+    return { path: "/workspace/reports/revenue.md", totalCents };
+  },
+});
+```
+
+Authored tool code runs in the eve server process, where application code and credentials live.
+Only the file operation above crosses into the isolated sandbox through `ctx.getSandbox()`.
+
+## Verify
+
+Ask:
+
+```text
+Calculate May 1–6 revenue and write the result as a sandbox report.
+```
+
+The trace should call `revenue_by_customer`, then `write_revenue_report`. Ask the agent to read `/workspace/reports/revenue.md`; it should contain a total of `$164.00`.
+
+Next: [6. Remember Session State](./remember-state)
+
+Reference: [Sandbox](../build/sandbox)

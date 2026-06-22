@@ -1,0 +1,97 @@
+---
+title: "MCP Connections"
+description: "Connect an agent to a Streamable HTTP or SSE MCP server and control its visible tools."
+---
+
+Use an MCP connection when the server already exposes the tool contract you want the model to call.
+If you need to combine several remote operations or enforce application-specific rules, wrap that
+work in an authored tool instead.
+
+Create one file per MCP server under `agent/connections/`:
+
+```ts title="agent/connections/linear.ts" check
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.linear.app/sse",
+  description: "Linear workspace: issues, projects, cycles, and comments.",
+  auth: {
+    getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }),
+  },
+});
+```
+
+The server must support MCP over Streamable HTTP or SSE. `linear.ts` registers the connection as `linear`; a remote tool named `get_issue` becomes `linear__get_issue`.
+
+Write `description` as a routing hint for the model. Include the service, available data or actions, and important scope limitations.
+
+## Public or locally protected servers
+
+Omit `auth` only when the server is intentionally public or protected outside eve:
+
+```ts title="agent/connections/local-docs.ts"
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "http://127.0.0.1:3001/mcp",
+  description: "Local development documentation search.",
+});
+```
+
+This URL is resolved by the eve server. A deployed application cannot reach an MCP server running on your laptop.
+
+## Headers
+
+Use `headers` for non-Bearer schemes or protocol-specific configuration:
+
+```ts title="agent/connections/catalog.ts"
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://catalog.example.com/mcp",
+  description: "Read the product catalog.",
+  headers: { "X-Api-Key": process.env.CATALOG_API_KEY! },
+});
+```
+
+## Limit visible tools
+
+Set exactly one of `tools.allow` and `tools.block`. Names are the unqualified tool names advertised by the MCP server.
+
+```ts title="agent/connections/linear.ts"
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.linear.app/sse",
+  description: "Read-only Linear issue lookup.",
+  auth: {
+    getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }),
+  },
+  tools: { allow: ["search_issues", "get_issue"] },
+});
+```
+
+Filtered tools do not appear in `connection_search` and cannot be called through that connection.
+
+## Require approval
+
+Approval applies to every visible tool on the connection:
+
+```ts title="agent/connections/linear.ts"
+import { defineMcpClientConnection } from "eve/connections";
+import { once } from "eve/tools/approval";
+
+export default defineMcpClientConnection({
+  url: "https://mcp.linear.app/sse",
+  description: "Linear workspace.",
+  auth: {
+    getToken: async () => ({ token: process.env.LINEAR_API_TOKEN! }),
+  },
+  approval: once(),
+});
+```
+
+Use `always()` for every call, `once()` for the first call in a session, and `never()` for no
+approval. Approval records intent; it does not narrow the token or make remote writes idempotent.
+
+For interactive credentials, continue with [Connection Authentication](./authentication).

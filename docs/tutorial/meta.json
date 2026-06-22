@@ -3,12 +3,12 @@
   "pages": [
     "first-agent",
     "how-it-runs",
-    "query-sample-data",
-    "connect-a-warehouse",
-    "run-analysis",
-    "remember-definitions",
-    "team-playbooks",
-    "guard-the-spend",
-    "ship-it"
+    "add-a-tool",
+    "use-the-sandbox",
+    "remember-state",
+    "add-a-skill",
+    "delegate-to-a-subagent",
+    "require-approval",
+    "add-a-frontend"
   ]
 }

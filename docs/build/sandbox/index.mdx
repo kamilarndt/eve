@@ -1,0 +1,90 @@
+---
+title: "Sandbox"
+description: "Choose when code should run in eve's isolated workspace and how to configure it."
+---
+
+Use the sandbox for work the model controls: shell commands, generated files, cloned repositories,
+and temporary analysis. Every eve agent has one isolated filesystem rooted at `/workspace`, and the
+built-in `bash`, `read_file`, `write_file`, `glob`, and `grep` tools use it automatically.
+
+Authored tools do **not** run there. We keep their `execute` functions in the eve server process so
+application integrations can use server dependencies and credentials. Call `ctx.getSandbox()` only
+when an authored tool intentionally needs isolated execution.
+
+```ts title="agent/tools/count_rows.ts"
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Count the lines in a file in the sandbox workspace.",
+  inputSchema: z.object({ path: z.string() }),
+  async execute({ path }, ctx) {
+    const sandbox = await ctx.getSandbox();
+    const result = await sandbox.run({ command: `wc -l ${JSON.stringify(path)}` });
+
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr || `wc exited with ${result.exitCode}`);
+    }
+
+    return { stdout: result.stdout.trim() };
+  },
+});
+```
+
+`ctx.getSandbox()` is asynchronous and is available only while an authored runtime callback is running. Relative paths resolve from `/workspace`.
+
+## Default tools
+
+| Tool         | Operation                              |
+| ------------ | -------------------------------------- |
+| `bash`       | Run a command and wait for it to exit. |
+| `read_file`  | Read a text file under `/workspace`.   |
+| `write_file` | Write a text file under `/workspace`.  |
+| `glob`       | Find workspace paths by glob pattern.  |
+| `grep`       | Search workspace file contents.        |
+
+The sandbox handle also exposes `run`, `spawn`, text and binary file methods, `removePath`, `resolvePath`, and `setNetworkPolicy`. Import their option and result types from `eve/sandbox`.
+
+Use `spawn` for a process that must stay alive while the agent continues:
+
+```ts
+const sandbox = await ctx.getSandbox();
+const server = await sandbox.spawn({ command: "node server.mjs" });
+
+// Inspect server.stdout or do other work.
+
+await server.kill();
+```
+
+## Seed the workspace
+
+Files under `agent/sandbox/workspace/` are copied into `/workspace` when a session sandbox is created:
+
+```text
+agent/sandbox/
+  sandbox.ts
+  workspace/
+    schema.sql
+    scripts/
+      summarize.mjs
+```
+
+The example produces `/workspace/schema.sql` and `/workspace/scripts/summarize.mjs`. Do not seed `workspace/skills`; eve reserves `/workspace/skills` for authored [skills](../skills).
+
+The `agent/sandbox/workspace/` directory is sufficient to seed files; `sandbox.ts` inside that directory is optional. If you also need a definition, put it at `agent/sandbox/sandbox.ts`. The top-level shorthand `agent/sandbox.ts` is available only when there is no `agent/sandbox/` directory.
+
+```ts title="agent/sandbox/sandbox.ts"
+import { defineSandbox } from "eve/sandbox";
+
+export default defineSandbox({});
+```
+
+You do not need this file for the default sandbox. Add it to select a fixed [backend](./backends) or configure [bootstrap, persistence, and network policy](./lifecycle-and-network).
+
+## Isolation boundary
+
+> **Security consequence:** Treat model-authored commands and files as untrusted. Keep application
+> secrets in the server process, return only the data the model needs, and use an egress policy for
+> production workloads. A sandbox limits what model-controlled code can reach; it does not decide
+> which users may invoke your agent. Configure inbound identity separately in
+> [Authentication](../../operate/authentication).

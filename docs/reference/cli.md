@@ -1,9 +1,9 @@
 ---
-title: "CLI"
+title: "CLI Reference"
 description: "Reference for every eve CLI command: init, info, build, start, dev, link, deploy, eval, and channels."
 ---
 
-The `eve` binary (`bin: eve`) runs from your app root, and every command first loads `.env`/`.env.local` from that root. Running `eve` with no command runs `eve dev`.
+Run the `eve` binary from the application root. Commands that start or build the runtime load the supported local environment files from that root. Running `eve` with no command runs `eve dev`.
 
 ## Commands
 
@@ -22,6 +22,10 @@ The `eve` binary (`bin: eve`) runs from your app root, and every command first l
 | `eve channels list`       | List user-authored channels                                                                                                                           |
 
 When `eve build` fails on discovery errors, it prints the full diagnostics report (severity, message, source path) and the diagnostics artifact path.
+
+## Exit behavior
+
+Successful commands, `--help`, and `--version` exit `0`. Argument, discovery, build, startup, and other command failures print the error and its cause chain to stderr and exit `1`. `eve eval` additionally uses exit `2` for eval configuration errors; its result-specific codes are documented below.
 
 ## `eve init`
 
@@ -96,7 +100,7 @@ Pass a bare URL as the only argument and the UI connects to that server instead 
 | Flag                                | Type   | Default            | Description                                                                               |
 | ----------------------------------- | ------ | ------------------ | ----------------------------------------------------------------------------------------- |
 | `--host <host>`                     | string | all interfaces     | Host interface to bind                                                                    |
-| `--port <port>`                     | number | `$PORT`, then 3000 | Port to listen on                                                                         |
+| `--port <port>`                     | number | `$PORT`, then 2000 | Port to listen on                                                                         |
 | `-u, --url <url>`                   | string | none               | Connect to an existing server URL instead of starting one                                 |
 | `--no-ui`                           | flag   | UI on              | Start the server without an interactive UI                                                |
 | `--name <name>`                     | string | app folder name    | Title shown in the terminal UI                                                            |
@@ -150,7 +154,7 @@ Runs all discovered evals when no eval ids are given; ids match exactly or by di
 | `--skip-report`         | flag   | off     | Skip eval-defined reporters (e.g. Braintrust)  |
 | `--verbose`             | flag   | off     | Stream per-eval `t.log` lines to stdout        |
 
-See [Evals](../evals/overview) for authoring evals.
+See [Evals](../operate/evals) for authoring evals.
 
 ## `eve channels add`
 
@@ -185,10 +189,4 @@ Lists the user-authored channels in the current project.
 4. `eve build` before shipping.
 5. `eve start` to smoke-test the built output locally.
 
-Related: [Project layout](./project-layout) · [instrumentation.ts](../guides/instrumentation).
-
-## What to read next
-
-- [Project layout](./project-layout): what `eve info` discovers
-- [instrumentation.ts](../guides/instrumentation): tracing and the error catalog
-- [Deployment](../guides/deployment): `eve build` and `eve start` in production
+Related: [Project Structure](../build/project-structure) · [Observability](../operate/observability) · [Troubleshooting](../operate/troubleshooting).

@@ -1,0 +1,135 @@
+---
+title: "Tools"
+description: "Define typed server-side actions, control their output, and customize eve's built-in tools."
+---
+
+Tools are how an eve agent does work outside the model loop. We run authored tool implementations
+in your application process, where they can import shared code, read `process.env`, and call
+external services. Model-directed shell and file operations belong in the isolated sandbox; an
+authored tool crosses into it only when your code calls `ctx.getSandbox()`.
+
+> **Security consequence:** A tool runs with the credentials and network access of the eve server.
+> Validate its input, return only the data the model needs, and require approval before sensitive or
+> irreversible actions.
+
+## Define a tool
+
+Create `agent/tools/get_weather.ts`:
+
+```ts title="agent/tools/get_weather.ts" check
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Get the current weather for a city.",
+  inputSchema: z.object({
+    city: z.string().min(1),
+  }),
+  outputSchema: z.object({
+    city: z.string(),
+    condition: z.string(),
+    temperatureF: z.number(),
+  }),
+  async execute({ city }) {
+    return { city, condition: "Sunny", temperatureF: 72 };
+  },
+});
+```
+
+The path defines the name `get_weather`. We use the path as the name so discovery, approvals, and
+logs all point to the same authored file. A tool slug must match
+`^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`. eve does not normalize it. Prefer snake_case for provider
+portability.
+
+Every tool needs `description`, `inputSchema`, and `execute`. `inputSchema` accepts a Standard
+Schema implementation such as Zod or a JSON Schema object. Use `z.object({})` for a tool with no
+arguments. `outputSchema` is optional but useful when callers depend on a stable return shape.
+
+## Runtime context
+
+The second `execute` argument is a `ToolContext`:
+
+```ts title="agent/tools/write_report.ts"
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Write a report into the session workspace.",
+  inputSchema: z.object({ body: z.string() }),
+  async execute({ body }, ctx) {
+    const sandbox = await ctx.getSandbox();
+    await sandbox.writeTextFile({ path: "report.md", content: body });
+    return { path: "/workspace/report.md" };
+  },
+});
+```
+
+`ctx.session` exposes the current session, turn, auth, and parent lineage. `ctx.getSandbox()` returns
+the current agent's sandbox, `ctx.getSkill(id)` opens a skill package, and `ctx.getToken(provider)`
+resolves inline outbound authorization. These APIs are valid only while eve is running authored
+callback code.
+
+## Failures and side effects
+
+Throwing from `execute` produces a failed `action.result`; the model can inspect the failure and
+decide whether to recover. We expose the failure to the loop instead of hiding it because the next
+step may be able to correct an input or choose another tool. Return bounded, deliberate data. A
+tool result becomes model input, so do not return credentials, unnecessary personal data, or an
+unbounded response body.
+
+Completed durable steps replay their recorded result so a resumed session does not repeat finished
+work. A step interrupted before it is recorded may run again. Make external writes idempotent and
+put sensitive or irreversible calls behind [approval](./human-in-the-loop).
+
+## Control model-visible output
+
+By default, the model receives the full result. `toModelOutput` can project it while channel handlers
+and hooks retain the original output:
+
+```ts
+toModelOutput(output) {
+  return {
+    type: "text",
+    value: `Report score: ${output.score}`,
+  };
+},
+```
+
+Return `{ type: "text", value: string }` or `{ type: "json", value: JsonValue }`.
+
+## Built-in tools
+
+The default agent loop provides `bash`, `read_file`, `write_file`, `glob`, `grep`, `web_fetch`,
+`web_search`, `todo`, `ask_question`, and `agent`. `load_skill` and `connection_search` appear when
+the agent declares those capabilities.
+
+To replace a built-in, author a file with the same slug. Import the default when you want to retain
+its schema and executor:
+
+```ts title="agent/tools/write_file.ts"
+import { defineTool } from "eve/tools";
+import { writeFile } from "eve/tools/defaults";
+
+export default defineTool({
+  ...writeFile,
+  async execute(input, ctx) {
+    console.log("write_file", input.path);
+    return writeFile.execute(input, ctx);
+  },
+});
+```
+
+Disable a built-in with a same-named file:
+
+```ts title="agent/tools/bash.ts"
+import { disableTool } from "eve/tools";
+
+export default disableTool();
+```
+
+`eve/tools` also exports `defineBashTool`, `defineReadFileTool`, `defineWriteFileTool`,
+`defineGlobTool`, and `defineGrepTool` for building compatible filesystem tools. The complete export
+list is in the [TypeScript API](../reference/typescript-api).
+
+> **Current limitation:** Authored tools execute on the server. Browser code can answer an input
+> request, but eve does not send tool implementations to the browser for client-side execution.

@@ -12,7 +12,7 @@ export const resources: Resource[] = [
     kind: "Guide",
     title: "Build your first agent",
     description:
-      "Follow the tutorial from a first agent through warehouse tools, spend approval, and a deployable chat UI.",
+      "Build a local analytics agent with typed tools, a reviewer subagent, sandbox files, session state, skills, approval, and a web UI.",
     href: "/docs/tutorial/first-agent",
   },
   {
@@ -20,14 +20,14 @@ export const resources: Resource[] = [
     title: "Frontend guides",
     description:
       "Use React, Vue, Svelte, Next.js, Nuxt, or SvelteKit helpers to put a durable eve session behind your own UI.",
-    href: "/docs/guides/frontend/overview",
+    href: "/docs/connect/frontend",
   },
   {
     kind: "Guide",
     title: "TypeScript client",
     description:
       "Drive the default HTTP channel from scripts, tests, backend jobs, or custom server-side integrations.",
-    href: "/docs/guides/client/overview",
+    href: "/docs/connect/typescript-client",
   },
   {
     kind: "Template",

@@ -175,7 +175,7 @@ export const buildConnectionConfigure = (integration: Integration): string => {
   }
 
   sections.push(
-    "See the [Connections docs](/docs/connections) for principal types, headers, approval, and tool filters.",
+    "See the [Connections docs](/docs/connect/connections) for principal types, headers, approval, and tool filters.",
   );
   return sections.join("\n\n");
 };

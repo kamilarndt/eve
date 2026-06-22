@@ -1,0 +1,53 @@
+---
+title: "4. Delegate to a Subagent"
+description: "Add a declared reviewer subagent with its own instructions and verify delegation."
+---
+
+A specialist is useful when a task needs a different prompt or a narrower role. We use a declared
+reviewer here—not another copy of the root agent—because the review should have its own instructions
+and no access to the root's revenue tool unless we explicitly add it.
+
+## Declare the reviewer
+
+Create `agent/subagents/reviewer/agent.ts`:
+
+```ts title="agent/subagents/reviewer/agent.ts"
+import { defineAgent } from "eve";
+import rootAgent from "../../agent.js";
+
+export default defineAgent({
+  description:
+    "Review a proposed data-analysis answer for arithmetic errors, unsupported claims, and missing units.",
+  model: rootAgent.model,
+});
+```
+
+This imports only the root definition's model value; the reviewer still has its own instructions and capabilities. A declared subagent must have a `description`; the parent uses it to decide when to delegate.
+
+Create `agent/subagents/reviewer/instructions.md`:
+
+```md title="agent/subagents/reviewer/instructions.md"
+Review only the analysis supplied by the parent. Do not invent missing data.
+
+Return:
+
+1. Any arithmetic or unit error.
+2. Any claim not supported by the supplied tool result.
+3. A concise corrected answer, or "no correction needed".
+```
+
+The directory registers a parent-visible tool named `reviewer`. The child receives the message the parent passes; it does not receive the parent conversation or root tools automatically.
+
+## Verify
+
+Restart the dev server and ask:
+
+```text
+Calculate May 1–6 revenue by customer. Before answering, delegate your draft and the tool result to the reviewer.
+```
+
+The root trace should include `revenue_by_customer`, `reviewer`, and then the final answer. `subagent.called` and `subagent.completed` appear on the parent stream; the child has its own `childSessionId`.
+
+Next: [5. Create a Sandbox Report](./use-the-sandbox)
+
+Reference: [Subagents](../build/subagents)

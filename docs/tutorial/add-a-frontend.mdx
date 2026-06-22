@@ -1,0 +1,61 @@
+---
+title: "9. Add a Local Frontend"
+description: "Add the web channel, run the generated UI locally, and verify chat and approval."
+---
+
+Finish the tutorial with the generated browser UI. We keep the agent and frontend on one origin so
+the browser does not need a second service URL or CORS policy. Production identity and deployment
+are separate operational decisions, so this step stays local.
+
+## Add the web files
+
+Stop the dev server. From `analytics-assistant/` run:
+
+```bash
+npx eve channels add web
+npm install
+```
+
+The command adds a Next.js frontend and wraps its configuration with `withEve` from `eve/next`. Keep the generated chat component for this verification; it already uses `useEveAgent` from `eve/react` for session creation, streaming, and input requests.
+
+## Run locally
+
+```bash
+npm run dev
+```
+
+Open the browser URL printed by the dev server. Do not assume port `3000`; the host framework may select another port while the eve runtime uses its configured route integration.
+
+In the browser, send:
+
+```text
+Create the May 1–6 revenue report and deliver it to finance leadership.
+```
+
+Verify all of the following:
+
+1. The answer streams into the page.
+2. The report is written to `/workspace/reports/revenue.md`.
+3. An approval control appears before delivery.
+4. Approving resumes the same session and completes the simulated delivery.
+5. Refreshing the page preserves or reconnects to the current session according to the generated client state.
+
+## What you built
+
+The final project contains exact examples of the main authored files and directories:
+
+- `agent/agent.ts` and `agent/instructions.md`
+- typed tools under `agent/tools/`
+- a declared subagent under `agent/subagents/reviewer/`
+- a seeded sandbox workspace
+- durable state from `eve/context`
+- a packaged skill
+- tool approval
+- a local web client
+
+> **Current limitation:** This local verification does not establish production identity, durable
+> infrastructure, or external delivery safety. Before production, choose and test real route
+> authentication, replace the simulated delivery with an idempotent integration, set a deliberate
+> sandbox network policy, add evals, and choose a deployment target.
+
+Continue with [Authentication](../operate/authentication), [Evals](../operate/evals), and [Deployment](../operate/deployment).

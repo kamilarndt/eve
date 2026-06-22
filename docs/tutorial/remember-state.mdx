@@ -1,0 +1,74 @@
+---
+title: "6. Remember Session State"
+description: "Store a typed metric definition across turns in one durable session."
+---
+
+Use `defineState` for durable working memory scoped to one session. This example remembers the
+user's definition of “large customer” for the conversation, but does not pretend session state is a
+customer database.
+
+## Define the state slot
+
+Create `agent/lib/metric-state.ts`:
+
+```ts title="agent/lib/metric-state.ts"
+import { defineState } from "eve/context";
+
+export const metricDefinitions = defineState(
+  "analytics.metric-definitions",
+  (): Readonly<Record<string, string>> => ({}),
+);
+```
+
+## Add read and write tools
+
+Create `agent/tools/remember_metric.ts`:
+
+```ts title="agent/tools/remember_metric.ts"
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+import { metricDefinitions } from "../lib/metric-state.js";
+
+export default defineTool({
+  description: "Remember a metric definition for this session.",
+  inputSchema: z.object({ name: z.string(), definition: z.string() }),
+  async execute({ name, definition }) {
+    metricDefinitions.update((current) => ({ ...current, [name]: definition }));
+    return { remembered: name };
+  },
+});
+```
+
+Create `agent/tools/recall_metrics.ts`:
+
+```ts title="agent/tools/recall_metrics.ts"
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+import { metricDefinitions } from "../lib/metric-state.js";
+
+export default defineTool({
+  description: "Read metric definitions remembered in this session.",
+  inputSchema: z.object({}),
+  async execute() {
+    return metricDefinitions.get();
+  },
+});
+```
+
+## Verify across turns
+
+Send these as two separate messages in the same session:
+
+```text
+Remember that a large customer has at least $75 in revenue for the requested period.
+```
+
+```text
+Using my definition, which customers were large from May 1 through May 6?
+```
+
+The second turn should call `recall_metrics` and `revenue_by_customer`, then identify only Globex. A new session starts with empty state; state is not a cross-user database.
+
+Next: [7. Add a Skill](./add-a-skill)
+
+Reference: [State](../build/state)

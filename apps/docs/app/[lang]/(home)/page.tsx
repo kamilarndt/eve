@@ -49,7 +49,7 @@ const HomePage = () => (
       <div className="mt-10 flex w-full max-w-2xl flex-col items-center gap-4 sm:flex-row sm:justify-center">
         <Installer command="npx eve@latest init my-agent" />
         <Link
-          href="/docs/getting-started"
+          href="/docs/quickstart"
           className="shrink-0 rounded-md border px-6 py-3 text-sm font-medium text-gray-900 transition-colors hover:bg-gray-100 hover:text-gray-1000"
         >
           Read the Docs

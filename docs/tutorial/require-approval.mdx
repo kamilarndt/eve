@@ -1,0 +1,45 @@
+---
+title: "8. Require Approval"
+description: "Pause a turn before a simulated external delivery, then resume after approval."
+---
+
+Approval belongs on the action, not in a prompt that asks the model to remember when to seek
+permission. Add a delivery tool that always pauses before it simulates sending a report outside the
+agent.
+
+Create `agent/tools/deliver_report.ts`:
+
+```ts title="agent/tools/deliver_report.ts"
+import { defineTool } from "eve/tools";
+import { always } from "eve/tools/approval";
+import { z } from "zod";
+
+export default defineTool({
+  description: "Deliver a completed sandbox report to a named audience.",
+  inputSchema: z.object({
+    path: z.string().describe("Absolute /workspace path to the completed report."),
+    audience: z.string(),
+  }),
+  needsApproval: always(),
+  async execute({ path, audience }) {
+    // Tutorial-only simulation. A production implementation would call an
+    // idempotent delivery API with a stable operation key.
+    return { delivered: true, path, audience, mode: "simulated" };
+  },
+});
+```
+
+Ask:
+
+```text
+Create the May 1–6 revenue report and deliver it to the finance leadership team.
+```
+
+The turn should stop before `deliver_report.execute` runs. Approve the request in the terminal UI. The same turn resumes and returns `mode: "simulated"`.
+
+Deny it once as a second test. The delivery must not run. Approval records intent, but it does not
+make an external call idempotent; production delivery code must handle retries safely.
+
+Next: [9. Add a Local Frontend](./add-a-frontend)
+
+Reference: [Human-in-the-loop](../build/human-in-the-loop)

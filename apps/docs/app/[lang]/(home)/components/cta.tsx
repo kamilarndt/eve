@@ -8,7 +8,7 @@ export function CTA() {
         Build your first agent today.
       </h2>
       <Button asChild size="lg" className="w-fit text-base h-12">
-        <Link href="/docs/getting-started">Get started</Link>
+        <Link href="/docs/quickstart">Get started</Link>
       </Button>
     </section>
   );

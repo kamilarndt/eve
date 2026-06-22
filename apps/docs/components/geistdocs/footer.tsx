@@ -28,7 +28,7 @@ export const Footer = ({
         <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-gray-800 text-sm sm:justify-start">
           <Link
             className="text-gray-900 underline-offset-4 transition-colors hover:text-gray-1000 hover:underline"
-            href="/docs/responsible-use"
+            href="/docs/operate/responsible-use"
           >
             Responsible Use
           </Link>

@@ -1,0 +1,77 @@
+---
+title: "useEveAgent for Vue"
+description: "Vue-specific reactivity and lifecycle behavior for the shared eve client state."
+---
+
+`useEveAgent` from `eve/vue` wraps the shared `EveAgentStore` in Vue `ComputedRef`s. [Client State](./client-state) owns the protocol, status, input-request, persistence, and reconnection behavior; this page covers Vue differences.
+
+## Component example
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { useEveAgent } from "eve/vue";
+
+const message = ref("");
+const agent = useEveAgent();
+
+async function submit() {
+  const text = message.value.trim();
+  if (!text) return;
+  message.value = "";
+  await agent.send({ message: text });
+}
+</script>
+
+<template>
+  <form @submit.prevent="submit">
+    <article v-for="item in agent.data.value.messages" :key="item.id">
+      <strong>{{ item.role }}</strong>
+      <span v-for="(part, index) in item.parts" :key="index">
+        {{ part.type === "text" ? part.text : "" }}
+      </span>
+    </article>
+    <input v-model="message" :disabled="agent.status.value !== 'ready'" />
+    <button type="submit" :disabled="agent.status.value !== 'ready'">Send</button>
+  </form>
+</template>
+```
+
+Vue templates normally unwrap refs, so `agent.data.messages` also works in template expressions. In `<script>`, use `.value` for `data`, `status`, `error`, `events`, and `session`. `send`, `stop`, and `reset` are ordinary functions.
+
+## Lifecycle
+
+The composable reads host, reducer, session, and initial state once. Remount the component to replace them. Supply credential and header functions when values rotate between requests.
+
+On Vue scope disposal, the binding unsubscribes from the store and aborts the active client request.
+
+```ts
+const agent = useEveAgent({
+  host: "https://agent.example.com",
+  auth: { bearer: async () => await getAccessToken() },
+  initialSession: savedSession,
+  onSessionChange(session) {
+    localStorage.setItem("eve-session", JSON.stringify(session));
+  },
+});
+```
+
+## Nuxt
+
+The [Nuxt module](./nuxt) auto-imports the composable and mounts same-origin routes. Importing from `eve/vue` explicitly remains valid.
+
+## Custom projections
+
+Pass an `EveAgentReducer<TData>` from `eve/vue` to change `agent.data.value`:
+
+```ts title="src/eve-state.ts" check
+import { useEveAgent, type EveAgentReducer } from "eve/vue";
+
+const reducer: EveAgentReducer<{ toolCalls: number }> = {
+  initial: () => ({ toolCalls: 0 }),
+  reduce: (data, event) =>
+    event.type === "actions.requested" ? { toolCalls: data.toolCalls + 1 } : data,
+};
+
+const agent = useEveAgent({ reducer });
+```

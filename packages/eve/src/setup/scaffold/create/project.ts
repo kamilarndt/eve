@@ -245,7 +245,7 @@ dist
 `,
   "AGENTS.md": `# eve Agent App
 
-This project uses the eve framework. Before writing code, always read the relevant guide in \`node_modules/eve/docs/\`.
+This project uses the eve framework. Before writing code, read \`node_modules/eve/docs/README.md\`, then the task-specific guide in that packaged docs tree. Match paths, imports, schemas, and defaults to the installed version.
 `,
   "CLAUDE.md": `@AGENTS.md
 `,

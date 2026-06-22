@@ -3,7 +3,13 @@ title: "Context Control"
 description: "Control what an eve agent's model sees and when, across instructions, skills, the workspace, and subagents."
 ---
 
-eve gives you a few levers for controlling what the model sees and when. `instructions.md` (or `instructions.ts`) is always on, `skills/` are available but loaded on demand, and the workspace and sandbox are visible through tools rather than pasted into the prompt.
+Start with short instructions and add context only where the model needs it. Always-on text consumes
+the context window on every call, even when it is irrelevant to the current turn. eve therefore
+separates permanent instructions, load-on-demand skills, inspectable workspace files, and isolated
+subagents.
+
+> **Recommendation:** Put stable identity in instructions, optional procedures in skills, working
+> files in the sandbox, and genuinely separate specialist work in a subagent.
 
 ## Base identity with `instructions.md`
 
@@ -54,23 +60,28 @@ remaining uncertainty.
 
 Packaged skills are useful when you also want sibling files such as `references/`, `assets/`, or `scripts/` under the same skill directory. Those paths show up under the runtime workspace root, so the model can inspect them with the normal file or shell tools instead of pasting their content into the prompt.
 
-See [Skills](../skills) for the full authoring model and install notes.
+See [Skills](../build/skills) for the full authoring model.
 
 ## Put runtime files in the workspace, not the prompt
 
-eve does not inline the entire authored surface into the prompt. Instead, it gives the model a shallow workspace hint and runtime tools to inspect deeper when needed. Skill files are available under the active workspace root, and the model inspects them with the shared `bash` tool, which keeps prompts smaller and makes file and command work explicit.
+eve does not inline every authored file into the prompt. Instead, it gives the model a shallow
+workspace hint and tools to inspect deeper when needed. Skill files are available under the active
+workspace root, and the model inspects them with `bash`, which keeps prompts smaller and makes file
+and command work explicit.
 
-See [Sandbox](../sandbox) for the workspace and sandbox model.
+See [Sandbox](../build/sandbox) for the workspace and sandbox model.
 
 ## Delegate to a specialist with a subagent
 
-If a task deserves its own prompt and tool surface, use a local subagent instead of overloading the root agent. Subagents are a context-control lever too. They get their own `instructions.md`, tools, and sandbox, and they run inside their own delegated context instead of extending the root agent inline.
+If a task deserves its own prompt and set of tools, use a local subagent instead of overloading the
+root agent. Subagents get their own `instructions.md`, tools, sandbox, and delegated context rather
+than extending the root agent inline.
 
-See [Subagents](../subagents).
+See [Subagents](../build/subagents).
 
 ## Dynamic context with `defineDynamic`
 
-The levers above are static, authored once and the same on every session. When the right context depends on who is calling (their team, tenant, plan, or feature flags), resolve it at runtime instead. `defineDynamic` in `agent/instructions/` returns the per-session system prompt, and `defineDynamic` in `agent/skills/` returns the set of skills a caller can load. Both read `ctx.session.auth` or channel metadata, so a caller on the billing team gets the billing instructions and playbook while no one else sees them. See [Dynamic capabilities](../guides/dynamic-capabilities) for the resolver API and when each event fires.
+The levers above are static, authored once and the same on every session. When the right context depends on the caller, tenant, channel, or feature flags, resolve it at runtime instead. `defineDynamic` can return session-specific instructions or skills after reading `ctx.session.auth` or channel metadata. See [Dynamic Capabilities (Advanced)](../build/advanced/dynamic-capabilities) for the resolver API and event timing.
 
 ## Recommended context layout
 
@@ -80,13 +91,5 @@ Pick the lever by what the context is for:
 - `instructions.ts` when you need to compose the prompt from typed helpers at build time.
 - `skills/` for optional procedures that should load only when needed. Move long procedures here instead of into the always-on prompt.
 - `tools/` to expose typed integrations.
-- a subagent when the task needs a different specialist surface; use one only for real specialization boundaries.
+- a subagent when the task needs a genuinely different specialist role or set of capabilities.
 - the workspace or sandbox when the model should inspect files or run commands instead of relying on pasted instructions.
-
-## What to read next
-
-- [Tools](../tools): expose typed integrations the model can call.
-- [Skills](../skills): the full authoring model for on-demand procedures.
-- [Subagents](../subagents): delegate to a specialist with its own prompt and tools.
-- [Dynamic capabilities](../guides/dynamic-capabilities): resolve per-session instructions and skills with `defineDynamic`.
-- [Hooks](../guides/hooks): run code on session events to update the channel state that dynamic resolvers read.

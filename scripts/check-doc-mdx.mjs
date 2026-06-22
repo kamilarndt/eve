@@ -50,7 +50,9 @@ function walk(dir) {
   return out;
 }
 
-const files = walk(docsDir).filter((f) => relative(docsDir, f) !== "README.md");
+const files = walk(docsDir).filter(
+  (f) => !["README.md", "STYLE.md"].includes(relative(docsDir, f)),
+);
 const failures = [];
 for (const abs of files) {
   const rel = relative(docsDir, abs);

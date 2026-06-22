@@ -1,0 +1,19 @@
+{
+  "title": "Develop",
+  "pages": [
+    "project-structure",
+    "models-and-providers",
+    "agent-config",
+    "instructions",
+    "tools",
+    "human-in-the-loop",
+    "skills",
+    "sandbox",
+    "runtime-context",
+    "state",
+    "hooks",
+    "subagents",
+    "schedules",
+    "advanced"
+  ]
+}

@@ -1,0 +1,109 @@
+---
+title: "Introducing eve"
+description: "What eve solves, how filesystem-first authoring works, and where to start."
+---
+
+If your application needs one model call, the AI SDK is probably enough. eve is for the point where
+an agent becomes a backend application: it calls tools, delegates work, waits for people, survives
+process restarts, and continues later.
+
+We make that application a directory of ordinary files—instructions, tools, skills, channels, and
+the rest. eve reads the directory and supplies the model loop, durable sessions, streaming, and an
+isolated workspace. You can inspect what the agent can do without first finding a registry or
+generated configuration.
+
+## Start here
+
+- [Quickstart](./quickstart): create an agent, add a tool, and run it locally.
+- [Build an Agent](./tutorial/first-agent): follow one application from scaffold to web UI.
+
+> **Recommendation:** Use the Quickstart when you already know the shape of an agent application.
+> Use the tutorial when you want to see the pieces introduced in the order you will need them.
+
+## Find the job you need
+
+| Job                                                | Documentation                                        |
+| -------------------------------------------------- | ---------------------------------------------------- |
+| Choose a model or provider                         | [Models and Providers](./build/models-and-providers) |
+| Add an action the model can call                   | [Tools](./build/tools)                               |
+| Connect an MCP server or HTTP API                  | [Connections](./connect/connections)                 |
+| Put the agent in Slack, GitHub, or another channel | [Channels](./connect/channels)                       |
+| Build a browser interface                          | [Frontend](./connect/frontend)                       |
+| Call an agent from TypeScript                      | [TypeScript Client](./connect/typescript-client)     |
+| Deploy on Vercel                                   | [Deploy on Vercel](./operate/deployment/vercel)      |
+| Run eve on your own infrastructure                 | [Self-hosting](./operate/deployment/self-hosting)    |
+| Diagnose a failure                                 | [Troubleshooting](./operate/troubleshooting)         |
+
+For exact commands and wire formats, use the [CLI](./reference/cli),
+[TypeScript API](./reference/typescript-api), and [HTTP API](./reference/http-api) references.
+
+These same Markdown files ship in the `eve` npm package under `node_modules/eve/docs`. A coding
+agent can work entirely from the installed copy without fetching the website.
+
+## Why the filesystem
+
+We built eve around the filesystem because an agent is easier to inspect when every capability has
+a predictable home. The directory is both the authoring interface and the inventory of what the
+agent can do.
+
+```text
+my-agent/
+├── package.json
+└── agent/
+    ├── agent.ts
+    ├── instructions.md
+    ├── tools/
+    ├── skills/
+    ├── connections/
+    ├── channels/
+    ├── sandbox/
+    ├── subagents/
+    └── schedules/
+```
+
+The path is part of the definition. `agent/tools/get_weather.ts` defines the tool
+`get_weather`; `agent/connections/linear.ts` defines the connection `linear`. We derive names this
+way so the file you move or review is also the source of truth. There is no second registry or
+redundant `name` field to drift out of sync.
+
+## What eve owns
+
+eve compiles the authored directory and provides:
+
+- a model-and-tool loop with context compaction;
+- durable sessions, turns, and step checkpoints;
+- an NDJSON event stream and typed TypeScript client;
+- an isolated `/workspace` with shell and file tools;
+- human approval and question flows that can wait without holding compute;
+- local and remote subagents;
+- HTTP, Slack, Discord, Teams, Telegram, Twilio, GitHub, and Linear channels;
+- scheduled work and evals.
+
+Your application still owns the model choice, instructions, tool implementations, credentials,
+authorization policy, data handling, and the decision to take an external action.
+
+## Where eve fits
+
+eve is a good fit when an agent is a backend application rather than a single model call: it needs
+durability, tools, external services, multiple channels, or an isolated filesystem. It is
+also designed for teams that want coding agents to author and maintain the project from files they
+can inspect directly.
+
+For a one-off completion, a small AI SDK call may be simpler. For a browser-only assistant with no
+backend work, eve may add infrastructure you do not need. Built-in messaging channels use HTTP
+webhooks; persistent Slack Socket Mode, Discord Gateway, and Telegram polling clients are not
+currently built in.
+
+## Vercel and other hosts
+
+We recommend Vercel when you want the shortest production path: eve can use Vercel Workflow,
+Vercel Sandbox, deployment OIDC, Cron, and platform run views where available. The runtime is not
+limited to Vercel.
+`eve build && eve start` produces a Node service, direct AI SDK providers bypass AI Gateway, and
+sandbox backends cover self-hosted infrastructure. Custom workflow worlds are experimental. The
+[deployment comparison](./operate/deployment) lists the responsibilities each path leaves with
+you.
+
+eve is currently in beta and subject to the
+[Vercel beta terms](https://vercel.com/docs/release-phases/public-beta-agreement). Public APIs and
+behavior may change before general availability.

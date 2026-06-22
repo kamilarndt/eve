@@ -1,0 +1,86 @@
+---
+title: "3. Add a Typed Tool"
+description: "Add dependency-free sample data and a typed revenue tool, then observe the model-to-tool loop."
+---
+
+The agent cannot calculate revenue until it has data and a safe way to query it. We keep this
+tutorial deterministic by storing four sample orders in TypeScript; the tool shape stays the same
+when you later replace that array with a database call.
+
+## Add the data
+
+Create `agent/lib/orders.ts`:
+
+```ts title="agent/lib/orders.ts"
+export interface Order {
+  readonly customer: string;
+  readonly amountCents: number;
+  readonly createdAt: string;
+}
+
+export const orders: readonly Order[] = [
+  { customer: "Acme", amountCents: 4200, createdAt: "2026-05-01" },
+  { customer: "Acme", amountCents: 1500, createdAt: "2026-05-03" },
+  { customer: "Globex", amountCents: 9900, createdAt: "2026-05-04" },
+  { customer: "Initech", amountCents: 800, createdAt: "2026-05-06" },
+];
+```
+
+## Define the tool
+
+Create `agent/tools/revenue_by_customer.ts`:
+
+```ts title="agent/tools/revenue_by_customer.ts"
+import { defineTool } from "eve/tools";
+import { z } from "zod";
+import { orders } from "../lib/orders.js";
+
+export default defineTool({
+  description: "Calculate order revenue by customer for an inclusive ISO date range.",
+  inputSchema: z.object({
+    from: z.string().describe("Inclusive start date in YYYY-MM-DD format."),
+    to: z.string().describe("Inclusive end date in YYYY-MM-DD format."),
+  }),
+  async execute({ from, to }) {
+    const totals = new Map<string, number>();
+
+    for (const order of orders) {
+      if (order.createdAt < from || order.createdAt > to) continue;
+      totals.set(order.customer, (totals.get(order.customer) ?? 0) + order.amountCents);
+    }
+
+    return {
+      currency: "USD",
+      from,
+      to,
+      customers: [...totals]
+        .map(([customer, amountCents]) => ({ customer, amountCents }))
+        .sort((a, b) => b.amountCents - a.amountCents),
+    };
+  },
+});
+```
+
+The filename is the model-visible name: `revenue_by_customer.ts` registers
+`revenue_by_customer`. eve derives it from the path so the source file, trace, approval, and eval all
+use the same name. A tool slug must match `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`.
+
+## Verify
+
+Restart `npm run dev` if needed, then ask:
+
+```text
+For May 1 through May 6, 2026, which customer had the most revenue? Show dollars.
+```
+
+The trace should contain a `revenue_by_customer` call. The answer should identify Globex with `$99.00`, followed by Acme with `$57.00` and Initech with `$8.00`.
+
+If no tool call appears, make the description more explicit and confirm discovery with:
+
+```bash
+npx eve info --json
+```
+
+Next: [4. Delegate to a Subagent](./delegate-to-a-subagent)
+
+Reference: [Tools](../build/tools)

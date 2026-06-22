@@ -1,0 +1,36 @@
+---
+title: "Connections"
+description: "Expose tools from remote MCP servers or OpenAPI operations without exposing credentials to the model."
+---
+
+Use a connection when an external service already speaks MCP or publishes an OpenAPI document. eve
+turns its operations into model-visible tools without putting the service URL or credential in the
+prompt. Write an authored [tool](../../build/tools) instead when the operation needs
+application-specific logic or you want to expose a much smaller interface.
+
+Connections live under `agent/connections/`. Their runtime names come from their paths:
+
+```text
+agent/connections/linear.ts      → linear
+agent/connections/crm.ts         → crm
+```
+
+The model calls remote tools as `<connection>__<tool>`, such as `linear__get_issue`. It does not receive the connection URL or credential. The built-in `connection_search` tool lets the model discover remote tools without putting every remote schema into every prompt.
+
+## Choose a protocol
+
+| Remote interface                | Definition                  | Filter field                             | Detail               |
+| ------------------------------- | --------------------------- | ---------------------------------------- | -------------------- |
+| MCP over Streamable HTTP or SSE | `defineMcpClientConnection` | `tools.allow` or `tools.block`           | [MCP](./mcp)         |
+| OpenAPI 3.x                     | `defineOpenAPIConnection`   | `operations.allow` or `operations.block` | [OpenAPI](./openapi) |
+
+Both forms support a description, headers, bearer-token resolution, and connection-wide approval. The filename supplies identity; do not add a `name` field.
+
+## Security
+
+> **Security consequence:** Connection code and credentials run in the eve server process, not the
+> model or sandbox. That keeps secrets out of prompt history, but it does not make broad credentials
+> safe. Restrict the upstream token, allow only necessary tools or operations, and require approval
+> for consequential actions.
+
+[Connection Authentication](./authentication) covers static tokens, per-user OAuth, authorization challenges, token refresh, and revoked credentials. Inbound user identity is separate; configure it in [Authentication](../../operate/authentication).

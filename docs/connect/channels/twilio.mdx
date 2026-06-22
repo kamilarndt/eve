@@ -1,0 +1,85 @@
+---
+title: "Twilio"
+description: "Reach your agent over SMS and speech-transcribed phone calls with Twilio."
+type: integration
+---
+
+Use the Twilio channel when a phone number is the right interface and you are prepared to own the
+consent, opt-out, recording, and carrier requirements that come with it. SMS arrives as a webhook;
+calls use TwiML `<Gather input="speech">`, and the transcript enters the same eve session path.
+Every request is checked against `X-Twilio-Signature` before anything else runs. The raw
+continuation token is `From:To`.
+
+## Add the channel
+
+```ts title="agent/channels/twilio.ts"
+import { twilioChannel } from "eve/channels/twilio";
+
+export default twilioChannel({
+  allowFrom: "+15551234567",
+  messaging: { from: "+15557654321" },
+});
+```
+
+```bash
+TWILIO_ACCOUNT_SID=AC...   # required for default outbound SMS
+TWILIO_AUTH_TOKEN=...      # required for inbound signature verification
+```
+
+To skip env vars, pass the same values via `credentials: { accountSid, authToken }`. The channel mounts three routes:
+
+- `POST /eve/v1/twilio/messages`: Messaging webhook
+- `POST /eve/v1/twilio/voice`: inbound call webhook
+- `POST /eve/v1/twilio/voice/transcription`: speech transcript callback
+
+Point your Twilio number's Messaging webhook at `/messages` and Voice webhook at `/voice`, using the exact public URL Twilio will call.
+
+## Deploy and verify
+
+Configure `https://<deployment>/eve/v1/twilio/messages` for Messaging and `https://<deployment>/eve/v1/twilio/voice` for Voice. Send an SMS from a number allowed by `allowFrom`, then place a test call and speak after the prompt. A signature mismatch usually means Twilio signed a different public URL than eve reconstructed; set `webhookUrl` when a proxy changes it.
+
+## How the channel handles messages
+
+### Dispatch
+
+`allowFrom` is required. It gates who can reach the inbound hooks. Pass a single number, a list, an async resolver, or `"*"`. The wildcard is dangerous; only use it with an explicit check inside `onText`/`onVoice`.
+
+```ts
+export default twilioChannel({ allowFrom: ["+15551234567", "+15557654321"] });
+```
+
+`onText` and `onVoiceTranscription` decide dispatch and `auth`. Return `{ auth }` to proceed, or `null` to drop the message. `onVoice` fires the moment a call comes in. Return `null` to reject it, or return an object to override the spoken prompt, language, `<Say voice>`, and speech-recognition options.
+
+```ts
+export default twilioChannel({
+  allowFrom: ["+15551234567"],
+  onText: (ctx, message) => ({
+    auth: {
+      principalId: message.from,
+      principalType: "user",
+      authenticator: "twilio",
+      attributes: { to: message.to ?? "" },
+    },
+  }),
+});
+```
+
+### Delivery
+
+The default `message.completed` handler sends the reply as SMS through Twilio's Messages API. A reply to an inbound message can reuse the webhook's `To` as the sender, but a proactive send has nothing to reuse, so it needs `messaging.from` or `messaging.messagingServiceSid`. Behind a proxy, set `webhookUrl` so signature verification matches the exact configured URL, and `publicBaseUrl` so voice TwiML can build absolute callback URLs.
+
+### Human-in-the-loop (HITL)
+
+SMS and voice have no native button or card affordance, so HITL prompts do not render as interactive controls. The agent's `input.requested` event reaches your `events["input.requested"]` handler if you declare one. Handle it by sending the prompt as text and mapping the caller's reply back to the input request yourself.
+
+### Proactive sessions
+
+Start a session without an inbound message through `receive(twilio, { message, target, auth })` from a schedule `run` handler, or `args.receive(twilio, ...)` from another channel. `target.phoneNumber` is required, and the channel needs `messaging.from` or `messaging.messagingServiceSid` for the outbound sender.
+
+### Attachments
+
+Inbound media attachments are not supported on this channel today.
+
+## Communications consent
+
+For example, you may be required to inform callers and texters that calls are recorded/transcribed and processed by an automated AI system, and obtain consent where required (including two-party-consent jurisdictions). For outbound SMS or calls you initiate, you may be required to get prior express consent, honor STOP/opt-out and quiet-hour rules, and complete required carrier registration.

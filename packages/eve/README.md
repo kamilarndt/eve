@@ -1,175 +1,98 @@
 # eve
 
-eve is a filesystem-first framework for durable backend agents on Vercel.
+eve is a filesystem-first framework for durable backend AI agents. Instructions, tools, skills, connections, channels, schedules, sandboxes, hooks, and subagents live in conventional files; eve discovers, compiles, and runs the resulting application.
 
-You author an agent as a directory on disk. The directory is the contract — markdown for the parts a human should read like a spec, TypeScript for the parts that benefit from real types and runtime behavior.
+The package includes the `eve` CLI, runtime, client libraries, framework integrations, and the complete raw documentation tree.
 
-The framework is called eve. The published npm package is `eve`. The CLI binary is `eve`.
+## Requirements
 
-## Preview Terms and Safeguards
+- Node.js 24 or newer.
+- npm, pnpm, or another Node package manager.
+- A model credential: Vercel project OIDC, `AI_GATEWAY_API_KEY`, or a direct AI SDK provider package and provider key.
 
-eve is currently a preview and subject to the Vercel beta terms; the framework, APIs, documentation, and behavior may change before general availability.
+## Create an application
 
-As the deployer, it is your responsibility to ensure your agent complies with applicable laws.
+Run from the directory that should contain the project:
 
-You are responsible for configuring approval policies, tool restrictions, connection scopes, route/session authorization, sandbox controls, telemetry exports, and other safeguards appropriate for your use case.
+```bash
+npx eve@latest init my-agent
+cd my-agent
+```
 
-Before using eve with non-public, sensitive, regulated, or production data, review which default tools, custom tools, MCP tools, shell/file/web tools, connected services, subagents, schedules, and external actions are available to the agent.
-
-Require human approval or other safeguards for sensitive, irreversible, regulated, financial, healthcare, employment, housing, legal, safety-impacting, user-impacting, or external side-effecting actions.
-
-Unless you configure stricter controls, eve agents may operate with permissive settings, including tool execution without human approval where approval is omitted and sandbox network egress that is not deny-all. Do not rely on model behavior alone to prevent sensitive or irreversible actions.
-
-## What eve Prioritizes
-
-- Markdown-first authoring for instructions and procedures
-- TypeScript where typed runtime behavior matters
-- Durable message runs and follow-up turns
-- Inspectable compiled artifacts under `.eve/`
-- Per-agent sandbox with optional authored overrides
-- A stable HTTP protocol with explicit `continuationToken` and `sessionId` contracts
-- A runtime model that keeps channels, harnesses, and workflow execution separate
-
-## Authored Directory
+The generated application uses a directory like this:
 
 ```text
-my-agent/
-├── package.json
-├── tsconfig.json
-└── agent/
-    ├── agent.ts           # additive runtime config (model, name, build, compaction, …)
-    ├── instructions.md    # always-on instructions prompt
-    ├── tools/             # typed executable integrations
-    ├── skills/            # optional named procedures the model can load on demand
-    ├── hooks/             # lifecycle and stream-event subscribers
-    ├── channels/          # message ingress and delivery (HTTP, Slack, …)
-    ├── connections/       # external MCP server connections
-    ├── sandbox/           # the agent's single sandbox (optional override)
-    ├── workspace/         # files seeded into the sandbox on each session
-    ├── subagents/         # specialist child agents (reuse `defineAgent`)
-    ├── schedules/         # recurring jobs
-    └── lib/               # shared authored code imported by other files
+agent/
+├── agent.ts
+├── instructions.md
+├── channels/
+├── connections/
+├── hooks/
+├── sandbox/
+├── schedules/
+├── skills/
+├── subagents/
+└── tools/
 ```
 
-## Authoring Helpers
+Identity is derived from file paths. For example, `agent/tools/get_weather.ts` registers the tool `get_weather`; tool slugs match `^[a-zA-Z][a-zA-Z0-9_-]{0,63}$`.
 
-Every authored directory has a typed helper. Import each from the matching subpath:
+## Minimal tool
 
-| Helper                                                                                                              | Subpath                               | Authored Location                                |
-| ------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------ |
-| `defineAgent(...)`                                                                                                  | `eve`                                 | `agent.ts`, `subagents/<id>/agent.ts`            |
-| `defineInstructions(...)`                                                                                           | `eve/instructions`                    | `instructions.ts` (or `instructions.md`)         |
-| `defineTool(...)`, `defineBashTool(...)`, `defineReadFileTool(...)`, `defineWriteFileTool(...)`, `disableTool(...)` | `eve/tools`                           | `tools/<name>.ts`                                |
-| `defineSkill(...)`, `getSkill(...)`                                                                                 | `eve/skills`                          | `skills/<name>.ts` (or `skills/<name>.md`)       |
-| `defineHook(...)`                                                                                                   | `eve/hooks`                           | `hooks/<slug>.ts`                                |
-| `defineChannel(...)`, `POST`, `GET`                                                                                 | `eve/channels`                        | `channels/<name>.ts`                             |
-| `eveChannel(...)`, `slackChannel(...)`, `vercelOidc(...)`                                                           | `eve/channels/eve`, `/slack`, `/auth` | reused from `channels/<name>.ts`                 |
-| `defineSandbox(...)`                                                                                                | `eve/sandbox`                         | `sandbox.ts` (or `sandbox/sandbox.ts`)           |
-| `defineSchedule(...)`                                                                                               | `eve/schedules`                       | `schedules/<name>.ts` (or `schedules/<name>.md`) |
-| `defineEval(...)`, `defineEvalConfig(...)`                                                                          | `eve/evals`                           | `evals/<name>.eval.ts`, `evals/evals.config.ts`  |
-
-Runtime accessors live on the subpath that owns the concern:
-
-- `getSession()` — current session, turn, auth, parent lineage (`eve/context`)
-- `getSandbox()` — live sandbox handle for the current agent (`eve/sandbox`)
-- `getSkill(identifier)` — handle for a named skill visible to the current agent (`eve/skills`)
-- `getContext(key)`, `requireContext(key)`, `hasContext(key)`, `setContext(key)`, `ensureContext(key, factory)` — unified context helpers (`eve/context`)
-
-The complete API reference, including types and lower-level runtime primitives, is in the [TypeScript API documentation](https://eve.dev/docs/reference/typescript-api).
-
-## Tiny Example
-
-`agent/instructions.md`
-
-```md
-You are a weather-focused assistant. Be concise, accurate, and explicit when you use a tool.
-```
-
-`agent/tools/get_weather.ts`
-
-```ts
+```ts title="agent/tools/get_weather.ts"
 import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 export default defineTool({
-  description: "Get the current weather for a city.",
-  inputSchema: z.object({
-    city: z.string(),
-  }),
-  async execute(input) {
-    return {
-      city: input.city,
-      condition: "Sunny",
-      temperatureF: 72,
-    };
+  description: "Return mock weather data for a city.",
+  inputSchema: z.object({ city: z.string().min(1) }),
+  async execute({ city }) {
+    return { city, condition: "Sunny", temperatureF: 72 };
   },
 });
 ```
 
-`agent/agent.ts`
-
-```ts
-import { defineAgent } from "eve";
-
-export default defineAgent({
-  model: "openai/gpt-5.4-mini",
-});
-```
-
-## Quick Start
+Run from the application root:
 
 ```bash
-npx eve@latest init my-agent
+npx eve info --json
+npx eve dev
 ```
 
-`eve init` writes a new agent with eve's default model. Pass `--channel-web-nextjs` to add the
-Web Chat application. It installs dependencies, initializes Git, and starts the
-development server. Targeting an existing project directory (`eve init .`) adds
-the agent files and missing dependencies instead. It does not create a Vercel
-project or deploy the agent.
+`eve dev` defaults to port `2000` and prints the actual URL. Use `npx eve dev --no-ui` for a headless development server.
 
-CLI commands:
+## Documentation in the package
 
-- `eve init <name>` — create a new agent
-- `eve info` — discovery results and compiled artifacts
-- `eve build` — compile `.eve/` and build the host output
-- `eve start` — serve the built `.output/` app
-- `eve dev` — start the local runtime and REPL
+The npm tarball contains `node_modules/eve/docs/`. This is a supported documentation interface for coding agents and offline use, not an incidental website copy.
 
-## Deploying
+Start with:
 
-eve is built to be durable. The runtime is Nitro + Workflows. Read the [deployment guide](https://eve.dev/docs/guides/deployment) for the deployment path, environment variables, and configuration.
+- [Package docs index](./docs/README.md)
+- [Quickstart](./docs/quickstart.mdx)
+- [Project Structure](./docs/build/project-structure.md)
+- [Tools](./docs/build/tools.mdx)
+- [TypeScript API](./docs/reference/typescript-api.md)
+- [HTTP API](./docs/reference/http-api.md)
+- [Troubleshooting](./docs/operate/troubleshooting.md)
 
-## Read Next
+The same pages render at [eve.dev/docs](https://eve.dev/docs). Relative links inside the Markdown work in a checkout and in the installed package.
 
-These files ship inside the installed package at `node_modules/eve/docs/`:
+## Runtime boundaries
 
-- [Full docs index](https://eve.dev/docs) — recommended entry point
-- [Getting Started](https://eve.dev/docs/getting-started) — install, scaffold, and run locally
-- [Project Layout](https://eve.dev/docs/reference/project-layout) — every authored directory in depth
-- [`agent.ts`](https://eve.dev/docs/agent-config) — agent config reference
-- [TypeScript API](https://eve.dev/docs/reference/typescript-api) — complete `define*` and runtime helper reference
-- [Vercel Deployment](https://eve.dev/docs/guides/deployment) — deploy to production
+- Authored tool functions execute in the trusted eve server process.
+- Model-controlled shell and file operations proxy into an isolated `/workspace` sandbox.
+- Route authentication decides who may create, continue, or stream a session.
+- Connection authentication resolves outbound credentials without placing tokens in model history.
+- Durable public conversations are identified by `sessionId`; clients also persist the current `continuationToken` and stream index.
 
-By authoring concern: [Tools](https://eve.dev/docs/tools) · [Channels](https://eve.dev/docs/channels/overview) · [Hooks](https://eve.dev/docs/guides/hooks) · [Skills](https://eve.dev/docs/skills) · [Sandbox](https://eve.dev/docs/sandbox) · [Connections](https://eve.dev/docs/connections) · [Subagents](https://eve.dev/docs/subagents) · [Schedules](https://eve.dev/docs/schedules) · [Evals](https://eve.dev/docs/evals/overview)
+One user turn may require multiple model calls for tool results, subagents, retries, or compaction. External side effects must be idempotent because an interrupted durable step can run again.
 
-By runtime concern: [Sessions and Streaming](https://eve.dev/docs/concepts/sessions-runs-and-streaming) · [Session Context](https://eve.dev/docs/guides/session-context) · [Context Control](https://eve.dev/docs/concepts/context-control) · [Auth and Route Protection](https://eve.dev/docs/guides/auth-and-route-protection) · [CLI, Build, and Debugging](https://eve.dev/docs/reference/cli) · [Instrumentation](https://eve.dev/docs/guides/instrumentation)
+## Deployment
 
-## Architecture (Internals)
+Vercel is the managed path for Workflow, Sandbox, Cron integration, and hosted build output. eve also builds a Nitro Node service for self-hosting, where the operator must provide persistent workflow storage, sandbox capacity, scheduling, TLS, scaling, and observability.
 
-You do not need this section to author an eve agent — it documents the public HTTP protocol contracts so eve composes predictably with other systems.
+Read [Deployment](./docs/operate/deployment/index.md), [Deploy on Vercel](./docs/operate/deployment/vercel.md), or [Self-host eve](./docs/operate/deployment/self-hosting.md).
 
-eve's internal split is:
+## Upgrades
 
-- the **channel** normalizes inbound transport, applies auth and delivery policy, and owns `continuationToken`
-- the **harness** does one unit of AI work and returns `{ session, next }`
-- the **runtime** persists state, follows `next`, streams events, and owns workflow primitives (`start()`, `resumeHook()`, `createHook()`, `getWritable()`)
-
-That split is why the public HTTP protocol separates two distinct identifiers:
-
-- `continuationToken` — channel-owned handle the caller uses to start the next user turn
-- `sessionId` — runtime-owned handle for streaming and inspection
-
-## Changelog
-
-See [`./CHANGELOG.md`](./CHANGELOG.md) for the release history. The changelog ships inside the published package so agents can read it directly from `node_modules/eve/CHANGELOG.md` to evaluate upgrades.
+eve is pre-1.0 and may make intentional breaking changes. Review [CHANGELOG.md](./CHANGELOG.md) and the [upgrade guide](./docs/operate/upgrading.md) before changing versions.

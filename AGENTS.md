@@ -176,9 +176,14 @@ claiming verification passed. See [`e2e/README.md`](./e2e/README.md).
 - `docs/**` is the published documentation. If your change alters
   public behavior, update the relevant doc in the same PR and run
   `pnpm docs:check`.
+- The same tree ships at `node_modules/eve/docs/`; treat raw Markdown paths,
+  imports, commands, defaults, examples, and relative links as a public
+  interface for coding agents. Start at `docs/README.md` for task routing.
 - Sidebar order lives in `docs/meta.json`.
 - Keep markdown framework-agnostic — no MDX-only constructs unless the page is
   `.mdx`.
+- Put contributor writing policy in `docs/STYLE.md`, not the package-local
+  reader index.
 
 ## Changesets
 
