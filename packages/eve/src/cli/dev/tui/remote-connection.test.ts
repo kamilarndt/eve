@@ -283,7 +283,7 @@ describe("createRemoteConnectionController", () => {
     });
     harness.credentials.authorize({
       target: VERIFIED_TARGET,
-      resolveToken: async () => "previous-token",
+      resolveToken: async () => ({ kind: "resolved", token: "previous-token" }),
     });
     await harness.controller.check();
     const previous = harness.controller.current().connection;

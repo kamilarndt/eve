@@ -1,3 +1,4 @@
+import type { DevelopmentOidcTokenResolution } from "#services/dev-client/request-headers.js";
 import type { ResolvedVercelDeployment, VerifiedVercelTarget } from "#setup/vercel-deployment.js";
 import { toErrorMessage } from "#shared/errors.js";
 
@@ -25,7 +26,7 @@ export type {
   RemoteConnectionState,
 } from "./remote-connection-types.js";
 
-function challengeFor(state: RemoteConnectionState): RemoteAuthChallenge {
+function challengeFor(state: RemoteConnectionState): RemoteAuthChallenge | undefined {
   switch (state.state) {
     case "auth-required":
     case "authenticating":
@@ -34,7 +35,7 @@ function challengeFor(state: RemoteConnectionState): RemoteAuthChallenge {
     case "checking":
     case "ready":
     case "unavailable":
-      return { kind: "eve-oidc" };
+      return undefined;
   }
 }
 
@@ -83,8 +84,11 @@ export function createRemoteConnectionController(
       const resolved = await resolveDeployment(signal);
       if (!isCurrent(generation) || signal.aborted || resolved.kind !== "resolved") return;
       publishTarget(resolved.target);
-      const resolveToken = async () =>
-        (await options.resolveOidcToken?.(resolved.target.deployment)) ?? "";
+      const resolveToken = async (): Promise<DevelopmentOidcTokenResolution> =>
+        (await options.resolveOidcToken?.(resolved.target.deployment)) ?? {
+          kind: "resolved",
+          token: "",
+        };
       return options.credentials.authorize({ target: resolved.target, resolveToken });
     } catch {
       // Deployment metadata and ambient credentials are optional. The anonymous
@@ -159,7 +163,7 @@ export function createRemoteConnectionController(
       try {
         restoreCandidateCredentials = options.credentials.authorize({
           target: preparation.target,
-          resolveToken: preparation.resolveToken,
+          resolveToken: async () => ({ kind: "resolved", token: await preparation.resolveToken() }),
         });
       } catch (error) {
         const message = appendRemoteAuthMutationSummary(

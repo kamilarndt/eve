@@ -91,7 +91,7 @@ describe("Client request policy", () => {
     const credentials = createDevelopmentCredentialGate("https://eve.test");
     const rollback = credentials.authorize({
       target,
-      resolveToken: async () => "candidate-token",
+      resolveToken: async () => ({ kind: "resolved", token: "candidate-token" }),
     });
     const client = new Client(
       resolveRemoteDevelopmentClientOptions({ credentials, serverUrl: "https://eve.test" }),

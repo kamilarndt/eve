@@ -8,7 +8,7 @@ import {
 
 export interface DevelopmentCredentialGrant {
   readonly target: VerifiedVercelTarget;
-  readonly resolveToken: () => Promise<DevelopmentOidcTokenResolution | string>;
+  readonly resolveToken: () => Promise<DevelopmentOidcTokenResolution>;
 }
 
 /** Per-client authority for resolving and emitting remote Vercel credentials. */
@@ -32,7 +32,7 @@ type DevelopmentCredentialGateState =
   | { readonly kind: "anonymous" }
   | {
       readonly kind: "vercel";
-      readonly resolveToken: () => Promise<DevelopmentOidcTokenResolution | string>;
+      readonly resolveToken: () => Promise<DevelopmentOidcTokenResolution>;
     };
 
 /** Creates an anonymous credential gate bound to one client origin. */
@@ -68,11 +68,10 @@ export function createDevelopmentCredentialGate(serverUrl: string): DevelopmentC
     if (authorized.kind === "anonymous") return "";
 
     const resolution = await authorized.resolveToken();
-    const failure =
-      typeof resolution === "string" || resolution.kind === "resolved" ? undefined : resolution;
-    if (state === authorized) tokenFailure = failure;
-    if (typeof resolution === "string") {
-      return resolution.trim();
+    // Only record against the grant we resolved for: a concurrent rollback may
+    // have restored a prior grant (and its failure) while we awaited.
+    if (state === authorized) {
+      tokenFailure = resolution.kind === "resolved" ? undefined : resolution;
     }
 
     return resolution.kind === "resolved" ? resolution.token.trim() : "";

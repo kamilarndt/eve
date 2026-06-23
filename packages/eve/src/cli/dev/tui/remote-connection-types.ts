@@ -24,13 +24,16 @@ export type RemoteConnectionState =
       readonly state: "auth-required";
       readonly challenge: RemoteAuthChallenge;
     }
+  // `authenticating`/`auth-failed` can be entered from a state that never
+  // observed a challenge (a proactive re-auth from `ready`, a retry from
+  // `unavailable`). The challenge is absent there rather than fabricated.
   | {
       readonly state: "authenticating";
-      readonly challenge: RemoteAuthChallenge;
+      readonly challenge?: RemoteAuthChallenge;
     }
   | {
       readonly state: "auth-failed";
-      readonly challenge: RemoteAuthChallenge;
+      readonly challenge?: RemoteAuthChallenge;
     }
   | {
       readonly state: "unavailable";
