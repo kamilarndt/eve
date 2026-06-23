@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import type { ModelRouting } from "#shared/agent-definition.js";
+import type { ModelEndpointStatus } from "#shared/model-endpoint-status.js";
+
 const source = z.object({
   exportName: z.string().optional(),
   logicalPath: z.string(),
@@ -208,3 +211,26 @@ export type AgentInfoConnectionEntry = ReadonlyDeep<z.output<typeof connection>>
 export type AgentInfoHookEntry = ReadonlyDeep<z.output<typeof hook>>;
 export type AgentInfoSandboxEntry = ReadonlyDeep<z.output<typeof sandbox>>;
 export type AgentInfoResult = ReadonlyDeep<z.output<typeof AgentInfoResultSchema>>;
+
+/**
+ * Compile-time bridge to the server's source-of-truth model types. The
+ * {@link modelRouting} and {@link modelEndpoint} schemas above hand-mirror
+ * {@link ModelRouting} and {@link ModelEndpointStatus}, which the info route
+ * producer builds against. These assertions fail `pnpm typecheck` if a server
+ * variant or field stops being accepted by the schema — catching the dangerous
+ * drift (server grows, client rejects a valid payload at runtime) at build time
+ * instead of as a `SyntaxError` in the field.
+ *
+ * Coverage (server type assignable to schema input), not exact equality, is
+ * deliberate: it is robust to `exactOptionalPropertyTypes` and readonly
+ * differences while still catching added/renamed variants and fields.
+ */
+type Assert<T extends true> = T;
+type SchemaCovers<Server, SchemaInput> = [Server] extends [SchemaInput] ? true : false;
+
+export type ModelRoutingSchemaCoversServer = Assert<
+  SchemaCovers<ModelRouting, z.input<typeof modelRouting>>
+>;
+export type ModelEndpointSchemaCoversServer = Assert<
+  SchemaCovers<ModelEndpointStatus, z.input<typeof modelEndpoint>>
+>;

@@ -66,6 +66,7 @@ export class Client {
    * OIDC outside local development.
    *
    * @throws {ClientError} If the server returns a non-successful status.
+   * @throws {SyntaxError} If the response does not match the agent-info contract.
    */
   async info(): Promise<AgentInfoResult> {
     const response = await this.fetch(EVE_INFO_ROUTE_PATH);
@@ -78,7 +79,7 @@ export class Client {
     const result = AgentInfoResultSchema.safeParse(await response.json());
     if (!result.success) {
       throw new SyntaxError(
-        "The server returned an unrecognized response from the Eve agent info route.",
+        "The server returned an unrecognized response from the eve agent info route.",
       );
     }
 
