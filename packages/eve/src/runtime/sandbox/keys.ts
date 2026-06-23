@@ -19,6 +19,7 @@ const RUNTIME_SANDBOX_CONTRACT_VERSION = 6;
  */
 interface CreateRuntimeSandboxKeysInput {
   readonly backendName: string;
+  readonly backendScopeKey?: string;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly nodeId: string;
   readonly sessionId: string;
@@ -51,6 +52,7 @@ export async function createRuntimeSandboxKeys(input: CreateRuntimeSandboxKeysIn
  */
 export async function createRuntimeSandboxTemplateKey(input: {
   readonly backendName: string;
+  readonly backendScopeKey?: string;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly nodeId: string;
   readonly sourceId: string;
@@ -63,6 +65,7 @@ export async function createRuntimeSandboxTemplateKey(input: {
   const metadata = await loadCompileMetadataForKeys(input.compiledArtifactsSource);
   const scope = await resolveRuntimeSandboxScope({
     backendName: input.backendName,
+    backendScopeKey: input.backendScopeKey,
     compiledArtifactsSource: input.compiledArtifactsSource,
     scopeKind: input.templatePlan.kind === "source-graph" ? "deployment" : "stable",
   });
@@ -107,12 +110,14 @@ async function loadCompileMetadataForKeys(
 
 async function createRuntimeSandboxSessionKey(input: {
   readonly backendName: string;
+  readonly backendScopeKey?: string;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly nodeId: string;
   readonly sessionId: string;
 }): Promise<string> {
   const scope = await resolveRuntimeSandboxScope({
     backendName: input.backendName,
+    backendScopeKey: input.backendScopeKey,
     compiledArtifactsSource: input.compiledArtifactsSource,
     scopeKind: "deployment",
   });
@@ -137,9 +142,15 @@ async function createRuntimeSandboxSessionKey(input: {
  */
 async function resolveRuntimeSandboxScope(input: {
   readonly backendName: string;
+  readonly backendScopeKey?: string;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly scopeKind: "deployment" | "stable";
 }): Promise<string> {
+  const backendScopeKey = input.backendScopeKey?.trim();
+  if (backendScopeKey !== undefined && backendScopeKey.length > 0) {
+    return createStableHash(`backend:${input.backendName}:${backendScopeKey}`).slice(0, 16);
+  }
+
   if (input.backendName === "vercel") {
     if (input.scopeKind === "stable") {
       const projectScope = resolveVercelProjectScope();

@@ -56,6 +56,7 @@ interface PrewarmSandboxesInput {
   readonly log?: (message: string) => void;
   readonly dispatch?: SandboxBackendPrewarmDispatch;
   readonly onPrewarmSignature?: (signature: string) => void;
+  readonly shouldPrewarmBackend?: (backend: SandboxBackend) => boolean;
   readonly shouldPrewarmSignature?: (signature: string) => boolean;
 }
 
@@ -150,6 +151,7 @@ export async function prewarmAppSandboxes(input: {
   readonly log?: (message: string) => void;
   readonly dispatch?: SandboxBackendPrewarmDispatch;
   readonly onPrewarmSignature?: (signature: string) => void;
+  readonly shouldPrewarmBackend?: (backend: SandboxBackend) => boolean;
   readonly shouldPrewarmSignature?: (signature: string) => boolean;
 }): Promise<void> {
   const compiledArtifactsSource =
@@ -169,6 +171,7 @@ export async function prewarmAppSandboxes(input: {
     graph,
     log: input.log,
     onPrewarmSignature: input.onPrewarmSignature,
+    shouldPrewarmBackend: input.shouldPrewarmBackend,
     shouldPrewarmSignature: input.shouldPrewarmSignature,
   });
 }
@@ -224,6 +227,7 @@ async function collectPrewarmTargets(input: {
   readonly appRoot: string;
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly graph: ResolvedAgentGraphBundle;
+  readonly shouldPrewarmBackend?: (backend: SandboxBackend) => boolean;
 }): Promise<readonly PrewarmTarget[]> {
   const compileDirectoryPath = resolveRuntimeCompilerArtifactPaths(
     input.appRoot,
@@ -234,12 +238,17 @@ async function collectPrewarmTargets(input: {
 
   await Promise.all(
     collectNodeSandboxes(input.graph).map(async ({ definition, nodeId, workspaceResourceRoot }) => {
+      if (input.shouldPrewarmBackend?.(definition.backend) === false) {
+        return;
+      }
+
       const templatePlan = createRuntimeSandboxTemplatePlan({
         definition,
         workspaceResourceRoot,
       });
       const templateKey = await createRuntimeSandboxTemplateKey({
         backendName: definition.backend.name,
+        backendScopeKey: definition.backend.provisioning?.scopeKey,
         compiledArtifactsSource: input.compiledArtifactsSource,
         nodeId,
         sourceId: definition.sourceId,

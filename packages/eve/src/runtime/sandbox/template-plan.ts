@@ -46,7 +46,9 @@ export function createRuntimeSandboxTemplatePlan(input: {
   }
 
   if (input.workspaceResourceRoot.rootEntries.length === 0) {
-    return { kind: "none" };
+    return input.definition.backend.provisioning?.requiresTemplate === true
+      ? { kind: "source-graph" }
+      : { kind: "none" };
   }
 
   return {

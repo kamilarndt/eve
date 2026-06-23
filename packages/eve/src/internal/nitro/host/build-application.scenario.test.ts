@@ -57,7 +57,7 @@ const createApplicationNitroMock = vi.fn();
 const prepareApplicationHostMock = vi.fn();
 const prepareMock = vi.fn(async () => undefined);
 const prerenderMock = vi.fn(async () => undefined);
-const runVercelBuildPrewarmMock = vi.fn(async () => undefined);
+const runBuildSandboxPrewarmMock = vi.fn(async () => undefined);
 const workflowBuilderBuildVercelOutputMock = vi.fn(async (_options: unknown) => undefined);
 const workflowBuilderConstructors: unknown[] = [];
 
@@ -77,7 +77,7 @@ vi.mock("./prepare-application-host.js", () => ({
 }));
 
 vi.mock("./vercel-build-prewarm.js", () => ({
-  runVercelBuildPrewarm: runVercelBuildPrewarmMock,
+  runBuildSandboxPrewarm: runBuildSandboxPrewarmMock,
 }));
 
 vi.mock("../../workflow-bundle/builder.js", () => ({
@@ -179,7 +179,10 @@ describe("buildApplication", () => {
       )}\n`,
     );
     expect(workflowBuilderBuildVercelOutputMock).not.toHaveBeenCalled();
-    expect(runVercelBuildPrewarmMock).not.toHaveBeenCalled();
+    expect(runBuildSandboxPrewarmMock).toHaveBeenCalledWith({
+      appRoot,
+      log: expect.any(Function),
+    });
 
     const summary = JSON.parse(
       await readFile(join(appRoot, VERCEL_EVE_AGENT_SUMMARY_OUTPUT_PATH), "utf8"),
@@ -323,7 +326,7 @@ describe("buildApplication", () => {
       "export const handleUpgrade = originalModule.handleUpgrade",
     );
     await expect(readFile(staleFlowOutputPath, "utf8")).rejects.toThrow();
-    expect(runVercelBuildPrewarmMock).toHaveBeenCalledWith({
+    expect(runBuildSandboxPrewarmMock).toHaveBeenCalledWith({
       appRoot,
       log: expect.any(Function),
     });

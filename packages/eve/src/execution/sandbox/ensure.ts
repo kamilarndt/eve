@@ -77,6 +77,7 @@ export async function ensureSandboxAccess(input: EnsureSandboxAccessInput): Prom
 
     const keys = await createRuntimeSandboxKeys({
       backendName: backend.name,
+      backendScopeKey: backend.provisioning?.scopeKey,
       compiledArtifactsSource: input.compiledArtifactsSource,
       nodeId: input.nodeId,
       sessionId: input.sessionId,

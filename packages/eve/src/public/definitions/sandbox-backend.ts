@@ -7,6 +7,7 @@ export type {
   SandboxBackendCreateInput,
   SandboxBackendPrewarmInput,
   SandboxBackendPrewarmResult,
+  SandboxBackendProvisioning,
   SandboxBackend,
 } from "#shared/sandbox-backend.js";
 

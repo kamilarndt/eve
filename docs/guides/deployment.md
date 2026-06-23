@@ -95,19 +95,20 @@ export default defineSandbox({
 
 Leave `backend` off and eve falls back to `defaultBackend()`, which picks the Vercel backend on hosted builds and the local backend everywhere else. One definition, both environments.
 
-For a self-deployed process, leave `defaultBackend()` in place or choose an explicit non-Vercel backend such as Docker or microsandbox. If those do not match your infrastructure, write a custom `SandboxBackend` adapter that creates sessions in your own container, VM, or isolation service. Do not pin `vercel()` unless that process should create hosted Vercel sandboxes.
+For a self-deployed process, leave `defaultBackend()` in place or choose an explicit backend such as Docker, microsandbox, or AWS Lambda MicroVMs. The AWS backend remains explicit even on AWS-hosted applications and uses the caller's standard AWS credential chain. See [AWS Lambda MicroVM sandboxes](./aws-lambda-microvms) for the bucket, IAM, connector, and retention setup. If those do not match your infrastructure, write a custom `SandboxBackend` adapter that creates sessions in your own container, VM, or isolation service. Do not pin `vercel()` unless that process should create hosted Vercel sandboxes.
 
-## 5. Build-time sandbox prewarm
+## 5. Build-time sandbox provisioning
 
-During hosted builds, eve prewarms reusable Vercel sandbox templates so the first session doesn't pay the cold-start cost:
+Backends opt into remote provisioning during `eve build`. The build fails if a required image or template cannot be created, so a deployable artifact never points at missing remote state:
 
-- Prewarm runs only when both `VERCEL` and `VERCEL_DEPLOYMENT_ID` are present.
-- A sandbox with no `bootstrap()` and no workspace seed files gets skipped.
+- Vercel prewarm runs only when both `VERCEL` and `VERCEL_DEPLOYMENT_ID` are present.
+- AWS Lambda MicroVM provisioning runs for every explicit AWS backend, including sandboxes with no `bootstrap()` or workspace seed files, because the controller image is mandatory.
+- Other backends skip a sandbox with no `bootstrap()` and no workspace seed files unless they explicitly require a template.
 - Seed-only templates are keyed by skills and workspace file contents, so unchanged seeds reuse a template across deploys.
 - Templates with a `bootstrap()` are keyed by the optional resolved `revalidationKey()` plus the authored sandbox source and seed contents, so matching inputs reuse a template across deploys.
 - Each template shows up in the build log as either `reused cached` or `built`.
 - Prewarming only covers template construction. `onSession()` still runs at runtime, once per session.
-- **If build-time prewarm fails, the build fails.**
+- **If build-time provisioning fails, the build fails.**
 
 If `VERCEL` is set but `VERCEL_DEPLOYMENT_ID` is missing, eve warns that it skipped prewarming. Do not deploy that build with `vercel deploy --prebuilt`; its output may reference sandbox templates that were never provisioned. Run `vercel deploy` instead so Vercel builds the source in its hosted build environment.
 
@@ -144,7 +145,7 @@ Self-deployed agents should make the Vercel-specific choices explicit:
 - Install the AI SDK package for your provider, then use a direct provider model object and `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` when you want no Gateway dependency.
 - Use `AI_GATEWAY_API_KEY` if you still want Gateway routing from a non-Vercel host.
 - Replace `vercelOidc()` with auth that your host can verify.
-- Use `defaultBackend()`, a pinned non-Vercel sandbox backend such as Docker or microsandbox, or your own `SandboxBackend` adapter.
+- Use `defaultBackend()`, a pinned sandbox backend such as Docker, microsandbox, or AWS Lambda MicroVMs, or your own `SandboxBackend` adapter.
 - If the agent defines schedules, the default `eve build && eve start` path starts Nitro's schedule runner, and Vercel wires schedules to Vercel Cron automatically. If you adapt the output to a custom HTTP-only host or preset, make sure it also runs Nitro scheduled tasks, or trigger the same work from your own scheduler.
 - Treat Vercel Cron, Vercel Sandbox prewarm, Vercel Deployment Protection bypass, and the Agent Runs dashboard as Vercel-only conveniences.
 

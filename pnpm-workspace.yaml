@@ -45,6 +45,7 @@ minimumReleaseAge: 2880 # 2 days
 
 minimumReleaseAgeExclude:
   - "@ai-sdk/*"
+  - "@aws-sdk/*"
   - "@typescript/typescript-*"
   - "@turbo/*"
   - "@workflow/*"

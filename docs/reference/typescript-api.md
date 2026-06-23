@@ -82,7 +82,9 @@ A few non-`define*` helpers round out the set: `disableTool` and `ExperimentalWo
 | `eve/skills`                                                | `defineSkill`, `defineDynamic`                                       |
 | `eve/instructions`                                          | `defineInstructions`, `defineDynamic`                                |
 | `eve/context`                                               | `defineState`, session and state types                               |
-| `eve/sandbox`                                               | `defineSandbox`, backends                                            |
+| `eve/sandbox`                                               | `defineSandbox`, `defaultBackend`, `SandboxBackend*` types           |
+| `eve/sandbox/aws-lambda`                                    | `awsLambdaMicrovm`, AWS Lambda MicroVM option types                  |
+| `eve/sandbox/{docker,just-bash,microsandbox,vercel}`        | pinned sandbox backend factories and their option types              |
 | `eve/instrumentation`                                       | `defineInstrumentation`, `isChannel`                                 |
 | `eve/evals`                                                 | `defineEval`, `defineEvalConfig`, eval types                         |
 | `eve/evals/expect`                                          | `includes`, `equals`, `matches`, `similarity`                        |

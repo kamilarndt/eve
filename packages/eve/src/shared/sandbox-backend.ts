@@ -119,13 +119,30 @@ export interface SandboxBackendPrewarmResult {
 }
 
 /**
+ * Declares provisioning behavior that eve cannot infer from authored
+ * bootstrap or workspace files alone.
+ *
+ * Remote backends use this capability to require an otherwise-empty
+ * template, choose a stable resource namespace across deployments, and
+ * request provisioning during `eve build`.
+ */
+export interface SandboxBackendProvisioning {
+  /** Whether the backend needs a template even with no bootstrap or seed files. */
+  readonly requiresTemplate: boolean;
+  /** Optional stable namespace used instead of a deployment or filesystem scope. */
+  readonly scopeKey?: string;
+  /** Whether `eve build` must provision this backend before producing deployable output. */
+  readonly prewarmAtBuild: boolean;
+}
+
+/**
  * Pluggable sandbox backend.
  *
  * A `SandboxBackend` is a value an author attaches to a
  * {@link SandboxDefinition} to choose which underlying runtime hosts the
  * sandbox. eve ships built-in backends (`docker()`,
- * `justbash()`, `microsandbox()`,
- * `vercel()`, and the availability-aware
+ * `justbash()`, `microsandbox()`, `vercel()`, the explicit AWS Lambda
+ * MicroVM backend, and the availability-aware
  * `defaultSandbox()`), but the interface is public so authors can write
  * their own.
  *
@@ -144,6 +161,8 @@ export interface SandboxBackend<BO = Record<string, never>, SO = Record<string, 
    * `"local"`. Custom backends pick a unique string.
    */
   readonly name: string;
+  /** Optional remote-resource provisioning requirements for this backend. */
+  readonly provisioning?: SandboxBackendProvisioning;
   /**
    * Creates or reattaches one live sandbox session from a template
    * previously captured by {@link SandboxBackend.prewarm}. Throws

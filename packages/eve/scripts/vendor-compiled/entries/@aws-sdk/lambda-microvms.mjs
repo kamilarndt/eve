@@ -1,0 +1,17 @@
+export {
+  CreateMicrovmAuthTokenCommand,
+  CreateMicrovmImageCommand,
+  GetMicrovmCommand,
+  GetMicrovmImageCommand,
+  GetMicrovmImageVersionCommand,
+  LambdaMicrovmsClient,
+  ListManagedMicrovmImagesCommand,
+  ListManagedMicrovmImageVersionsCommand,
+  ListMicrovmImagesCommand,
+  ListMicrovmImageVersionsCommand,
+  ResumeMicrovmCommand,
+  RunMicrovmCommand,
+  SuspendMicrovmCommand,
+  TagResourceCommand,
+  TerminateMicrovmCommand,
+} from "@aws-sdk/client-lambda-microvms";

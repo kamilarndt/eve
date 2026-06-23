@@ -27,6 +27,7 @@ export type {
   SandboxBackendCreateInput,
   SandboxBackendHandle,
   SandboxBackendPrewarmInput,
+  SandboxBackendProvisioning,
   SandboxBackendRuntimeContext,
   SandboxBackendSessionState,
   SandboxSeedFile,

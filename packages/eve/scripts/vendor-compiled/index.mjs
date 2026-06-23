@@ -10,6 +10,10 @@ import openai from "./@ai-sdk/openai.mjs";
 import otel from "./@ai-sdk/otel.mjs";
 import provider from "./@ai-sdk/provider.mjs";
 
+import awsLambdaMicrovms from "./@aws-sdk/lambda-microvms.mjs";
+import awsS3 from "./@aws-sdk/s3.mjs";
+import awsS3RequestPresigner from "./@aws-sdk/s3-request-presigner.mjs";
+
 import chatAdapterSlack from "./@chat-adapter/slack.mjs";
 import chatAdapterStateMemory from "./@chat-adapter/state-memory.mjs";
 
@@ -37,6 +41,9 @@ import zodValidationError from "./zod-validation-error.mjs";
 
 export const MODULES = [
   anthropic,
+  awsLambdaMicrovms,
+  awsS3,
+  awsS3RequestPresigner,
   chat,
   chatAdapterSlack,
   chatAdapterStateMemory,

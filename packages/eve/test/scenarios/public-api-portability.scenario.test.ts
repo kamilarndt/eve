@@ -43,6 +43,7 @@ const PORTABILITY_CASES: readonly PortabilityCase[] = [
     descriptor: {
       files: {
         "agent/sandbox.ts": `import { defaultBackend, defineSandbox } from "eve/sandbox";
+import { awsLambdaMicrovm, type AwsLambdaMicrovmSandboxOptions } from "eve/sandbox/aws-lambda";
 import { docker } from "eve/sandbox/docker";
 import { justbash } from "eve/sandbox/just-bash";
 import { microsandbox } from "eve/sandbox/microsandbox";
@@ -58,6 +59,9 @@ const fallback = defaultBackend({
 void docker;
 void justbash;
 void microsandbox;
+const awsOptions = {} as AwsLambdaMicrovmSandboxOptions;
+void awsLambdaMicrovm;
+void awsOptions;
 
 export default defineSandbox({
   backend: process.env.VERCEL === "1" ? vercel() : fallback,
@@ -68,6 +72,7 @@ export default defineSandbox({
     },
     include: [
       "src/public/sandbox/index.ts",
+      "src/public/sandbox/aws-lambda.ts",
       "src/public/sandbox/docker.ts",
       "src/public/sandbox/just-bash.ts",
       "src/public/sandbox/microsandbox.ts",
@@ -77,6 +82,9 @@ export default defineSandbox({
     packageExports: {
       "./sandbox": {
         types: "./dist/src/public/sandbox/index.d.ts",
+      },
+      "./sandbox/aws-lambda": {
+        types: "./dist/src/public/sandbox/aws-lambda.d.ts",
       },
       "./sandbox/docker": {
         types: "./dist/src/public/sandbox/docker.d.ts",

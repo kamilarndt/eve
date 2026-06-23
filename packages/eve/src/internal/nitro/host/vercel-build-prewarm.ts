@@ -1,4 +1,5 @@
 import { prewarmAppSandboxes } from "#execution/sandbox/prewarm.js";
+import type { SandboxBackend } from "#public/definitions/sandbox-backend.js";
 
 type PrewarmAppSandboxesInput = Parameters<typeof prewarmAppSandboxes>[0];
 
@@ -26,13 +27,25 @@ export function shouldPrewarmVercelBuild(): boolean {
 }
 
 /**
- * Vercel build-time sandbox prewarm hook. Failures here are treated as
- * build failures because the same sandbox bootstrap would otherwise
- * break at runtime.
+ * Build-time sandbox prewarm hook. Failures are build failures because the
+ * same provisioning or bootstrap would otherwise fail after deployment.
  *
- * Returns `true` when the prewarm ran, `false` when the current
- * environment is not a Vercel build.
+ * Backends opt in through `provisioning.prewarmAtBuild`. Vercel remains
+ * restricted to builds with a deployment id because that id participates in
+ * its template scope; other remote backends can prewarm in any build host.
  */
+export async function runBuildSandboxPrewarm(input: PrewarmAppSandboxesInput): Promise<void> {
+  if (process.env.VERCEL?.trim() && !process.env.VERCEL_DEPLOYMENT_ID?.trim()) {
+    console.warn(VERCEL_BUILD_PREWARM_SKIPPED_WARNING);
+  }
+
+  await prewarmAppSandboxes({
+    ...input,
+    shouldPrewarmBackend: shouldPrewarmBackendAtBuild,
+  });
+}
+
+/** Backwards-compatible Vercel-only entry used by the Vercel build scenario harness. */
 export async function runVercelBuildPrewarm(input: PrewarmAppSandboxesInput): Promise<boolean> {
   if (!shouldPrewarmVercelBuild()) {
     if (process.env.VERCEL?.trim() && !process.env.VERCEL_DEPLOYMENT_ID?.trim()) {
@@ -42,4 +55,11 @@ export async function runVercelBuildPrewarm(input: PrewarmAppSandboxesInput): Pr
   }
   await prewarmAppSandboxes(input);
   return true;
+}
+
+function shouldPrewarmBackendAtBuild(backend: SandboxBackend): boolean {
+  if (backend.provisioning?.prewarmAtBuild !== true) {
+    return false;
+  }
+  return backend.name !== "vercel" || shouldPrewarmVercelBuild();
 }

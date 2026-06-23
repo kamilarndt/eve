@@ -112,17 +112,18 @@ export default defineSandbox({
 
 ## Backends
 
-The backend decides where the sandbox runs. eve ships four pinned factories from nested `eve/sandbox/*` imports plus an availability-aware default from `eve/sandbox`:
+The backend decides where the sandbox runs. eve ships five pinned factories from nested `eve/sandbox/*` imports plus an availability-aware default from `eve/sandbox`:
 
-| Backend            | Runs the sandbox                                                                               |
-| ------------------ | ---------------------------------------------------------------------------------------------- |
-| `vercel()`         | on [Vercel Sandbox](https://vercel.com/docs/sandbox).                                          |
-| `docker()`         | locally in a Docker container, driven through the `docker` CLI.                                |
-| `microsandbox()`   | locally in a lightweight [microsandbox](https://www.npmjs.com/package/microsandbox) VM.        |
-| `justbash()`       | locally in the pure-JS `just-bash` interpreter (no daemon or VM, but no real binaries either). |
-| `defaultBackend()` | picks the best available: Vercel Sandbox on hosted Vercel → Docker → microsandbox → just-bash. |
+| Backend              | Runs the sandbox                                                                               |
+| -------------------- | ---------------------------------------------------------------------------------------------- |
+| `vercel()`           | on [Vercel Sandbox](https://vercel.com/docs/sandbox).                                          |
+| `awsLambdaMicrovm()` | on AWS Lambda MicroVMs, with full-filesystem S3 checkpoints.                                   |
+| `docker()`           | locally in a Docker container, driven through the `docker` CLI.                                |
+| `microsandbox()`     | locally in a lightweight [microsandbox](https://www.npmjs.com/package/microsandbox) VM.        |
+| `justbash()`         | locally in the pure-JS `just-bash` interpreter (no daemon or VM, but no real binaries either). |
+| `defaultBackend()`   | picks the best available: Vercel Sandbox on hosted Vercel → Docker → microsandbox → just-bash. |
 
-Configuring a pinned factory uses that backend unconditionally. `docker()` always requires a reachable Docker daemon, and `vercel()` always creates hosted sandboxes (including from local dev, with Vercel credentials).
+Configuring a pinned factory uses that backend unconditionally. `docker()` always requires a reachable Docker daemon, `vercel()` always creates hosted sandboxes, and `awsLambdaMicrovm()` always uses real AWS resources, including from local development.
 
 With `backend` omitted, eve uses `defaultBackend()`, which resolves on first use in priority order:
 
@@ -130,6 +131,8 @@ With `backend` omitted, eve uses `defaultBackend()`, which resolves on first use
 2. **Docker** when a daemon is reachable through a Docker-compatible `docker` CLI (Docker Desktop, OrbStack, Colima, Podman via its docker-compatible CLI; override the binary with `EVE_DOCKER_PATH`).
 3. **microsandbox** when the host supports it: macOS on Apple Silicon, or glibc Linux with KVM enabled.
 4. **just-bash** as the dependency-free fallback.
+
+AWS Lambda MicroVMs are intentionally absent from this ordering. Selecting AWS always requires the explicit `eve/sandbox/aws-lambda` factory.
 
 `defaultBackend()` also accepts a keyed bag so each inner backend gets its own typed create options:
 
@@ -152,6 +155,29 @@ export default defineSandbox({
 ### microsandbox
 
 `microsandbox()` runs each sandbox in a lightweight local VM with snapshot-backed templates, a `vercel-sandbox` user, and a firewall capable of domain-level network policies and credential brokering. It is the closest local match to hosted Vercel Sandbox. The default base image is `ghcr.io/vercel/eve:latest`, eve's published sandbox runtime image. During framework setup, before authored bootstrap code runs, eve verifies Bash and creates `/workspace` and the sandbox user. Install authored runtime tools in sandbox bootstrap or provide them through a custom image. Supported hosts are macOS on Apple Silicon, or Linux (glibc) with KVM. The `microsandbox` npm package and its VM runtime are not bundled with eve, so `eve dev` installs both automatically when missing (disable with `setup: { autoInstall: false }`); production processes fail with actionable install errors instead.
+
+### AWS Lambda MicroVMs
+
+`awsLambdaMicrovm()` provisions an ARM64 eve controller image and launches one AWS Lambda MicroVM per durable sandbox session. Users provide a same-Region S3 bucket, build role, caller permissions, and any custom network connectors; eve does not create cloud infrastructure.
+
+```ts title="agent/sandbox/sandbox.ts"
+import { defineSandbox } from "eve/sandbox";
+import { awsLambdaMicrovm } from "eve/sandbox/aws-lambda";
+
+export default defineSandbox({
+  backend: awsLambdaMicrovm({
+    applicationId: "analytics-agent",
+    region: "us-east-1",
+    artifactBucket: "company-eve-sandboxes",
+    buildRoleArn: process.env.EVE_AWS_BUILD_ROLE_ARN!,
+    executionRoleArn: process.env.EVE_AWS_EXECUTION_ROLE_ARN,
+  }),
+});
+```
+
+Native suspend and resume preserve memory and processes while the MicroVM exists. eve also checkpoints the complete writable filesystem to S3 before explicit suspension. After AWS's eight-hour maximum lifetime or another termination, eve restores the exact recorded image version and filesystem, but background processes are gone. If that image version is unavailable, restoration fails without discarding the checkpoint or falling back to workspace-only state.
+
+Egress and VPC connectors are immutable at launch; configure them on the factory. An empty connector array disables egress, and restricted VPC networking must still reach the checkpoint bucket. `setNetworkPolicy()` is unsupported. See [AWS Lambda MicroVM sandboxes](./guides/aws-lambda-microvms) for IAM policies, lifecycle details, retention, networking, and troubleshooting.
 
 ### just-bash
 
@@ -183,7 +209,14 @@ export default defineSandbox({
 });
 ```
 
-Sessions are persistent, and how the underlying runtime idles out depends on the backend. On the Vercel backend, the VM times out after a period of inactivity (default 30 minutes); eve preserves the filesystem and resumes the sandbox on the next message as if nothing happened, even days later. The Docker backend keeps a long-lived container per durable session and persists `/workspace` across turns without that timeout, and the just-bash backend stores its virtual filesystem under `.eve/sandbox-cache/`. In every case, `/workspace` survives between turns for the same session.
+Sessions are persistent, and how the underlying runtime idles out depends on the backend. On the Vercel backend, the VM times out after a period of inactivity (default 30 minutes); eve preserves the filesystem and resumes the sandbox on the next message as if nothing happened, even days later. The Docker backend keeps a long-lived container per durable session, and the just-bash backend stores its virtual filesystem under `.eve/sandbox-cache/`. AWS Lambda MicroVMs preserve memory and processes across native suspension, then restore files without processes after termination. In every case, `/workspace` survives between turns for the same session.
+
+| Capability                                | Vercel             | Docker             | microsandbox       | just-bash   | AWS Lambda MicroVMs                   |
+| ----------------------------------------- | ------------------ | ------------------ | ------------------ | ----------- | ------------------------------------- |
+| `/workspace` process and file APIs        | Yes                | Yes                | Yes                | Simulated   | Yes                                   |
+| Files survive provider replacement        | Yes                | Container lifetime | Snapshot           | Local cache | Full writable filesystem via S3       |
+| Running processes survive idle suspension | Provider-dependent | n/a                | Snapshot-dependent | n/a         | Yes, until termination or eight hours |
+| Runtime network-policy changes            | Yes                | Allow/deny only    | Yes                | No          | No; connectors are launch-time only   |
 
 ## Network policy
 
@@ -203,7 +236,7 @@ Default egress is `allow-all`. For non-public, sensitive, regulated, or producti
 
 Set it on the factory (`vercel({ networkPolicy: "deny-all" })`) and it applies before authored `bootstrap` code runs; framework-owned base setup may briefly keep egress open to install required packages. Set it in `onSession`'s `use()` to override per-session. The common pattern combines both: leave the factory open so `bootstrap` can `git clone`, then lock down in `onSession`. To change the policy mid-turn, call `sandbox.setNetworkPolicy(...)` on the live handle.
 
-Domain-level allow-lists and credential brokering are supported by `vercel()` and `microsandbox()`. The Docker backend honors only `"allow-all"` and `"deny-all"` (at creation and via `setNetworkPolicy`); the just-bash backend rejects `setNetworkPolicy` entirely.
+Domain-level allow-lists and credential brokering are supported by `vercel()` and `microsandbox()`. The Docker backend honors only `"allow-all"` and `"deny-all"` (at creation and via `setNetworkPolicy`); just-bash rejects `setNetworkPolicy`, and AWS Lambda MicroVMs require launch-time egress or VPC connectors instead.
 
 ## Credential brokering
 

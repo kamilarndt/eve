@@ -75,6 +75,10 @@ export function createVercelSandbox(
 
   return {
     name: "vercel",
+    provisioning: {
+      prewarmAtBuild: true,
+      requiresTemplate: false,
+    },
     async create(
       createInput: SandboxBackendCreateInput,
     ): Promise<SandboxBackendHandle<VercelSandboxSessionUseOptions>> {

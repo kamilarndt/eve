@@ -2,6 +2,7 @@
   "title": "Guides",
   "pages": [
     "deployment",
+    "aws-lambda-microvms",
     "auth-and-route-protection",
     "instrumentation",
     "hooks",

@@ -2,8 +2,8 @@ import type { SandboxBackend } from "#public/definitions/sandbox-backend.js";
 
 /**
  * Wraps a backend-producing function in a `SandboxBackend` proxy that
- * invokes the function exactly once, on first access to any of `.name`,
- * `.create`, or `.prewarm`. Subsequent accesses return the same cached
+ * invokes the function exactly once, on first access to any public backend
+ * property. Subsequent accesses return the same cached
  * underlying backend.
  *
  * Used by `defaultSandbox()` for env-conditional selection, and by the
@@ -26,6 +26,9 @@ export function lazyBackend<BO, SO>(factory: () => SandboxBackend<BO, SO>): Sand
   return {
     get name() {
       return resolve().name;
+    },
+    get provisioning() {
+      return resolve().provisioning;
     },
     create(input) {
       return resolve().create(input);

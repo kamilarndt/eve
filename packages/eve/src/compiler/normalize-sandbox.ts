@@ -41,6 +41,7 @@ export async function compileSandboxDefinition(
 
   return {
     backendName: resolveCompiledBackendName(normalized.backend),
+    backendProvisioning: resolveCompiledBackendProvisioning(normalized.backend),
     description: normalized.description,
     exportName: source.exportName,
     logicalPath: source.logicalPath,
@@ -49,6 +50,34 @@ export async function compileSandboxDefinition(
     sourceId: source.sourceId,
     sourceKind: "module",
   };
+}
+
+function resolveCompiledBackendProvisioning(
+  backend:
+    | {
+        readonly provisioning?: {
+          readonly prewarmAtBuild: boolean;
+          readonly requiresTemplate: boolean;
+          readonly scopeKey?: string;
+        };
+      }
+    | undefined,
+): CompiledSandboxDefinition["backendProvisioning"] {
+  if (backend === undefined) {
+    return undefined;
+  }
+  try {
+    const provisioning = backend.provisioning;
+    return provisioning === undefined
+      ? undefined
+      : {
+          prewarmAtBuild: provisioning.prewarmAtBuild,
+          requiresTemplate: provisioning.requiresTemplate,
+          scopeKey: provisioning.scopeKey,
+        };
+  } catch {
+    return undefined;
+  }
 }
 
 /**

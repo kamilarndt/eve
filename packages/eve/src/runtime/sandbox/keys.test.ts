@@ -74,6 +74,24 @@ function withBundledMetadata<T>(
 }
 
 describe("createRuntimeSandboxTemplateKey", () => {
+  it("uses an explicit backend scope without changing the version hash", async () => {
+    const templateKey = await withBundledMetadata(
+      createMetadataFixture("9.9.9-test"),
+      async () =>
+        await createRuntimeSandboxTemplateKey({
+          backendName: "aws-lambda-microvms",
+          backendScopeKey: "analytics-agent",
+          compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+          nodeId: "__root__",
+          sourceId: "eve:default-sandbox",
+          templatePlan: { contentHash: CONTENT_HASH, kind: "workspace-content" },
+        }),
+    );
+
+    const scope = sha256("backend:aws-lambda-microvms:analytics-agent").slice(0, 16);
+    expect(templateKey).toContain(`eve-sbx-tpl-aws-lambda-microvms-${scope}-`);
+  });
+
   it("derives the version segment from compile metadata so build and runtime agree", async () => {
     const templateKey = await withBundledMetadata(
       createMetadataFixture("9.9.9-test"),

@@ -68,6 +68,36 @@ describe("prewarmAppSandboxes", () => {
     expect(inputs).toHaveLength(0);
     expect(signatures).toHaveLength(1);
   });
+
+  it("prewarms a required template without bootstrap or seed files", async () => {
+    const appRoot = process.cwd();
+    const inputs: SandboxBackendPrewarmInput[] = [];
+
+    await prewarmAppSandboxes({
+      appRoot,
+      compiledArtifactsSource: createDiskRuntimeCompiledArtifactsSource(appRoot),
+      dispatch: recordPrewarmInputs(inputs),
+      loadAgentGraph: async () => createGraph({ emptyRequiredTemplate: true }),
+    });
+
+    expect(inputs).toHaveLength(1);
+    expect(inputs[0]).toMatchObject({ bootstrap: undefined, seedFiles: [] });
+  });
+
+  it("filters build-time prewarm targets by backend capability", async () => {
+    const appRoot = process.cwd();
+    const inputs: SandboxBackendPrewarmInput[] = [];
+
+    await prewarmAppSandboxes({
+      appRoot,
+      compiledArtifactsSource: createDiskRuntimeCompiledArtifactsSource(appRoot),
+      dispatch: recordPrewarmInputs(inputs),
+      loadAgentGraph: async () => createGraph(),
+      shouldPrewarmBackend: (backend) => backend.provisioning?.prewarmAtBuild === true,
+    });
+
+    expect(inputs).toHaveLength(0);
+  });
 });
 
 function recordPrewarmInputs(inputs: SandboxBackendPrewarmInput[]) {
@@ -82,7 +112,7 @@ function recordPrewarmInputs(inputs: SandboxBackendPrewarmInput[]) {
   };
 }
 
-function createGraph(): ResolvedAgentGraphBundle {
+function createGraph(options: { emptyRequiredTemplate?: boolean } = {}): ResolvedAgentGraphBundle {
   const backend: SandboxBackend = {
     async create() {
       throw new Error("Unexpected create call.");
@@ -91,9 +121,12 @@ function createGraph(): ResolvedAgentGraphBundle {
     async prewarm() {
       return { reused: true };
     },
+    provisioning: options.emptyRequiredTemplate
+      ? { prewarmAtBuild: true, requiresTemplate: true, scopeKey: "test-app" }
+      : undefined,
   };
   const definition: ResolvedSandboxDefinition = {
-    async bootstrap() {},
+    bootstrap: options.emptyRequiredTemplate ? undefined : async () => {},
     backend,
     logicalPath: "agent/sandbox/sandbox.ts",
     revalidationKey: "stable-bootstrap",
