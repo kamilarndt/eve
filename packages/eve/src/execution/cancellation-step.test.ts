@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
+import { setHarnessEmissionState } from "#harness/emission.js";
 import type { HarnessSession } from "#harness/types.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { finalizeCancellationStep } from "#execution/cancellation-step.js";
@@ -36,7 +37,14 @@ vi.mock("#execution/session.js", () => ({
 describe("finalizeCancellationStep", () => {
   beforeEach(async () => {
     dispatchStreamEventHooksMock.mockReset().mockResolvedValue(undefined);
-    readDurableSessionMock.mockReset().mockResolvedValue(createSession());
+    readDurableSessionMock.mockReset().mockResolvedValue(
+      setHarnessEmissionState(createSession(), {
+        sequence: 2,
+        sessionStarted: true,
+        stepIndex: 1,
+        turnId: "turn_2",
+      }),
+    );
     serializeContextMock.mockReset().mockReturnValue({ serialized: true });
     withContextScopeMock
       .mockReset()
@@ -100,6 +108,58 @@ describe("finalizeCancellationStep", () => {
     );
     expect(withContextScopeMock.mock.calls[0]?.[3].abortSignal.aborted).toBe(true);
     expect(result.serializedContext).toEqual({ serialized: true });
+  });
+
+  it("does not emit a turn boundary when cancelling a parked session", async () => {
+    readDurableSessionMock.mockResolvedValue(createSession());
+    const turnCancelled = vi.fn();
+    const sessionCancelled = vi.fn();
+    const adapter: ChannelAdapter = {
+      kind: "test",
+      "session.cancelled": sessionCancelled,
+      "turn.cancelled": turnCancelled,
+    };
+    const hookRegistry = { id: "hooks" };
+    const ctx = {
+      get: vi.fn(),
+      require(key: unknown) {
+        if (key === BundleKey) {
+          return {
+            hookRegistry,
+            resolvedAgent: { config: {} },
+            turnAgent: {},
+          };
+        }
+        if (key === ChannelKey) return adapter;
+        throw new Error("Unexpected context key.");
+      },
+    };
+    const { deserializeContext } = await import("#context/serialize.js");
+    vi.mocked(deserializeContext).mockResolvedValue(ctx as never);
+
+    await finalizeCancellationStep({
+      parentWritable: new WritableStream<Uint8Array>(),
+      scope: "session",
+      serializedContext: {},
+      sessionState: {
+        continuationToken: "test:session",
+        emissionState: {
+          sequence: 1,
+          sessionStarted: true,
+          stepIndex: 0,
+          turnId: "",
+        },
+        hasProxyInputRequests: false,
+        sessionId: "session-1",
+        version: 1,
+      },
+    });
+
+    expect(turnCancelled).not.toHaveBeenCalled();
+    expect(sessionCancelled).toHaveBeenCalledOnce();
+    expect(dispatchStreamEventHooksMock.mock.calls.map(([input]) => input.event.type)).toEqual([
+      "session.cancelled",
+    ]);
   });
 });
 

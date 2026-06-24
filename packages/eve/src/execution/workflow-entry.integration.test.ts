@@ -80,10 +80,8 @@ describe("workflowEntry integration", () => {
         });
         expect(followUp.sessionId).toBe(run.runId);
 
-        let resumedTurn = await stream.nextTurn();
-        while (isCancellationBoundary(resumedTurn)) {
-          resumedTurn = await stream.nextTurn();
-        }
+        const resumedTurn = await stream.nextTurn();
+        expect(resumedTurn.map((event) => event.type)).not.toContain("turn.cancelled");
         expect(resumedTurn.at(-1)?.type).toBe("session.waiting");
         expect(
           resumedTurn.some(
@@ -563,10 +561,4 @@ function createBlockingCancellationTool() {
   });
 
   return { aborted, started, tool };
-}
-
-function isCancellationBoundary(
-  events: readonly import("#protocol/message.js").HandleMessageStreamEvent[],
-): boolean {
-  return events.some((event) => event.type === "turn.cancelled");
 }
