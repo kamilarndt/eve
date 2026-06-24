@@ -17,6 +17,8 @@ import type { Agent, RouteContext } from "#public/definitions/channel.js";
  * arguments, and reorder return values mid-test with `mockResolvedValueOnce`.
  */
 export interface MockAgent extends Agent {
+  readonly cancelSession: Mock;
+  readonly cancelTurn: Mock;
   readonly run: Mock;
   readonly deliver: Mock;
   readonly getEventStream: Mock;
@@ -34,6 +36,8 @@ export interface MockAgent extends Agent {
  */
 export function createMockAgent(): MockAgent {
   return {
+    cancelSession: vi.fn().mockResolvedValue(undefined),
+    cancelTurn: vi.fn().mockResolvedValue(undefined),
     deliver: vi.fn().mockResolvedValue(undefined),
     getEventStream: vi.fn().mockResolvedValue(new ReadableStream()),
     run: vi.fn().mockResolvedValue({

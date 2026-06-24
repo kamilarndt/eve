@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { createHook } from "#compiled/@workflow/core/index.js";
 import type { HookPayload } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
 import { turnWorkflow } from "#execution/turn-workflow.js";
@@ -10,6 +11,20 @@ import {
 import { turnStep } from "#execution/workflow-steps.js";
 
 const resumeHookMock = vi.fn();
+const disposeHookMock = vi.fn();
+
+vi.mock("#compiled/@workflow/core/index.js", () => ({
+  createHook: vi.fn((options?: { readonly token?: string }) => ({
+    [Symbol.asyncIterator]() {
+      return {
+        next: () => new Promise<IteratorResult<void>>(() => {}),
+      };
+    },
+    dispose: disposeHookMock,
+    getConflict: vi.fn().mockResolvedValue(null),
+    token: options?.token ?? "cancel-token",
+  })),
+}));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
   resumeHook: (...args: unknown[]) => resumeHookMock(...args),
@@ -20,6 +35,20 @@ vi.mock("./workflow-steps.js", () => ({
 }));
 
 describe("turnWorkflow", () => {
+  beforeEach(() => {
+    vi.mocked(createHook).mockImplementation(
+      (options?: { readonly token?: string }) =>
+        ({
+          [Symbol.asyncIterator]() {
+            return { next: () => new Promise<IteratorResult<void>>(() => {}) };
+          },
+          dispose: disposeHookMock,
+          getConflict: vi.fn().mockResolvedValue(null),
+          token: options?.token ?? "cancel-token",
+        }) as never,
+    );
+  });
+
   afterEach(() => {
     vi.clearAllMocks();
     resumeHookMock.mockReset();
@@ -37,12 +66,15 @@ describe("turnWorkflow", () => {
     const { input, parentWritable } = createInput({ sessionState });
     await turnWorkflow(input);
 
-    expect(turnStep).toHaveBeenCalledWith({
-      input: input.stepInput.input,
-      parentWritable,
-      serializedContext: input.stepInput.serializedContext,
-      sessionState,
-    });
+    expect(turnStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortController: expect.any(AbortController),
+        input: input.stepInput.input,
+        parentWritable,
+        serializedContext: input.stepInput.serializedContext,
+        sessionState,
+      }),
+    );
     expect(resumeHookMock).toHaveBeenCalledWith("turn-token", {
       action: {
         kind: "done",
@@ -78,12 +110,15 @@ describe("turnWorkflow", () => {
       sessionState,
     });
 
-    expect(turnStep).toHaveBeenCalledWith({
-      input: delivery,
-      parentWritable,
-      serializedContext: { state: "start" },
-      sessionState,
-    });
+    expect(turnStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        abortController: expect.any(AbortController),
+        input: delivery,
+        parentWritable,
+        serializedContext: { state: "start" },
+        sessionState,
+      }),
+    );
     expect(resumeHookMock).toHaveBeenCalledWith(
       "turn-token",
       expect.objectContaining({ kind: "turn-result" }),

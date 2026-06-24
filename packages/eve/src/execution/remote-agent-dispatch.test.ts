@@ -12,10 +12,17 @@ describe("startRemoteAgentSession", () => {
 
   it("posts the formatted subagent message and callback metadata", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, sessionId: "remote-session" }), {
-        headers: { "x-eve-session-id": "remote-session-header" },
-        status: 202,
-      }),
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-session",
+          ok: true,
+          sessionId: "remote-session",
+        }),
+        {
+          headers: { "x-eve-session-id": "remote-session-header" },
+          status: 202,
+        },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -40,7 +47,10 @@ describe("startRemoteAgentSession", () => {
       },
     });
 
-    expect(childSessionId).toBe("remote-session-header");
+    expect(childSessionId).toEqual({
+      continuationToken: "eve:remote-session",
+      sessionId: "remote-session-header",
+    });
     expect(fetchMock).toHaveBeenCalledWith("https://remote.example.com/eve/v1/session", {
       body: expect.any(String),
       headers: {
@@ -72,10 +82,17 @@ describe("startRemoteAgentSession", () => {
 
   it("sends a declared outputSchema on the remote create-session request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, sessionId: "remote-session" }), {
-        headers: { "x-eve-session-id": "remote-session-header" },
-        status: 202,
-      }),
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-session",
+          ok: true,
+          sessionId: "remote-session",
+        }),
+        {
+          headers: { "x-eve-session-id": "remote-session-header" },
+          status: 202,
+        },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -106,11 +123,16 @@ describe("startRemoteAgentSession", () => {
 
   it("adds the Vercel automation bypass secret to callback URLs", async () => {
     vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "remote callback secret");
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ ok: true, sessionId: "remote-session" }), { status: 202 }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-session",
+          ok: true,
+          sessionId: "remote-session",
+        }),
+        { status: 202 },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await startRemoteAgentSession({
@@ -165,7 +187,6 @@ function createRemoteAgent(): ResolvedRuntimeRemoteAgentNode {
     logicalPath: "subagents/research.ts",
     name: "research",
     nodeId: "subagents/research.ts",
-    path: "/eve/v1/session",
     sourceId: "subagents/research.ts",
     sourceKind: "module",
     url: "https://remote.example.com",

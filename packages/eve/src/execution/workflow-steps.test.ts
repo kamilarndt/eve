@@ -85,6 +85,13 @@ const getRunMock = vi.fn();
 const startMock = vi.fn();
 const workflowWritesByNamespace = new Map<string, unknown[]>();
 
+function createRun(runId: string) {
+  return {
+    returnValue: new Promise<never>(() => undefined),
+    runId,
+  };
+}
+
 function createTestWritable(
   namespace = DEFAULT_WORKFLOW_STREAM_NAMESPACE,
 ): WritableStream<Uint8Array> {
@@ -106,7 +113,7 @@ vi.mock("../runtime/sessions/compiled-agent-cache.js", () => ({
 }));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
-  getHookByToken: vi.fn(),
+  getHookByToken: vi.fn(async () => ({ runId: "child-run" })),
   getRun: (...args: unknown[]) => getRunMock(...args),
   resumeHook: vi.fn(),
   start: (...args: unknown[]) => startMock(...args),
@@ -203,9 +210,9 @@ describe("dispatchTurnStep", () => {
   it("starts turn workflows on the latest deployment in Vercel production", async () => {
     vi.stubEnv("VERCEL_ENV", "production");
     const input = createTurnInput();
-    startMock.mockResolvedValue({ runId: "turn-run" });
+    startMock.mockResolvedValue(createRun("turn-run"));
 
-    await expect(dispatchTurnStep(input)).resolves.toEqual({ runId: "turn-run" });
+    await expect(dispatchTurnStep(input)).resolves.toBeUndefined();
 
     expect(startMock).toHaveBeenCalledWith(turnWorkflow, [createTurnWorkflowInput(input)], {
       deploymentId: "latest",
@@ -215,9 +222,9 @@ describe("dispatchTurnStep", () => {
   it("pins turn workflows to the current deployment off production", async () => {
     vi.stubEnv("VERCEL_ENV", "preview");
     const input = createTurnInput();
-    startMock.mockResolvedValue({ runId: "turn-run" });
+    startMock.mockResolvedValue(createRun("turn-run"));
 
-    await expect(dispatchTurnStep(input)).resolves.toEqual({ runId: "turn-run" });
+    await expect(dispatchTurnStep(input)).resolves.toBeUndefined();
 
     expect(startMock).toHaveBeenCalledTimes(1);
     expect(startMock).toHaveBeenCalledWith(turnWorkflow, [createTurnWorkflowInput(input)]);
@@ -228,9 +235,9 @@ describe("dispatchTurnStep", () => {
     const input = createTurnInput();
     startMock
       .mockRejectedValueOnce(new Error(LATEST_DEPLOYMENT_UNSUPPORTED_MESSAGE))
-      .mockResolvedValueOnce({ runId: "turn-run" });
+      .mockResolvedValueOnce(createRun("turn-run"));
 
-    await expect(dispatchTurnStep(input)).resolves.toEqual({ runId: "turn-run" });
+    await expect(dispatchTurnStep(input)).resolves.toBeUndefined();
 
     const wireInput = createTurnWorkflowInput(input);
     expect(startMock).toHaveBeenNthCalledWith(1, turnWorkflow, [wireInput], {
@@ -263,15 +270,7 @@ describe("dispatchRuntimeActionsStep", () => {
       turnAgent: TestTurnAgent,
     } as never;
     vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
-    startMock.mockResolvedValue({ runId: "child-run" });
-    getRunMock.mockReturnValue({
-      getReadable: () =>
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close();
-          },
-        }),
-    });
+    startMock.mockResolvedValue(createRun("child-run"));
 
     const session = setPendingRuntimeActionBatch({
       actions: [
@@ -328,7 +327,6 @@ describe("dispatchRuntimeActionsStep", () => {
         description: "Research remote",
         kind: "remote",
         name: "research",
-        path: "/eve/v1/session",
         url: "https://remote.example.com",
       },
     };

@@ -39,6 +39,7 @@ function stubSession(): ClientSession {
 /** Wraps literal stream events in a real `MessageResponse`. */
 function messageResponseOf(events: readonly unknown[]): MessageResponse {
   return new MessageResponse({
+    cancel: async () => {},
     continuationToken: "eve:test",
     createStream: async function* () {
       for (const event of events) yield event as HandleMessageStreamEvent;

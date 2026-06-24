@@ -48,6 +48,7 @@ class FakeSession extends ClientSession {
     const events = this.#turns[this.#turnIndex] ?? [];
     this.#turnIndex += 1;
     return new MessageResponse<TOutput>({
+      cancel: async () => undefined,
       sessionId: "fake-session",
       continuationToken: `fake-token-${this.#turnIndex}`,
       createStream: async function* () {

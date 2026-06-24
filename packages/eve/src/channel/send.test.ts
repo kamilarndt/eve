@@ -16,6 +16,8 @@ function createMockRunHandle(): RunHandle {
 
 function createRuntime(deliverError: unknown): Runtime {
   return {
+    cancelSession: vi.fn(),
+    cancelTurn: vi.fn(),
     deliver: vi.fn().mockRejectedValue(deliverError),
     run: vi.fn().mockResolvedValue(createMockRunHandle()),
     getEventStream: vi.fn().mockResolvedValue(new ReadableStream<HandleMessageStreamEvent>()),
@@ -84,6 +86,8 @@ describe("createSendFn", () => {
   it("forwards context through deliver and run payloads", async () => {
     const context = ["thread background"];
     const deliverRuntime: Runtime = {
+      cancelSession: vi.fn(),
+      cancelTurn: vi.fn(),
       deliver: vi.fn().mockResolvedValue({ sessionId: "existing-session-id" }),
       run: vi.fn().mockResolvedValue(createMockRunHandle()),
       getEventStream: vi.fn().mockResolvedValue(new ReadableStream<HandleMessageStreamEvent>()),
@@ -120,6 +124,8 @@ describe("createSendFn", () => {
       type: "object",
     } as const;
     const deliverRuntime: Runtime = {
+      cancelSession: vi.fn(),
+      cancelTurn: vi.fn(),
       deliver: vi.fn().mockResolvedValue({ sessionId: "existing-session-id" }),
       run: vi.fn().mockResolvedValue(createMockRunHandle()),
       getEventStream: vi.fn().mockResolvedValue(new ReadableStream<HandleMessageStreamEvent>()),

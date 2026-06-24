@@ -179,6 +179,8 @@ function createArgs(input: {
   readonly params: Readonly<Record<string, string>>;
 }): RouteHandlerArgs {
   return {
+    cancelSession: vi.fn(),
+    cancelTurn: vi.fn(),
     send: vi.fn(),
     getSession: input.getSession,
     receive: vi.fn() as any,

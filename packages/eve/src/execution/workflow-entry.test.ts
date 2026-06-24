@@ -54,7 +54,7 @@ vi.mock("./dispatch-runtime-actions-step.js", () => ({
 }));
 
 vi.mock("./workflow-steps.js", () => ({
-  dispatchTurnStep: vi.fn().mockImplementation(async () => ({ runId: "turn-run" })),
+  dispatchTurnStep: vi.fn().mockResolvedValue(undefined),
   emitTerminalSessionFailureStep: vi.fn().mockResolvedValue(undefined),
   routeProxiedDeliverStep: vi
     .fn()
@@ -130,7 +130,7 @@ describe("workflowEntry", () => {
 
     expect(result).toEqual({ output: "ok" });
     expect(createSessionStep).toHaveBeenCalledWith({
-      compiledArtifactsSource: {},
+      compiledArtifactsSource: { kind: "bundled" },
       continuationToken: "http:test",
       inputMessage: "hello there",
       nodeId: undefined,
@@ -461,9 +461,9 @@ describe("workflowEntry", () => {
         },
       ],
     });
-    expect(oldReturn).toHaveBeenCalledTimes(1);
+    expect(oldReturn).not.toHaveBeenCalled();
     expect(oldDispose).toHaveBeenCalledTimes(1);
-    expect(newReturn).toHaveBeenCalledTimes(1);
+    expect(newReturn).not.toHaveBeenCalled();
     expect(newDispose).toHaveBeenCalledTimes(1);
   });
 
@@ -619,9 +619,9 @@ describe("workflowEntry", () => {
     expect(result).toEqual({ output: "" });
     // Initial hook created before the turn, then rekeyed after.
     expect(nonTurnHookTokens()).toEqual(["slack:C01:", "slack:C01:1800000000.123456"]);
-    expect(initialReturn).toHaveBeenCalledTimes(1);
+    expect(initialReturn).not.toHaveBeenCalled();
     expect(initialDispose).toHaveBeenCalledTimes(1);
-    expect(rekeyedReturn).toHaveBeenCalledTimes(1);
+    expect(rekeyedReturn).not.toHaveBeenCalled();
     expect(rekeyedDispose).toHaveBeenCalledTimes(1);
   });
 
@@ -660,7 +660,7 @@ describe("workflowEntry", () => {
 
     expect(result).toEqual({ output: "" });
     expect(nonTurnHookTokens()).toEqual(["slack:C01:1800000000.123456"]);
-    expect(anchoredReturn).toHaveBeenCalledTimes(1);
+    expect(anchoredReturn).not.toHaveBeenCalled();
     expect(anchoredDispose).toHaveBeenCalledTimes(1);
   });
 
@@ -719,9 +719,9 @@ describe("workflowEntry", () => {
       kind: "deliver",
       payloads: [{ message: "follow up" }],
     });
-    expect(oldReturn).toHaveBeenCalledTimes(1);
+    expect(oldReturn).not.toHaveBeenCalled();
     expect(oldDispose).toHaveBeenCalledTimes(1);
-    expect(newReturn).toHaveBeenCalledTimes(1);
+    expect(newReturn).not.toHaveBeenCalled();
     expect(newDispose).toHaveBeenCalledTimes(1);
   });
 
@@ -759,7 +759,7 @@ describe("workflowEntry", () => {
     });
 
     expect(result).toEqual({ output: "after resume" });
-    expect(returnIterator).toHaveBeenCalledTimes(1);
+    expect(returnIterator).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(symbolDispose).not.toHaveBeenCalled();
   });
@@ -768,7 +768,7 @@ describe("workflowEntry", () => {
 function createSerializedContext(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     "eve.auth": null,
-    "eve.bundle": { source: {} },
+    "eve.bundle": { source: { kind: "bundled" } },
     "eve.channel": { kind: "http", state: {} },
     "eve.continuationToken": "http:test",
     "eve.mode": "conversation",
@@ -923,6 +923,14 @@ function installHookMocks(input: {
       return createMockHook({ token, values: [] }) as never;
     }
 
+    if (token.endsWith(":cancel-session") || token.endsWith(":cancel-turn")) {
+      return createMockHook({
+        next: () => new Promise<IteratorResult<void>>(() => {}),
+        token,
+        values: [],
+      }) as never;
+    }
+
     const config = parkHooks.shift() ?? { token, values: [] };
     if (config.token !== token) {
       throw new Error(`Expected park hook token "${config.token}", received "${token}".`);
@@ -968,6 +976,7 @@ function createMockHook<T>(input: {
     },
     [Symbol.dispose]: symbolDispose,
     dispose,
+    getConflict: vi.fn().mockResolvedValue(null),
     token: input.token,
   });
 }
@@ -987,7 +996,11 @@ function nonTurnHookTokens(): string[] {
     .mock.calls.map((call) => call[0]?.token)
     .filter(
       (token): token is string =>
-        token !== undefined && !token.endsWith(":auth") && !isTurnCompletionToken(token),
+        token !== undefined &&
+        !token.endsWith(":auth") &&
+        !token.endsWith(":cancel-session") &&
+        !token.endsWith(":cancel-turn") &&
+        !isTurnCompletionToken(token),
     );
 }
 

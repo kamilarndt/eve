@@ -79,6 +79,8 @@ interface CapturedRun {
 
 function createCapturingRuntime(captured: CapturedRun[]): Runtime {
   return {
+    async cancelSession() {},
+    async cancelTurn() {},
     async run(input) {
       captured.push({
         adapter: input.adapter,
@@ -164,6 +166,8 @@ describe("cross-channel receive end-to-end", () => {
           }),
         }),
         {
+          cancelSession: async () => undefined,
+          cancelTurn: async () => undefined,
           receive,
           send: async () => {
             throw new Error("webhook should delegate to args.receive()");

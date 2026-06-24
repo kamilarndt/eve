@@ -475,7 +475,6 @@ describe("resolveRuntimeAgentGraph", () => {
           logicalPath: "subagents/qux.ts",
           name: "qux",
           nodeId: "subagents/qux.ts",
-          path: "/eve/v1/session",
           rootPath: researcherRoot,
           sourceId: "subagents/qux.ts",
           sourceKind: "module",
@@ -500,7 +499,6 @@ describe("resolveRuntimeAgentGraph", () => {
           logicalPath: "subagents/weather.ts",
           name: "weather",
           nodeId: "subagents/weather.ts",
-          path: "/eve/v1/session",
           rootPath: agentRoot,
           sourceId: "subagents/weather.ts",
           sourceKind: "module",
@@ -537,7 +535,6 @@ describe("resolveRuntimeAgentGraph", () => {
                 default: {
                   description: "Answer weather questions remotely.",
                   kind: "remote",
-                  path: "/eve/v1/session",
                   url: "https://weather.example.com",
                 },
               },
@@ -549,7 +546,6 @@ describe("resolveRuntimeAgentGraph", () => {
                 default: {
                   description: "Answer niche follow-up questions remotely.",
                   kind: "remote",
-                  path: "/eve/v1/session",
                   url: "https://qux.example.com",
                 },
               },

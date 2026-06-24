@@ -23,6 +23,8 @@ function createMockRunHandle(): RunHandle {
 
 function createMockRuntime(): Runtime {
   return {
+    cancelSession: vi.fn(),
+    cancelTurn: vi.fn(),
     deliver: vi.fn().mockRejectedValue(new Error("no parked session")),
     run: vi.fn().mockResolvedValue(createMockRunHandle()),
     getEventStream: vi.fn().mockResolvedValue(new ReadableStream<HandleMessageStreamEvent>()),

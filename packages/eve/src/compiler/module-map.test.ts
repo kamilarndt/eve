@@ -158,7 +158,6 @@ describe("collectModuleRefsForManifest", () => {
           logicalPath: "subagents/weather.ts",
           name: "weather",
           nodeId: "subagents/weather.ts",
-          path: "/eve/v1/session",
           rootPath: "/agent",
           sourceId: "subagents/weather.ts",
           sourceKind: "module",
