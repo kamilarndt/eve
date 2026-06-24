@@ -17,6 +17,7 @@ import {
   type TypedToolResult,
 } from "ai";
 import type { SessionCapabilities } from "#channel/types.js";
+import { isScheduleAppAuth } from "#channel/schedule-auth.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import {
   createErrorId,
@@ -27,6 +28,7 @@ import {
 } from "#internal/logging.js";
 import { formatLanguageModelGatewayId } from "#internal/runtime-model.js";
 import { contextStorage } from "#context/container.js";
+import { AuthKey, ParentSessionKey } from "#context/keys.js";
 import { buildDynamicInstructionMessages } from "#context/dynamic-instruction-lifecycle.js";
 import { buildDynamicTools } from "#context/build-dynamic-tools.js";
 import { PendingSkillAnnouncementKey } from "#context/dynamic-skill-lifecycle.js";
@@ -116,6 +118,11 @@ import {
   summarizeKnownModelCallRequestError,
 } from "#harness/model-call-error.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
+import {
+  CONDITIONAL_DELIVERY_INSTRUCTION,
+  EMPTY_DELIVERY_SENTINEL,
+  hasEmptyDeliverySentinel,
+} from "#shared/empty-delivery.js";
 import { extractWorkflowStreamWriteErrorDetails } from "#harness/workflow-stream-error.js";
 import { ensureOtelIntegration } from "#harness/otel-integration.js";
 import {
@@ -500,6 +507,11 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
     // Direct harness unit tests may run without an ambient context.
     const ctx = contextStorage.getStore();
+    const emptyDeliveryEnabled =
+      session.outputSchema === undefined &&
+      ctx !== undefined &&
+      isScheduleAppAuth(ctx.get(AuthKey)) &&
+      ctx.get(ParentSessionKey) === undefined;
 
     // --- Execute via ToolLoopAgent ------------------------------------------
 
@@ -531,6 +543,9 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       if (skillAnnouncement !== undefined && skillAnnouncement.length > 0) {
         systemMessages.push({ role: "system", content: skillAnnouncement });
       }
+    }
+    if (emptyDeliveryEnabled) {
+      systemMessages.push({ role: "system", content: CONDITIONAL_DELIVERY_INSTRUCTION });
     }
 
     const modelMessages = nonSystemMessages;
@@ -691,7 +706,11 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             inlineToolResultParts,
           } = await emitStreamContent(emit, emissionState, streamResult.fullStream);
           const stepResult = await hooks.stepResult;
-          if (isEmptyModelResponse(stepResult)) {
+          if (
+            isEmptyModelResponse(stepResult) &&
+            inlineToolResultParts.length === 0 &&
+            inlineAuthorizationResults.length === 0
+          ) {
             throw new EmptyModelResponseError();
           }
           await emitStepActions(emit, emissionState, stepResult, {
@@ -808,6 +827,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             }),
           (current) =>
             attemptEmptyResponseRecovery({
+              emptyDeliveryEnabled,
               error: current.error,
               retryCallOptions: current.retryCallOptions,
               runOneModelCall,
@@ -1252,22 +1272,14 @@ function buildDisabledToolNote(toolNames: readonly string[]): string {
 }
 
 /**
- * True when a step completed with finishReason 'other' while producing no
- * assistant text and no tool calls: the shape of an AI Gateway HTTP 200
- * whose stream carried no content. Scoped to 'other' on purpose: a clean
- * finish ('stop', 'length') with no output means the model chose silence
- * (measured in d0, Jun 2026, as the healthy quiet step after a tool had
- * already delivered the answer, 64/64 over a week), and reissuing it would
- * risk duplicate replies. Braintrust spans carry finishReason and output
- * for every call, so silent steps stay observable without a runtime log.
- *
- * Emptiness is derived through {@link resolveAssistantStepText} so the
- * harness has a single definition of "no visible output".
+ * True when a step produced no assistant text and no tool calls. Intentional
+ * silence uses {@link EMPTY_DELIVERY_SENTINEL}; a genuinely blank response is
+ * ambiguous and must be retried instead of silently dropping a HITL reply.
  */
 function isEmptyModelResponse(step: HarnessStepResult): boolean {
   return (
-    step.finishReason === "other" &&
     step.toolCalls.length === 0 &&
+    step.toolResults.length === 0 &&
     resolveAssistantStepText(step.response.messages, step.text) === null
   );
 }
@@ -1299,8 +1311,14 @@ function rethrowNoOutputAsEmptyResponse(error: unknown): never {
  * a user note to keep the cached prefix valid.
  */
 const EMPTY_RESPONSE_NUDGE =
-  "Your previous reply was not delivered. Answer now from the tool results " +
-  "above; do not re-run tools or mention this notice.";
+  "Your previous reply was empty and was not delivered. Answer now from the tool results above; do not re-run tools or mention this notice.";
+
+function buildEmptyResponseNudge(emptyDeliveryEnabled: boolean): string {
+  if (!emptyDeliveryEnabled) {
+    return EMPTY_RESPONSE_NUDGE;
+  }
+  return `${EMPTY_RESPONSE_NUDGE} If the current task explicitly requires conditional delivery and there is nothing to report, reply with exactly ${EMPTY_DELIVERY_SENTINEL}.`;
+}
 
 /**
  * Recovers a model call that completed without content (see
@@ -1319,6 +1337,7 @@ const EMPTY_RESPONSE_NUDGE =
  * restore what the earlier recovery removed.
  */
 async function attemptEmptyResponseRecovery(input: {
+  readonly emptyDeliveryEnabled: boolean;
   readonly error: unknown;
   readonly retryCallOptions?: RecoveryRetryCallOptions;
   readonly runOneModelCall: RecoveryModelCallFn;
@@ -1339,7 +1358,7 @@ async function attemptEmptyResponseRecovery(input: {
       ...input.retryCallOptions,
       retryReason: "empty-response",
       suppressStepStartedEmission: true,
-      trailingUserNote: EMPTY_RESPONSE_NUDGE,
+      trailingUserNote: buildEmptyResponseNudge(input.emptyDeliveryEnabled),
     });
     return { outcome: "recovered", result };
   } catch (retryError) {
@@ -1367,8 +1386,13 @@ async function handleStepResult(input: {
   const { config, emit, promptMessages, result, runStep } = input;
   let { emissionState, session } = input;
 
-  const responseMessages = result.response.messages;
-  const stepOutput = resolveAssistantStepText(responseMessages, result.text);
+  const resolvedStepOutput = resolveAssistantStepText(result.response.messages, result.text);
+  const emptyDelivery =
+    result.finishReason !== "tool-calls" &&
+    result.toolCalls.length === 0 &&
+    hasEmptyDeliverySentinel(resolvedStepOutput);
+  const responseMessages = emptyDelivery ? [] : result.response.messages;
+  const stepOutput = emptyDelivery ? null : resolvedStepOutput;
 
   const baseSession: HarnessSession = {
     ...session,
