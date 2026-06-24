@@ -7,6 +7,7 @@ import {
 } from "#setup/flows/install-vercel-cli.js";
 import { runLoginFlow, type LoginFlowResult } from "#setup/flows/login.js";
 import { runModelFlow, type ModelProviderOutcome } from "#setup/flows/model.js";
+import { runProviderFlow, type ProviderPicker } from "#setup/flows/provider.js";
 import { openUrl } from "#setup/primitives/open-url.js";
 import type { Prompter } from "#setup/prompter.js";
 import { slackMessageDeepLink } from "#setup/slack-connect.js";
@@ -14,29 +15,29 @@ import { WizardCancelledError } from "#setup/step.js";
 
 import { createTuiPrompter, type TuiPrompterRenderer } from "./tui-prompter.js";
 import type { PromptCommandExtensionName } from "./prompt-commands.js";
-import type { SetupFlowRenderer } from "./setup-flow.js";
+import type { SetupFlowIndicator, SetupFlowRenderer } from "./setup-flow.js";
 import type { VercelStatusEffect } from "./vercel-status.js";
 
 export type TuiSetupCommand = PromptCommandExtensionName;
 
 /**
- * Human panel titles per command. The bordered panel never repeats the echoed
- * command verbatim (the transcript already shows it), but it always carries a
- * title: flows move past their opening question (project pickers, name
- * prompts), and without a constant header those later questions float
- * unanchored in the panel.
+ * Panel title and loading indicator per command. The bordered panel never
+ * repeats the echoed command verbatim, but it keeps a constant title as flows
+ * move past their opening question.
  */
-export const SETUP_FLOW_TITLES: Record<TuiSetupCommand, string> = {
-  vc: "Install the Vercel CLI",
-  login: "Log in to Vercel",
-  model: "Configure the agent model",
-  channels: "Agent channels",
-  deploy: "Deploy to Vercel",
-};
+export const SETUP_FLOW_CONFIG = {
+  "vc:install": { title: "Install the Vercel CLI", indicator: "pulse" },
+  "vc:login": { title: "Log in to Vercel", indicator: "pulse" },
+  model: { title: "Configure the agent model", indicator: "pulse" },
+  channels: { title: "Agent channels", indicator: "pulse" },
+  deploy: { title: "Deploy to Vercel", indicator: "spinner" },
+} satisfies Record<TuiSetupCommand, { title: string; indicator: SetupFlowIndicator }>;
 
 /** The prompter surface plus the working-state interrupt trap a command races against. */
 export type TuiSetupCommandRenderer = TuiPrompterRenderer &
-  Pick<SetupFlowRenderer, "waitForInterrupt">;
+  Pick<SetupFlowRenderer, "readProviderPicker" | "waitForInterrupt">;
+
+type MuteableSetupRenderer = TuiPrompterRenderer & Pick<SetupFlowRenderer, "readProviderPicker">;
 
 export interface TuiSetupCommandInput {
   command: TuiSetupCommand;
@@ -75,14 +76,16 @@ export interface TuiSetupCommandResult {
  * output drops while the flow unwinds.
  */
 function muteableRenderer(
-  renderer: TuiPrompterRenderer,
+  renderer: TuiSetupCommandRenderer,
   isMuted: () => boolean,
-): TuiPrompterRenderer {
+): MuteableSetupRenderer {
   return {
     readSelect: (options) =>
       isMuted() ? Promise.resolve(undefined) : renderer.readSelect(options),
     readEditableSelect: (options) =>
       isMuted() ? Promise.resolve(undefined) : renderer.readEditableSelect(options),
+    readProviderPicker: (options) =>
+      isMuted() ? Promise.resolve(undefined) : renderer.readProviderPicker(options),
     readText: (options) => (isMuted() ? Promise.resolve(undefined) : renderer.readText(options)),
     readAcknowledge: (options) =>
       isMuted() ? Promise.resolve() : renderer.readAcknowledge(options),
@@ -108,7 +111,7 @@ function muteableRenderer(
  * Runs one TUI setup command (/model, /channels, /deploy) over the
  * shared setup flows, asking through the TUI's own bordered panel. Never throws:
  * every outcome — done, cancelled, failed — folds into the returned command
- * result. Ctrl-C or Esc on the working spinner (no question open) aborts the
+ * result. Ctrl-C or Esc on the working indicator (no question open) aborts the
  * active flow, then keeps command ownership until its subprocesses and setup
  * stack have unwound.
  */
@@ -118,13 +121,12 @@ export async function runTuiSetupCommand(
   const { command } = input;
   let interrupted = false;
   const controller = new AbortController();
-  const prompter = (input.createPrompter ?? createTuiPrompter)(
-    muteableRenderer(input.renderer, () => interrupted),
-  );
+  const renderer = muteableRenderer(input.renderer, () => interrupted);
+  const prompter = (input.createPrompter ?? createTuiPrompter)(renderer);
 
   const interrupt = input.renderer.waitForInterrupt();
   const INTERRUPTED = Symbol("interrupted");
-  const execution = executeSetupCommand(input, prompter, controller.signal);
+  const execution = executeSetupCommand(input, prompter, renderer, controller.signal);
   try {
     const outcome = await Promise.race([execution, interrupt.promise.then(() => INTERRUPTED)]);
     if (outcome !== INTERRUPTED) return outcome as TuiSetupCommandResult;
@@ -147,6 +149,7 @@ export async function runTuiSetupCommand(
 async function executeSetupCommand(
   input: TuiSetupCommandInput,
   prompter: Prompter,
+  renderer: MuteableSetupRenderer,
   signal: AbortSignal,
 ): Promise<TuiSetupCommandResult> {
   const { command, appRoot } = input;
@@ -161,19 +164,24 @@ async function executeSetupCommand(
 
   try {
     switch (command) {
-      case "vc": {
+      case "vc:install": {
         return installVercelCliResultMessage(
           await flows.runInstallVercelCliFlow({ appRoot, prompter, signal }),
         );
       }
-      case "login": {
+      case "vc:login": {
         return loginResultMessage(await flows.runLoginFlow({ appRoot, prompter, signal }));
       }
       case "model": {
+        const pickProvider: ProviderPicker = (request) => renderer.readProviderPicker(request);
         const modelInput: Parameters<TuiSetupFlows["runModelFlow"]>[0] = {
           appRoot,
           prompter,
           signal,
+          deps: {
+            runProviderFlow: (providerInput) =>
+              runProviderFlow({ ...providerInput, picker: pickProvider }),
+          },
         };
         if (input.initialModelStep !== undefined) {
           modelInput.initialStep = input.initialModelStep;
@@ -283,11 +291,11 @@ function vercelActionOutcome(error: unknown, command: string): TuiSetupCommandRe
 function vercelActionMessage(kind: string, command: string): string | undefined {
   switch (kind) {
     case "vercel-login":
-      return `You're not logged in to Vercel — run /login, then retry /${command}.`;
+      return `You're not logged in to Vercel — run /vc:login, then retry /${command}.`;
     case "vercel-forbidden":
-      return `Vercel denied access to that team — run /login to re-authenticate (for example to complete SSO), or pick a team you can access, then retry /${command}.`;
+      return `Vercel denied access to that team — run /vc:login to re-authenticate (for example to complete SSO), or pick a team you can access, then retry /${command}.`;
     case "vercel-cli-missing":
-      return `The Vercel CLI isn't installed — run /vc to install it, then retry /${command}.`;
+      return `The Vercel CLI isn't installed — run /vc:install to install it, then retry /${command}.`;
     default:
       return undefined;
   }
@@ -351,7 +359,7 @@ async function runDeployAndChat(
 function installVercelCliResultMessage(result: InstallVercelCliResult): TuiSetupCommandResult {
   switch (result.kind) {
     case "cancelled":
-      return { message: "/vc cancelled.", preserveFlowDiagnostics: false };
+      return { message: "/vc:install cancelled.", preserveFlowDiagnostics: false };
     case "already":
       return { message: "The Vercel CLI is already installed.", preserveFlowDiagnostics: false };
     case "failed":
@@ -362,7 +370,7 @@ function installVercelCliResultMessage(result: InstallVercelCliResult): TuiSetup
       };
     case "installed":
       return {
-        message: "Installed the Vercel CLI. Run /login next.",
+        message: "Installed the Vercel CLI. Run /vc:login next.",
         preserveFlowDiagnostics: false,
         // The CLI now resolves, so the status line's identity probe can run.
         effect: { kind: "refresh-identity" },
@@ -374,17 +382,18 @@ function installVercelCliResultMessage(result: InstallVercelCliResult): TuiSetup
 function loginResultMessage(result: LoginFlowResult): TuiSetupCommandResult {
   switch (result.kind) {
     case "cancelled":
-      return { message: "/login cancelled.", preserveFlowDiagnostics: false };
+      return { message: "/vc:login cancelled.", preserveFlowDiagnostics: false };
     case "already":
       return { message: "You're already logged in to Vercel.", preserveFlowDiagnostics: false };
     case "cli-missing":
       return {
-        message: "The Vercel CLI isn't installed — run /vc to install it, then retry /login.",
+        message:
+          "The Vercel CLI isn't installed — run /vc:install to install it, then retry /vc:login.",
         preserveFlowDiagnostics: true,
       };
     case "failed":
       return {
-        message: "Vercel login didn't complete — run /login to try again.",
+        message: "Vercel login didn't complete — run /vc:login to try again.",
         preserveFlowDiagnostics: true,
       };
     case "logged-in":
@@ -397,7 +406,7 @@ function loginResultMessage(result: LoginFlowResult): TuiSetupCommandResult {
       };
     case "unavailable":
       return {
-        message: "Couldn't reach Vercel — check your connection, then retry /login.",
+        message: "Couldn't reach Vercel — check your connection, then retry /vc:login.",
         preserveFlowDiagnostics: true,
       };
   }

@@ -11,6 +11,8 @@ const VercelOidcClaimsSchema = z.object({
 export interface DevelopmentOidcTarget {
   readonly ownerId: string;
   readonly projectId: string;
+  /** Ignore an ambient token and ask Vercel for this exact project. */
+  readonly forceRefresh?: boolean;
 }
 
 type VercelOidcClaimName = keyof z.infer<typeof VercelOidcClaimsSchema>;
@@ -46,9 +48,12 @@ export async function resolveDevelopmentOidcToken(
   input: DevelopmentOidcTarget,
 ): Promise<DevelopmentOidcTokenResolution> {
   try {
-    const token = (
-      await getVercelOidcToken({ team: input.ownerId, project: input.projectId })
-    ).trim();
+    const options: NonNullable<Parameters<typeof getVercelOidcToken>[0]> = {
+      team: input.ownerId,
+      project: input.projectId,
+    };
+    if (input.forceRefresh === true) options.expirationBufferMs = Number.MAX_SAFE_INTEGER;
+    const token = (await getVercelOidcToken(options)).trim();
     return validateDevelopmentOidcToken(token, input);
   } catch (error) {
     return { kind: "resolution-failed", message: toErrorMessage(error) };
@@ -94,16 +99,3 @@ function validateDevelopmentOidcToken(
  * Automation token issued from Project Settings.
  */
 export const VERCEL_PROTECTION_BYPASS_HEADER = "x-vercel-protection-bypass";
-
-/**
- * Vercel header used to bypass deployment protection by presenting a
- * trusted OIDC token issued by Vercel for the linked project. When the
- * CLI is `vercel link`-ed (or running inside a Vercel function), the
- * platform mints an OIDC token whose audience and subject match the
- * deployment, and accepts it as proof that the caller is authorized.
- *
- * This is preferred over {@link VERCEL_PROTECTION_BYPASS_HEADER} because
- * it requires no per-project secret — the token is already available via
- * `@vercel/oidc`.
- */
-export const VERCEL_TRUSTED_OIDC_IDP_TOKEN_HEADER = "x-vercel-trusted-oidc-idp-token";

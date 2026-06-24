@@ -116,7 +116,7 @@ export function defaultInputRequestedHandler(): NonNullable<SlackChannelEvents["
  * and the connection-authorization status flow. Each is overridable
  * per-event by passing the same key under `slackChannel({ events })`.
  * Typed as the internal full-context map because the default
- * `authorization.required` handler owns the public link-free fallback,
+ * `authorization.required` handler owns the public link-free status,
  * which user overrides cannot express.
  */
 export const defaultEvents: SlackChannelInternalEvents = {
@@ -169,7 +169,11 @@ export const defaultEvents: SlackChannelInternalEvents = {
       return;
     }
     channel.state.pendingToolCallMessage = null;
-    if (event.message) await channel.thread.post(event.message);
+    if (!event.message) {
+      await channel.thread.startTyping();
+      return;
+    }
+    await channel.thread.post(event.message);
   },
 
   async "turn.failed"(event, channel, _ctx) {
@@ -203,6 +207,31 @@ export const defaultEvents: SlackChannelInternalEvents = {
     const triggeringUserId = channel.state.triggeringUserId ?? null;
     const challengeUrl = event.authorization?.url;
 
+    // Post a public, link-free status so everyone in the thread can see
+    // the session is blocked and later see it complete. The challenge
+    // itself remains private.
+    const pending = channel.state.pendingAuthMessageTs ?? {};
+    if (pending[event.name] === undefined) {
+      const publicText = buildAuthRequiredPublicText({
+        displayName,
+        hasUser: triggeringUserId !== null,
+      });
+      try {
+        const sent = await channel.thread.post(publicText);
+        if (sent.id) {
+          channel.state.pendingAuthMessageTs = {
+            ...pending,
+            [event.name]: sent.id,
+          };
+        }
+      } catch (error) {
+        log.error("Slack auth public message delivery failed", {
+          name: event.name,
+          error,
+        });
+      }
+    }
+
     // The challenge is user-specific: the sign-in link (and device code)
     // must only ever be visible to the triggering user, never posted into
     // the shared thread.
@@ -221,35 +250,12 @@ export const defaultEvents: SlackChannelInternalEvents = {
             ? `Sign in with ${displayName}: ${challengeUrl} (code: ${userCode})`
             : `Sign in with ${displayName}: ${challengeUrl}`,
         });
-        return;
       } catch (error) {
         log.error("Slack auth ephemeral delivery failed", {
           name: event.name,
           error,
         });
       }
-    }
-
-    // Fallback: no user to whisper to, or the ephemeral delivery failed.
-    // The public status is link-free by construction, so the thread learns
-    // the session is blocked without the challenge itself ever going public.
-    const publicText = buildAuthRequiredPublicText({
-      displayName,
-      hasUser: triggeringUserId !== null,
-    });
-    try {
-      const sent = await channel.thread.post(publicText);
-      if (sent.id) {
-        channel.state.pendingAuthMessageTs = {
-          ...channel.state.pendingAuthMessageTs,
-          [event.name]: sent.id,
-        };
-      }
-    } catch (error) {
-      log.error("Slack auth public message delivery failed", {
-        name: event.name,
-        error,
-      });
     }
   },
 

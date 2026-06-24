@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelAdapter } from "#channel/adapter.js";
+import { ChannelRequestIdKey } from "#context/keys.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import {
   createWorkflowRuntime,
@@ -12,13 +13,11 @@ import { isRuntimeNoActiveSessionError } from "#execution/runtime-errors.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 
-const getHookByTokenMock = vi.fn();
 const getRunMock = vi.fn();
 const resumeHookMock = vi.fn();
 const startMock = vi.fn();
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
-  getHookByToken: (...args: unknown[]) => getHookByTokenMock(...args),
   getRun: (...args: unknown[]) => getRunMock(...args),
   resumeHook: (...args: unknown[]) => resumeHookMock(...args),
   start: (...args: unknown[]) => startMock(...args),
@@ -29,7 +28,6 @@ vi.mock("#runtime/sessions/compiled-agent-cache.js", () => ({
 }));
 
 afterEach(() => {
-  getHookByTokenMock.mockReset();
   getRunMock.mockReset();
   resumeHookMock.mockReset();
   startMock.mockReset();
@@ -64,7 +62,7 @@ describe("createWorkflowRuntime#deliver", () => {
 
   it("normalizes `HookNotFoundError` into `RuntimeNoActiveSessionError`", async () => {
     const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
-    getHookByTokenMock.mockRejectedValue(new HookNotFoundError(NOT_FOUND_TOKEN));
+    resumeHookMock.mockRejectedValue(new HookNotFoundError(NOT_FOUND_TOKEN));
 
     const runtime = buildRuntime();
 
@@ -77,9 +75,9 @@ describe("createWorkflowRuntime#deliver", () => {
     ).rejects.toSatisfy(isRuntimeNoActiveSessionError);
   });
 
-  it("re-throws unexpected errors from `getHookByToken`", async () => {
+  it("re-throws unexpected errors from `resumeHook`", async () => {
     const failure = new Error("transient backing-store outage");
-    getHookByTokenMock.mockRejectedValue(failure);
+    resumeHookMock.mockRejectedValue(failure);
 
     const runtime = buildRuntime();
 
@@ -90,6 +88,46 @@ describe("createWorkflowRuntime#deliver", () => {
         payload: {},
       }),
     ).rejects.toBe(failure);
+  });
+
+  it("resumes hooks with the channel request id", async () => {
+    resumeHookMock.mockResolvedValue({ runId: "driver-run" });
+
+    await expect(
+      buildRuntime().deliver({
+        auth: null,
+        continuationToken: "test:token",
+        payload: { message: "hello" },
+        requestId: "req_deliver",
+      }),
+    ).resolves.toEqual({ sessionId: "driver-run" });
+
+    expect(resumeHookMock).toHaveBeenCalledWith("test:token", {
+      auth: null,
+      kind: "deliver",
+      payloads: [{ message: "hello" }],
+      requestId: "req_deliver",
+    });
+  });
+
+  it("returns the owner from the hook resumed by the delivery", async () => {
+    resumeHookMock.mockResolvedValue({ runId: "owner-session" });
+
+    const runtime = buildRuntime();
+
+    await expect(
+      runtime.deliver({
+        auth: null,
+        continuationToken: "test:active-hook",
+        payload: { message: "hello" },
+      }),
+    ).resolves.toEqual({ sessionId: "owner-session" });
+    expect(resumeHookMock).toHaveBeenCalledOnce();
+    expect(resumeHookMock).toHaveBeenCalledWith("test:active-hook", {
+      auth: null,
+      kind: "deliver",
+      payloads: [{ message: "hello" }],
+    });
   });
 });
 
@@ -136,6 +174,34 @@ describe("createWorkflowRuntime#run", () => {
             "eve.bundle": { source: compiledArtifactsSource },
             "eve.channel": { kind: "http", state: {} },
             "eve.mode": "task",
+          }),
+        },
+      ],
+      { deploymentId: "latest" },
+    );
+  });
+
+  it("serializes the channel request id into workflow context", async () => {
+    vi.stubEnv("VERCEL_ENV", "production");
+    const compiledArtifactsSource = {} as RuntimeCompiledArtifactsSource;
+    mockBundleAndRun(compiledArtifactsSource);
+    startMock.mockResolvedValue({ runId: "driver-run" });
+
+    await buildRuntime(compiledArtifactsSource).run({
+      adapter,
+      auth: null,
+      input: { message: "hello" },
+      mode: "task",
+      requestId: "req_run",
+    });
+
+    expect(startMock).toHaveBeenCalledWith(
+      workflowEntryReference,
+      [
+        {
+          input: { message: "hello" },
+          serializedContext: expect.objectContaining({
+            [ChannelRequestIdKey.name]: "req_run",
           }),
         },
       ],
