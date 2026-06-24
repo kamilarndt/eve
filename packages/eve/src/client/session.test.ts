@@ -49,6 +49,58 @@ function createStreamResponse(events: readonly unknown[]) {
 }
 
 describe("ClientSession", () => {
+  it("cancels only the turn represented by a message response", async () => {
+    const requests: Array<{ body: unknown; url: string }> = [];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (request, init) => {
+      const url = String(request);
+      requests.push({ body: JSON.parse(String(init?.body)), url });
+      return requests.length === 1
+        ? createAcceptedResponse()
+        : Response.json({ ok: true }, { status: 202 });
+    });
+    const session = createSession();
+
+    const response = await session.send("start work");
+    await response.cancel();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new URL(requests[1]!.url).pathname).toBe("/eve/v1/session/session_1/cancel");
+    expect(requests[1]!.body).toEqual({ scope: "turn" });
+  });
+
+  it("cancels the active entry session and clears its resumable cursor", async () => {
+    const requests: Array<{ body: unknown; url: string }> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (request, init) => {
+      requests.push({ body: JSON.parse(String(init?.body)), url: String(request) });
+      return requests.length === 1
+        ? createAcceptedResponse()
+        : Response.json({ ok: true }, { status: 202 });
+    });
+    const session = createSession();
+
+    await session.send("start work");
+    await session.cancel();
+
+    expect(requests[1]!.body).toEqual({ scope: "session" });
+    expect(session.state).toEqual({ streamIndex: 0 });
+  });
+
+  it("does not restore a cancelled cursor when an earlier response settles later", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createAcceptedResponse())
+      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 202 }))
+      .mockResolvedValueOnce(
+        createStreamResponse([{ type: "session.waiting", data: { wait: "next-user-message" } }]),
+      );
+    const session = createSession();
+
+    const response = await session.send("start work");
+    await session.cancel();
+    await response.result();
+
+    expect(session.state).toEqual({ streamIndex: 0 });
+  });
+
   it("serializes clientContext when sending a create-session message", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(createAcceptedResponse());
     const session = createSession();

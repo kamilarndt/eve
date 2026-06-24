@@ -66,6 +66,40 @@ describe("session callback route", () => {
       ],
     });
   });
+
+  it("resumes a cancelled remote-agent result as an intentional action error", async () => {
+    resumeHookMock.mockResolvedValue(undefined);
+
+    const response = await handleSessionCallbackRequest(
+      new Request("https://app.example.com/eve/v1/callback/tok123", {
+        body: JSON.stringify({
+          callId: "call-1",
+          kind: "session.cancelled",
+          sessionId: "remote-session",
+          subagentName: "research",
+        }),
+        method: "POST",
+      }),
+      createRouteContext({ token: "tok123" }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(resumeHookMock).toHaveBeenCalledWith("tok123", {
+      kind: "runtime-action-result",
+      results: [
+        {
+          callId: "call-1",
+          isError: true,
+          kind: "subagent-result",
+          output: {
+            code: "REMOTE_AGENT_CANCELLED",
+            message: "Remote agent session was cancelled.",
+          },
+          subagentName: "research",
+        },
+      ],
+    });
+  });
 });
 
 function createRouteContext(params: Record<string, string>): RouteContext {

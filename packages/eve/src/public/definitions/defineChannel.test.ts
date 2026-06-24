@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { buildAdapterContext } from "#channel/adapter-context.js";
 import { callAdapterEventHandler, type ChannelAdapter } from "#channel/adapter.js";
@@ -372,6 +372,49 @@ describe("defineChannel", () => {
     expect(capturedCtx.session.turn).toEqual({ id: "turn-1", sequence: 0 });
     expect(typeof capturedChannel.continuationToken).toBe("string");
     expect(typeof capturedChannel.setContinuationToken).toBe("function");
+  });
+
+  it("registers turn and session cancellation event handlers", async () => {
+    const turnCancelled = vi.fn();
+    const sessionCancelled = vi.fn();
+    const channel = defineChannel({
+      routes: [POST("/x", async () => new Response("ok"))],
+      events: {
+        "session.cancelled": sessionCancelled,
+        "turn.cancelled": turnCancelled,
+      },
+    });
+    const adapter = getAdapter(channel);
+    const ctx = new ContextContainer();
+    ctx.set(SessionKey, {
+      auth: { current: null, initiator: null },
+      sessionId: "session-1",
+      turn: { id: "turn-1", sequence: 0 },
+    });
+    const accessor: ContextAccessor = {
+      ensure: (key, create) => ctx.ensure(key as any, create),
+      get: (key) => ctx.get(key as any),
+      has: (key) => ctx.has(key as any),
+      require: (key) => ctx.require(key as any),
+      set: (key, value) => ctx.set(key as any, value),
+    };
+    const adapterCtx = buildAdapterContext(adapter, accessor);
+
+    await contextStorage.run(ctx, async () => {
+      await callAdapterEventHandler(
+        adapter,
+        { data: { sequence: 0, turnId: "turn-1" }, type: "turn.cancelled" } as any,
+        adapterCtx,
+      );
+      await callAdapterEventHandler(
+        adapter,
+        { data: { sessionId: "session-1" }, type: "session.cancelled" } as any,
+        adapterCtx,
+      );
+    });
+
+    expect(turnCancelled).toHaveBeenCalledOnce();
+    expect(sessionCancelled).toHaveBeenCalledOnce();
   });
 
   it("registers reasoning event handlers with channel and session context", async () => {

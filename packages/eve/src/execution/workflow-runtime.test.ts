@@ -8,7 +8,10 @@ import {
   turnWorkflowReference,
   workflowEntryReference,
 } from "#execution/workflow-runtime.js";
-import { isRuntimeNoActiveSessionError } from "#execution/runtime-errors.js";
+import {
+  isRuntimeCancellationConflictError,
+  isRuntimeNoActiveSessionError,
+} from "#execution/runtime-errors.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 
@@ -16,6 +19,13 @@ const getHookByTokenMock = vi.fn();
 const getRunMock = vi.fn();
 const resumeHookMock = vi.fn();
 const startMock = vi.fn();
+
+function createStartedRun(runId: string) {
+  return {
+    returnValue: new Promise<never>(() => undefined),
+    runId,
+  };
+}
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
   getHookByToken: (...args: unknown[]) => getHookByTokenMock(...args),
@@ -62,6 +72,22 @@ describe("createWorkflowRuntime#deliver", () => {
     return createWorkflowRuntime({ compiledArtifactsSource });
   }
 
+  it("returns after the delivery hook accepts the turn", async () => {
+    getHookByTokenMock.mockResolvedValue({ runId: "driver-run" });
+
+    const result = await buildRuntime().deliver({
+      auth: null,
+      continuationToken: "eve:session-1",
+      payload: { message: "continue" },
+    });
+
+    expect(result).toEqual({
+      sessionId: "driver-run",
+    });
+    expect(resumeHookMock).toHaveBeenCalledOnce();
+    expect(getRunMock).not.toHaveBeenCalled();
+  });
+
   it("normalizes `HookNotFoundError` into `RuntimeNoActiveSessionError`", async () => {
     const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
     getHookByTokenMock.mockRejectedValue(new HookNotFoundError(NOT_FOUND_TOKEN));
@@ -93,6 +119,47 @@ describe("createWorkflowRuntime#deliver", () => {
   });
 });
 
+describe("createWorkflowRuntime cancellation", () => {
+  function buildRuntime() {
+    return createWorkflowRuntime({ compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource });
+  }
+
+  it("resumes the active turn hook only when it belongs to the requested session", async () => {
+    getHookByTokenMock.mockResolvedValue({ runId: "session-1" });
+
+    await buildRuntime().cancelTurn({ sessionId: "session-1" });
+
+    expect(resumeHookMock).toHaveBeenCalledWith("session-1:cancel-turn", undefined);
+  });
+
+  it("rejects an active turn hook owned by a different session", async () => {
+    getHookByTokenMock.mockResolvedValue({ runId: "session-2" });
+
+    await expect(buildRuntime().cancelTurn({ sessionId: "session-1" })).rejects.toSatisfy(
+      isRuntimeCancellationConflictError,
+    );
+    expect(resumeHookMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts session cancellation by session id", async () => {
+    getHookByTokenMock.mockResolvedValue({ runId: "session-1" });
+
+    await buildRuntime().cancelSession({ sessionId: "session-1" });
+
+    expect(resumeHookMock).toHaveBeenCalledWith("session-1:cancel-session", undefined);
+    expect(getHookByTokenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes stale cancellation capabilities to a conflict", async () => {
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    getHookByTokenMock.mockRejectedValue(new HookNotFoundError("stale"));
+
+    await expect(buildRuntime().cancelTurn({ sessionId: "session-1" })).rejects.toSatisfy(
+      isRuntimeCancellationConflictError,
+    );
+  });
+});
+
 describe("createWorkflowRuntime#run", () => {
   const adapter: ChannelAdapter = { kind: "http" };
 
@@ -104,21 +171,14 @@ describe("createWorkflowRuntime#run", () => {
     vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue({
       compiledArtifactsSource,
     } as never);
-    getRunMock.mockReturnValue({
-      getReadable: () =>
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close();
-          },
-        }),
-    });
+    getHookByTokenMock.mockResolvedValue({ runId: "driver-run" });
   }
 
   it("starts workflowEntry on the latest deployment in Vercel production", async () => {
     vi.stubEnv("VERCEL_ENV", "production");
     const compiledArtifactsSource = {} as RuntimeCompiledArtifactsSource;
     mockBundleAndRun(compiledArtifactsSource);
-    startMock.mockResolvedValue({ runId: "driver-run" });
+    startMock.mockResolvedValue(createStartedRun("driver-run"));
 
     await buildRuntime(compiledArtifactsSource).run({
       adapter,
@@ -149,7 +209,7 @@ describe("createWorkflowRuntime#run", () => {
     mockBundleAndRun(compiledArtifactsSource);
     startMock
       .mockRejectedValueOnce(new Error(LATEST_DEPLOYMENT_UNSUPPORTED_MESSAGE))
-      .mockResolvedValueOnce({ runId: "driver-run" });
+      .mockResolvedValueOnce(createStartedRun("driver-run"));
 
     await buildRuntime(compiledArtifactsSource).run({
       adapter,
@@ -178,7 +238,7 @@ describe("createWorkflowRuntime#run", () => {
       }
       const compiledArtifactsSource = {} as RuntimeCompiledArtifactsSource;
       mockBundleAndRun(compiledArtifactsSource);
-      startMock.mockResolvedValue({ runId: "driver-run" });
+      startMock.mockResolvedValue(createStartedRun("driver-run"));
 
       await buildRuntime(compiledArtifactsSource).run({
         adapter,
@@ -198,17 +258,17 @@ describe("createWorkflowRuntime#run", () => {
       compiledArtifactsSource,
     } as never);
     const bytes = new TextEncoder().encode('{"type":"test.event"}\n');
-    const getReadable = vi.fn(
-      () =>
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(bytes);
-            controller.close();
-          },
-        }),
-    );
+    const getReadable = vi.fn(() => {
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      });
+    });
     getRunMock.mockReturnValue({ getReadable });
-    startMock.mockResolvedValue({ runId: "driver-run" });
+    getHookByTokenMock.mockResolvedValue({ runId: "driver-run" });
+    startMock.mockResolvedValue(createStartedRun("driver-run"));
 
     const handle = await buildRuntime(compiledArtifactsSource).run({
       adapter,
@@ -226,6 +286,6 @@ describe("createWorkflowRuntime#run", () => {
 
     expect(event.value).toEqual({ type: "test.event" });
     expect(getRunMock).toHaveBeenCalledWith("driver-run");
-    expect(getReadable).toHaveBeenCalledTimes(1);
+    expect(getReadable).toHaveBeenCalledOnce();
   });
 });

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { getWorld, resumeHook, start } from "#compiled/@workflow/core/runtime.js";
 
+import { createWorkflowRuntime } from "#execution/workflow-runtime.js";
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
+import { mockTool } from "#internal/testing/mocks/mock-tool.js";
 import { waitForHook } from "#internal/testing/workflow-test-helpers.js";
 import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { workflowEntry } from "#execution/workflow-entry.js";
@@ -35,6 +37,178 @@ function buildSerializedContext(overrides: {
 }
 
 describe("workflowEntry integration", () => {
+  it("cancels one active turn and resumes the same entry session", async () => {
+    const blocking = createBlockingCancellationTool();
+    const app = createTestRuntime({
+      agent: { name: "workflow-entry-turn-cancellation" },
+      tools: [blocking.tool],
+    });
+    const continuationToken = "http:workflow-entry-turn-cancellation";
+
+    await app.run(async () => {
+      const compiledArtifactsSource = createBundledRuntimeCompiledArtifactsSource();
+      const runtime = createWorkflowRuntime({
+        compiledArtifactsSource,
+      });
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "call wait_for_cancellation" },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken,
+            mode: "conversation",
+          }),
+        },
+      ]);
+      await blocking.started;
+      const stream = captureTurnEvents(run);
+
+      try {
+        await runtime.cancelTurn({ sessionId: run.runId });
+        await blocking.aborted;
+
+        const cancelledTurn = await stream.nextTurn();
+        expect(cancelledTurn.map((event) => event.type)).toContain("turn.cancelled");
+        expect(cancelledTurn.at(-1)?.type).toBe("session.waiting");
+
+        await expect(runtime.cancelTurn({ sessionId: run.runId })).resolves.toBeUndefined();
+
+        const followUp = await runtime.deliver({
+          auth: null,
+          continuationToken,
+          payload: { message: "continue after cancellation" },
+        });
+        expect(followUp.sessionId).toBe(run.runId);
+
+        let resumedTurn = await stream.nextTurn();
+        while (isCancellationBoundary(resumedTurn)) {
+          resumedTurn = await stream.nextTurn();
+        }
+        expect(resumedTurn.at(-1)?.type).toBe("session.waiting");
+        expect(
+          resumedTurn.some(
+            (event) =>
+              event.type === "message.completed" &&
+              event.data.message?.includes("continue after cancellation") === true,
+          ),
+        ).toBe(true);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
+  it("cancels an entry session and eventually releases its continuation", async () => {
+    const blocking = createBlockingCancellationTool();
+    const app = createTestRuntime({
+      agent: { name: "workflow-entry-session-cancellation" },
+      tools: [blocking.tool],
+    });
+    const continuationToken = "http:workflow-entry-session-cancellation";
+
+    await app.run(async () => {
+      const compiledArtifactsSource = createBundledRuntimeCompiledArtifactsSource();
+      const runtime = createWorkflowRuntime({
+        compiledArtifactsSource,
+      });
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "call wait_for_cancellation" },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken,
+            mode: "conversation",
+          }),
+        },
+      ]);
+      await blocking.started;
+      const stream = captureTurnEvents(run);
+
+      try {
+        await runtime.cancelSession({ sessionId: run.runId });
+        await blocking.aborted;
+
+        const cancelledSession = await stream.nextTurn();
+        expect(cancelledSession.map((event) => event.type)).toContain("turn.cancelled");
+        expect(cancelledSession.at(-1)?.type).toBe("session.cancelled");
+        await expect(run.returnValue).resolves.toEqual({ output: "" });
+
+        const replacementRun = await start(workflowEntry, [
+          {
+            input: { message: "fresh session" },
+            serializedContext: buildSerializedContext({
+              channelKind: "http",
+              continuationToken,
+              mode: "conversation",
+            }),
+          },
+        ]);
+        const replacementStream = captureTurnEvents(replacementRun);
+
+        try {
+          expect(replacementRun.runId).not.toBe(run.runId);
+
+          const freshTurn = await replacementStream.nextTurn();
+          expect(freshTurn.at(-1)?.type).toBe("session.waiting");
+          expect(
+            freshTurn.some(
+              (event) =>
+                event.type === "message.completed" &&
+                event.data.message?.includes("fresh session") === true,
+            ),
+          ).toBe(true);
+        } finally {
+          replacementStream.dispose();
+          await replacementRun.cancel();
+        }
+      } finally {
+        stream.dispose();
+        if ((await run.status) === "running") await run.cancel();
+      }
+    });
+  });
+
+  it("treats authored session cancellation as non-retryable control flow", async () => {
+    let executions = 0;
+    const tool = mockTool({
+      name: "cancel_session",
+      execute(_input, ctx): never {
+        executions += 1;
+        return ctx.cancel({ scope: "session" });
+      },
+    });
+    const app = createTestRuntime({
+      agent: { name: "workflow-entry-authored-session-cancellation" },
+      tools: [tool],
+    });
+
+    await app.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "call cancel_session" },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken: "http:workflow-entry-authored-session-cancellation",
+            mode: "conversation",
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+
+      try {
+        const events = await stream.nextTurn();
+        expect(events.map((event) => event.type)).toContain("turn.cancelled");
+        expect(events.at(-1)?.type).toBe("session.cancelled");
+        expect(executions).toBe(1);
+        await expect(run.returnValue).resolves.toEqual({ output: "" });
+      } finally {
+        stream.dispose();
+        if ((await run.status) === "running") await run.cancel();
+      }
+    });
+  });
+
   it("parks in conversation mode and resumes via the workflow hook", async () => {
     const runtime = createTestRuntime({ agent: { name: "workflow-entry-conversation" } });
     const continuationToken = "http:workflow-entry-conversation";
@@ -287,3 +461,40 @@ describe("workflowEntry integration", () => {
     });
   });
 });
+
+function createBlockingCancellationTool() {
+  let markStarted: () => void = () => undefined;
+  let markAborted: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const aborted = new Promise<void>((resolve) => {
+    markAborted = resolve;
+  });
+
+  const tool = mockTool({
+    name: "wait_for_cancellation",
+    execute(_input, ctx) {
+      markStarted();
+      return new Promise<never>((_resolve, reject) => {
+        const onAbort = () => {
+          markAborted();
+          reject(ctx.abortSignal.reason);
+        };
+        if (ctx.abortSignal.aborted) {
+          onAbort();
+          return;
+        }
+        ctx.abortSignal.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+  });
+
+  return { aborted, started, tool };
+}
+
+function isCancellationBoundary(
+  events: readonly import("#protocol/message.js").HandleMessageStreamEvent[],
+): boolean {
+  return events.some((event) => event.type === "turn.cancelled");
+}

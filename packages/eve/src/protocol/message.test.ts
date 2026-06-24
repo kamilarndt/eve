@@ -5,9 +5,12 @@ import {
   createActionResultEvent,
   createAuthorizationCompletedEvent,
   createAuthorizationRequiredEvent,
+  createSessionCancelledEvent,
   createResultCompletedEvent,
   createStepStartedEvent,
+  createTurnCancelledEvent,
   encodeMessageStreamEvent,
+  isCurrentTurnBoundaryEvent,
   timestampHandleMessageStreamEvent,
 } from "#protocol/message.js";
 import { createEveConnectionCallbackRoutePath } from "#protocol/routes.js";
@@ -15,6 +18,19 @@ import { createEveConnectionCallbackRoutePath } from "#protocol/routes.js";
 describe("message stream protocol", () => {
   it("pins the stream version for timed session events", () => {
     expect(EVE_MESSAGE_STREAM_VERSION).toBe("17");
+  });
+
+  it("creates cancellation events with the expected turn and session boundaries", () => {
+    expect(createTurnCancelledEvent({ sequence: 2, turnId: "turn_2" })).toEqual({
+      data: { sequence: 2, turnId: "turn_2" },
+      type: "turn.cancelled",
+    });
+    const session = createSessionCancelledEvent("session-1");
+    expect(session).toEqual({
+      data: { sessionId: "session-1" },
+      type: "session.cancelled",
+    });
+    expect(isCurrentTurnBoundaryEvent(session)).toBe(true);
   });
 
   it("creates result.completed events", () => {

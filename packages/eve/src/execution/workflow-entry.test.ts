@@ -14,6 +14,10 @@ import {
   routeProxiedDeliverStep,
   runProxyInputRequestStep,
 } from "#execution/workflow-steps.js";
+import { cancelTurnSegmentStep } from "#execution/turn-cancellation-step.js";
+import { finalizeCancellationStep } from "#execution/cancellation-step.js";
+import { cancelDescendantsStep } from "#execution/cancel-descendants-step.js";
+import { fireSessionCallbackStep } from "#execution/session-callback-step.js";
 
 vi.mock("#compiled/@workflow/core/index.js", () => ({
   createHook: vi.fn(),
@@ -67,6 +71,10 @@ vi.mock("./workflow-steps.js", () => ({
     })),
 }));
 
+vi.mock("./turn-cancellation-step.js", () => ({
+  cancelTurnSegmentStep: vi.fn().mockResolvedValue(undefined),
+}));
+
 function createSessionStateForMock(
   overrides: Partial<DurableSessionState> = {},
 ): DurableSessionState {
@@ -89,6 +97,17 @@ function createSessionStepResultForMock(state: DurableSessionState) {
 
 vi.mock("./session-callback-step.js", () => ({
   fireSessionCallbackStep: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./cancel-descendants-step.js", () => ({
+  cancelDescendantsStep: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./cancellation-step.js", () => ({
+  finalizeCancellationStep: vi.fn().mockImplementation(async (input) => ({
+    serializedContext: input.serializedContext,
+    sessionState: input.sessionState,
+  })),
 }));
 
 interface ParkHookConfig {
@@ -154,6 +173,55 @@ describe("workflowEntry", () => {
         }),
         sessionState,
       }),
+    );
+  });
+
+  it("cancels one logical turn and leaves the entry session parked", async () => {
+    const sessionState = createBaseSessionState();
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    installHookMocks({
+      cancellationScope: "turn",
+      parkHooks: [{ token: "http:test", values: [] }],
+      turnCompletions: [turnResult({ action: "done", output: "late completion", sessionState })],
+    });
+
+    await expect(
+      workflowEntry({
+        input: { message: "cancel me" },
+        serializedContext: createSerializedContext(),
+      }),
+    ).resolves.toEqual({ output: "" });
+
+    expect(cancelTurnSegmentStep).toHaveBeenCalledWith({
+      hookId: "wrun_test_123:turn-completion:0:cancel",
+    });
+    expect(cancelDescendantsStep).toHaveBeenCalledTimes(1);
+    expect(finalizeCancellationStep).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "turn" }),
+    );
+  });
+
+  it("releases and terminally cancels the entry session", async () => {
+    const sessionState = createBaseSessionState();
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    installHookMocks({
+      cancellationScope: "session",
+      parkHooks: [{ token: "http:test", values: [] }],
+      turnCompletions: [{ kind: "turn-cancelled", scope: "turn" }],
+    });
+
+    await expect(
+      workflowEntry({
+        input: { message: "cancel session" },
+        serializedContext: createSerializedContext(),
+      }),
+    ).resolves.toEqual({ output: "" });
+
+    expect(finalizeCancellationStep).toHaveBeenCalledWith(
+      expect.objectContaining({ scope: "session" }),
+    );
+    expect(fireSessionCallbackStep).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "cancelled" }),
     );
   });
 
@@ -901,6 +969,7 @@ function turnResult(input: {
 }
 
 function installHookMocks(input: {
+  readonly cancellationScope?: "session" | "turn";
   readonly parkHooks?: readonly ParkHookConfig[];
   readonly symbolDispose?: () => void;
   readonly turnCompletions: readonly TurnCompletionPayload[];
@@ -924,8 +993,13 @@ function installHookMocks(input: {
     }
 
     if (token.endsWith(":cancel-session") || token.endsWith(":cancel-turn")) {
+      const signaled =
+        (token.endsWith(":cancel-session") && input.cancellationScope === "session") ||
+        (token.endsWith(":cancel-turn") && input.cancellationScope === "turn");
       return createMockHook({
-        next: () => new Promise<IteratorResult<void>>(() => {}),
+        next: signaled
+          ? async () => ({ done: false, value: undefined })
+          : () => new Promise<IteratorResult<void>>(() => {}),
         token,
         values: [],
       }) as never;

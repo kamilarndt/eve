@@ -52,6 +52,43 @@ function createEvent(input?: {
 }
 
 describe("dispatchChannelRequest", () => {
+  it("exposes channel-local session and turn cancellation operations", async () => {
+    const cancelSession = vi.fn().mockResolvedValue(undefined);
+    const cancelTurn = vi.fn().mockResolvedValue(undefined);
+    const cancellationRuntime: Runtime = {
+      cancelSession,
+      cancelTurn,
+      deliver: vi.fn(),
+      getEventStream: vi.fn(),
+      run: vi.fn(),
+    };
+    mockedResolveNitroChannelRuntimeBundle.mockResolvedValue({
+      channels: [
+        {
+          handler: async (_request, args) => {
+            await args.cancelSession({ sessionId: "session-1" });
+            await args.cancelTurn({ sessionId: "session-1" });
+            return new Response("ok");
+          },
+          fetch: async () => new Response("ok"),
+          adapter: { kind: "channel:webhook" },
+          logicalPath: "agent/channels/webhook.ts",
+          method: "POST",
+          name: "webhook",
+          sourceId: "channel-webhook",
+          sourceKind: "module",
+          urlPath: "/webhook",
+        } satisfies ResolvedChannelDefinition,
+      ],
+      runtime: cancellationRuntime,
+    });
+
+    await dispatchChannelRequest(createEvent({ waitUntil: vi.fn() }), "POST /webhook", {} as never);
+
+    expect(cancelSession).toHaveBeenCalledWith({ sessionId: "session-1" });
+    expect(cancelTurn).toHaveBeenCalledWith({ sessionId: "session-1" });
+  });
+
   it("returns the response before background work settles when Nitro provides waitUntil", async () => {
     const deferred = createDeferred<void>();
     const waitUntil = vi.fn<(task: Promise<unknown>) => void>();

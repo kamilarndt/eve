@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startRemoteAgentSession } from "#execution/remote-agent-dispatch.js";
+import {
+  cancelRemoteAgentSession,
+  startRemoteAgentSession,
+} from "#execution/remote-agent-dispatch.js";
 import type { RuntimeRemoteAgentCallActionRequest } from "#runtime/actions/types.js";
 import type { ResolvedRuntimeRemoteAgentNode } from "#runtime/types.js";
 
@@ -162,6 +165,31 @@ describe("startRemoteAgentSession", () => {
           url: "https://caller.example.com/eve/v1/callback/eve%3Aparent-token?x-vercel-protection-bypass=remote+callback+secret",
         }),
       }),
+    );
+  });
+
+  it("cancels a remote child through its public scoped endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cancelRemoteAgentSession({
+      remote: createRemoteAgent(),
+      sessionId: "remote-session",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://remote.example.com/eve/v1/session/remote-session/cancel",
+      {
+        body: JSON.stringify({
+          scope: "session",
+        }),
+        headers: {
+          authorization: "Bearer remote-token",
+          "content-type": "application/json",
+          "x-static": "yes",
+        },
+        method: "POST",
+      },
     );
   });
 });

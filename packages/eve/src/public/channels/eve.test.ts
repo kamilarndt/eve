@@ -9,7 +9,7 @@ import { type AuthFn, none } from "#public/channels/auth.js";
 import { eveChannel, defaultEveAuth, type EveChannelInput } from "#public/channels/eve.js";
 import type { SessionAuthContext } from "#channel/types.js";
 import type { RouteHandlerArgs, SendFn, SendOptions, SendPayload } from "#channel/routes.js";
-import type { Session as ChannelSession } from "#channel/session.js";
+import type { Session } from "#channel/session.js";
 import { ContextContainer, contextStorage } from "#context/container.js";
 import type { ContextAccessor } from "#context/key.js";
 import {
@@ -19,6 +19,7 @@ import {
   type Session as RuntimeSession,
 } from "#context/keys.js";
 import { createMessageCompletedEvent } from "#protocol/message.js";
+import { RuntimeCancellationConflictError } from "#execution/runtime-errors.js";
 
 /**
  * Unit coverage for the inbound HTTP route's message-body parser and
@@ -57,13 +58,14 @@ function createEveCreateHandler(input: EveChannelInput) {
   );
   if (!createRoute) throw new Error("No create POST route found");
 
-  const mockSend = vi.fn<SendFn>().mockResolvedValue({
+  const mockSession = {
     id: "test-session-id",
     continuationToken: "eve:test",
     async getEventStream() {
       return new ReadableStream();
     },
-  } satisfies ChannelSession);
+  } satisfies Session;
+  const mockSend = vi.fn<SendFn>().mockResolvedValue(mockSession);
 
   return {
     send: mockSend,
@@ -94,7 +96,7 @@ function createEveContinueHandler(input: EveChannelInput) {
   );
   if (!continueRoute) throw new Error("No continue POST route found");
 
-  const mockSession: ChannelSession = {
+  const mockSession: Session = {
     id: "test-session-id",
     continuationToken: "eve:test",
     async getEventStream() {
@@ -1073,5 +1075,95 @@ describe("eveChannel — auth array shape", () => {
     expect(response.status).toBe(200);
     const options = handler.send.mock.calls[0]?.[1] as SendOptions;
     expect(options.auth).toEqual(ACCEPTED);
+  });
+});
+
+describe("eveChannel — cancellation", () => {
+  function createHandler(
+    auth: EveChannelInput["auth"] = none(),
+    overrides: Partial<Pick<RouteHandlerArgs, "cancelSession" | "cancelTurn">> = {},
+  ) {
+    const channel = eveChannel({ auth });
+    const route = channel.routes.find(
+      (candidate) =>
+        candidate.method === "POST" && candidate.path === "/eve/v1/session/:sessionId/cancel",
+    );
+    if (route === undefined) throw new Error("No cancellation route found.");
+
+    const operations = {
+      cancelSession: vi.fn(),
+      cancelTurn: vi.fn(),
+      ...overrides,
+    };
+    const args: RouteHandlerArgs = {
+      ...operations,
+      getSession: vi.fn(),
+      params: { sessionId: "session-1" },
+      receive: vi.fn() as any,
+      requestIp: "127.0.0.1",
+      send: vi.fn(),
+      waitUntil: () => undefined,
+    };
+
+    return {
+      operations,
+      fetch: (request: Request) => (route as any).handler(request, args) as Promise<Response>,
+    };
+  }
+
+  it("authenticates before parsing the cancellation body", async () => {
+    const handler = createHandler([]);
+    const response = await handler.fetch(
+      new Request("https://eve.test/eve/v1/session/session-1/cancel", {
+        body: "not json",
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(401);
+    expect(handler.operations.cancelTurn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {},
+    { scope: "turn", extra: true },
+    { continuationToken: "eve:1", scope: "turn" },
+    { continuationToken: "eve:1", scope: "session" },
+  ])("rejects malformed scoped cancellation payloads", async (body) => {
+    const handler = createHandler();
+    const response = await handler.fetch(createJsonMessageRequest(body));
+
+    expect(response.status).toBe(400);
+    expect(handler.operations.cancelSession).not.toHaveBeenCalled();
+    expect(handler.operations.cancelTurn).not.toHaveBeenCalled();
+  });
+
+  it("cancels the currently running turn", async () => {
+    const handler = createHandler();
+    const response = await handler.fetch(createJsonMessageRequest({ scope: "turn" }));
+
+    expect(response.status).toBe(202);
+    expect(handler.operations.cancelTurn).toHaveBeenCalledWith({
+      sessionId: "session-1",
+    });
+  });
+
+  it("cancels the session in the request path", async () => {
+    const handler = createHandler();
+    const response = await handler.fetch(createJsonMessageRequest({ scope: "session" }));
+
+    expect(response.status).toBe(202);
+    expect(handler.operations.cancelSession).toHaveBeenCalledWith({
+      sessionId: "session-1",
+    });
+  });
+
+  it("maps stale and mismatched capabilities to one conflict response", async () => {
+    const handler = createHandler(none(), {
+      cancelTurn: vi.fn().mockRejectedValue(new RuntimeCancellationConflictError()),
+    });
+    const response = await handler.fetch(createJsonMessageRequest({ scope: "turn" }));
+
+    expect(response.status).toBe(409);
   });
 });

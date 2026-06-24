@@ -14,6 +14,8 @@ import {
 } from "#context/keys.js";
 import { ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { runStep } from "#context/run-step.js";
+import { buildCallbackContext } from "#context/build-callback-context.js";
+import { createCancellationReason } from "#execution/cancellation.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import type { HarnessEmissionState } from "#harness/emission.js";
 import type { HarnessSession } from "#harness/types.js";
@@ -79,6 +81,36 @@ function createSeedContext(overrides?: {
 }
 
 describe("runStep with sessionProvider", () => {
+  it("exposes the active abort signal and exits authored code on cancellation", async () => {
+    const ctx = createSeedContext();
+    const session = createStubSession();
+    const controller = new AbortController();
+    const reason = createCancellationReason("session");
+    expect(reason).toMatchObject({ name: "AbortError", scope: "session" });
+
+    const run = runStep(
+      ctx,
+      session,
+      async (): Promise<never> => {
+        const callback = buildCallbackContext();
+        expect(callback.abortSignal).toBe(controller.signal);
+        return callback.cancel({ scope: "session" });
+      },
+      {
+        abortSignal: controller.signal,
+        cancel({ scope }): never {
+          expect(scope).toBe("session");
+          controller.abort(reason);
+          throw reason;
+        },
+      },
+    );
+
+    await expect(run).rejects.toEqual(reason);
+    expect(controller.signal.aborted).toBe(true);
+    expect(controller.signal.reason).toEqual(reason);
+  });
+
   it("builds a session with auth from durable context", async () => {
     const auth: SessionAuthContext = {
       attributes: { role: "admin" },

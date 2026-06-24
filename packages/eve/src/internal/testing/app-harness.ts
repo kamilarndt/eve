@@ -1,7 +1,11 @@
 import type { JsonObject } from "#shared/json.js";
 import type { ChannelAdapter } from "#channel/adapter.js";
 import { compileFromMemory } from "#compiler/compile-from-memory.js";
-import type { CompiledAgentManifest, CompiledSkillDefinition } from "#compiler/manifest.js";
+import {
+  ROOT_COMPILED_AGENT_NODE_ID,
+  type CompiledAgentManifest,
+  type CompiledSkillDefinition,
+} from "#compiler/manifest.js";
 import type { CompiledModuleMap } from "#compiler/module-map.js";
 import type { SessionParent, SessionTurn } from "#context/keys.js";
 import { installBundledCompiledArtifacts } from "#runtime/loaders/bundled-artifacts.js";
@@ -175,6 +179,15 @@ export function createTestRuntime(descriptor: TestAppDescriptor = {}): TestRunti
   const session = createRuntimeSession(descriptor.agent?.name ?? DEFAULT_AGENT_NAME);
   const tools = descriptor.tools ?? [];
   const skills = descriptor.skills ?? [];
+
+  const rootModules = moduleMap.nodes[ROOT_COMPILED_AGENT_NODE_ID]?.modules;
+  if (rootModules === undefined) {
+    throw new Error("In-memory app is missing its root module scope.");
+  }
+  for (const tool of tools) {
+    const definition = manifest.tools.find((entry) => entry.name === tool.name);
+    if (definition !== undefined) rootModules[definition.sourceId] = { default: tool };
+  }
 
   function install(): void {
     installBundledCompiledArtifacts({ manifest, moduleMap });

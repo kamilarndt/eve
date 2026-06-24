@@ -3,12 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHook } from "#compiled/@workflow/core/index.js";
 import type { HookPayload } from "#channel/types.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
-import { turnWorkflow } from "#execution/turn-workflow.js";
+import { notifyDriverStep, turnWorkflow } from "#execution/turn-workflow.js";
+import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
 import {
   TURN_WORKFLOW_INPUT_VERSION,
   type TurnWorkflowInput,
 } from "#execution/durable-session-migrations/turn-workflow.js";
 import { turnStep } from "#execution/workflow-steps.js";
+import { createCancellationReason } from "#execution/cancellation.js";
 
 const resumeHookMock = vi.fn();
 const disposeHookMock = vi.fn();
@@ -83,6 +85,66 @@ describe("turnWorkflow", () => {
         sessionState,
       },
       kind: "turn-result",
+    });
+  });
+
+  it("aborts the active turn step when the private cancellation hook resumes", async () => {
+    let cancel: ((result: IteratorResult<void>) => void) | undefined;
+    vi.mocked(createHook).mockImplementationOnce(
+      (options?: { readonly token?: string }) =>
+        ({
+          [Symbol.asyncIterator]() {
+            return {
+              next: () =>
+                new Promise<IteratorResult<void>>((resolve) => {
+                  cancel = resolve;
+                }),
+            };
+          },
+          dispose: disposeHookMock,
+          getConflict: vi.fn().mockResolvedValue(null),
+          token: options?.token ?? "cancel-token",
+        }) as never,
+    );
+    vi.mocked(turnStep).mockImplementationOnce(
+      async ({ abortController }) =>
+        await new Promise((_, reject) => {
+          abortController?.signal.addEventListener(
+            "abort",
+            () => reject(abortController.signal.reason),
+            {
+              once: true,
+            },
+          );
+        }),
+    );
+
+    const { input } = createInput();
+    const running = turnWorkflow(input);
+    await vi.waitFor(() => expect(cancel).toBeTypeOf("function"));
+    cancel?.({ done: false, value: undefined });
+    await running;
+
+    const controller = vi.mocked(turnStep).mock.calls[0]?.[0].abortController;
+    expect(controller?.signal.aborted).toBe(true);
+    expect(resumeHookMock).toHaveBeenCalledWith("turn-token", {
+      kind: "turn-cancelled",
+      scope: "turn",
+    });
+  });
+
+  it("reports session scope when authored code cancels from inside the step", async () => {
+    vi.mocked(turnStep).mockImplementationOnce(async ({ abortController }) => {
+      const reason = createCancellationReason("session");
+      abortController?.abort(reason);
+      throw reason;
+    });
+
+    await turnWorkflow(createInput().input);
+
+    expect(resumeHookMock).toHaveBeenCalledWith("turn-token", {
+      kind: "turn-cancelled",
+      scope: "session",
     });
   });
 
@@ -254,6 +316,19 @@ describe("turnWorkflow", () => {
     expect(resumeHookMock.mock.calls[0]?.[1]).toMatchObject({
       kind: "turn-error",
     });
+  });
+});
+
+describe("notifyDriverStep", () => {
+  it("ignores a late result after the parent completion hook is retired", async () => {
+    resumeHookMock.mockRejectedValueOnce(new HookNotFoundError("turn-token"));
+
+    await expect(
+      notifyDriverStep({
+        completionToken: "turn-token",
+        payload: { kind: "turn-cancelled", scope: "turn" },
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

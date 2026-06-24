@@ -122,6 +122,34 @@ describe("fireSessionCallbackStep", () => {
     });
   });
 
+  it("posts intentional session cancellation without a failure payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fireSessionCallbackStep({
+      serializedContext: createSerializedContext(),
+      status: "cancelled",
+    });
+
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
+      callId: "call-1",
+      kind: "session.cancelled",
+      sessionId: "remote-session",
+      subagentName: "research",
+    });
+  });
+
+  it("accepts a missing parent callback after cancellation", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
+
+    await expect(
+      fireSessionCallbackStep({
+        serializedContext: createSerializedContext(),
+        status: "cancelled",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     ["null", null],
     ["array", []],
