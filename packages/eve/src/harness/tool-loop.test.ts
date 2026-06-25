@@ -2093,6 +2093,51 @@ describe("createToolLoopHarness", () => {
     });
   });
 
+  it("propagates streamed cancellation without waiting for onStepFinish or emitting failures", async () => {
+    const abortController = new AbortController();
+    const abortReason = new Error("turn cancelled");
+
+    vi.mocked(ToolLoopAgent).mockImplementation(function (
+      this: Record<string, unknown>,
+      settings: MockAgentSettings,
+    ) {
+      this.stream = vi
+        .fn()
+        .mockImplementation(async (options: { abortSignal?: AbortSignal; messages: unknown[] }) => {
+          expect(options.abortSignal).toBe(abortController.signal);
+          if (settings.prepareStep) {
+            await settings.prepareStep({
+              context: undefined,
+              messages: options.messages,
+              model: {},
+              stepNumber: 0,
+              steps: [],
+            });
+          }
+
+          return {
+            fullStream: (async function* () {
+              abortController.abort(abortReason);
+              yield { reason: abortReason.message, type: "abort" };
+            })(),
+            steps: new Promise<never>(() => {}),
+          };
+        });
+      return this as unknown as ToolLoopAgent;
+    } as unknown as MockAgentConstructor);
+
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(
+      createTestConfig("conversation", emit, { abortSignal: abortController.signal }),
+    );
+
+    await expect(runStep(createTestSession(), { message: "Hi" })).rejects.toBe(abortReason);
+    const eventTypes = events.map((event) => event.type);
+    expect(eventTypes).not.toContain("step.failed");
+    expect(eventTypes).not.toContain("turn.failed");
+    expect(eventTypes).not.toContain("session.failed");
+  });
+
   it("emits a recoverable failure cascade and parks the session on a non-terminal model-call error", async () => {
     setupMockAgentError(new Error("Model blew up"));
 

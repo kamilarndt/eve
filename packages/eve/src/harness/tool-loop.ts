@@ -717,6 +717,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             inlineAuthorizationResults,
             inlineToolResultParts,
           } = await emitStreamContent(emit, emissionState, streamResult.fullStream);
+          throwIfTurnAborted(config.abortSignal);
           const stepResult = await hooks.stepResult;
           if (
             isEmptyModelResponse(stepResult) &&
@@ -770,6 +771,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
           return stepResult;
         }
         await agent.generate({ abortSignal: config.abortSignal, messages: callMessages });
+        throwIfTurnAborted(config.abortSignal);
         const stepResult = await hooks.stepResult;
         if (isEmptyModelResponse(stepResult)) {
           throw new EmptyModelResponseError();
@@ -783,6 +785,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
           sessionId: session.sessionId,
           turnId: emissionState.turnId,
         },
+        config.abortSignal,
       );
     };
 
@@ -817,6 +820,8 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
         suppressStepStartedEmission: true,
       });
     } catch (error) {
+      throwIfTurnAborted(config.abortSignal);
+
       // Stage order: drop a gateway-rejected provider tool first, then
       // reissue an empty response; see runModelCallRecoveryPipeline for
       // the skip/act semantics.
@@ -841,6 +846,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             }),
         ],
       });
+      throwIfTurnAborted(config.abortSignal);
 
       if (recoveryResult.outcome === "recovered") {
         result = recoveryResult.result;
@@ -2031,11 +2037,14 @@ function resolveApprovalKeyFromTools(
 async function runModelCallWithRetries<T>(
   fn: () => Promise<T>,
   diag: { readonly sessionId: string; readonly turnId: string },
+  abortSignal?: AbortSignal,
 ): Promise<T> {
   for (let attempt = 1; ; attempt++) {
+    throwIfTurnAborted(abortSignal);
     try {
       return await fn();
     } catch (error) {
+      throwIfTurnAborted(abortSignal);
       if (attempt === MODEL_CALL_MAX_ATTEMPTS || classifyModelCallError(error) !== "retry") {
         throw error;
       }
@@ -2050,6 +2059,12 @@ async function runModelCallWithRetries<T>(
       });
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+  }
+}
+
+function throwIfTurnAborted(abortSignal: AbortSignal | undefined): void {
+  if (abortSignal?.aborted) {
+    throw abortSignal.reason;
   }
 }
 

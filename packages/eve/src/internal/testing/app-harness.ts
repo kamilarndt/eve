@@ -224,7 +224,11 @@ export function createTestRuntime(descriptor: TestAppDescriptor = {}): TestRunti
       throw new Error(`Tool "${tool.name}" is not executable.`);
     }
 
-    return await execute(input);
+    return await execute(input, {
+      abortSignal: AbortSignal.any([]),
+      messages: [],
+      toolCallId: `test-${tool.name}`,
+    });
   }
 
   return {

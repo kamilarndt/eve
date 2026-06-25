@@ -4,6 +4,7 @@ import type { DynamicToolEntry } from "#shared/dynamic-tool-definition.js";
 import type { DurableDynamicToolMetadata } from "#context/keys.js";
 import type { ApprovalContext } from "#public/definitions/approval.js";
 import { defineTool } from "#public/definitions/tool.js";
+import type { ToolExecuteOptions } from "#shared/tool-definition.js";
 
 vi.mock("#context/build-callback-context.js", () => ({
   buildCallbackContext: () => ({
@@ -15,6 +16,12 @@ vi.mock("#context/build-callback-context.js", () => ({
 const { replayDynamicSessionTools, dispatchDynamicToolEvent } =
   await import("#context/dynamic-tool-lifecycle.js");
 const { buildDynamicTools } = await import("#context/build-dynamic-tools.js");
+
+const TEST_TOOL_EXECUTION_OPTIONS = {
+  abortSignal: AbortSignal.any([]),
+  messages: [],
+  toolCallId: "call_test",
+} satisfies ToolExecuteOptions;
 
 import { ContextContainer } from "#context/container.js";
 import {
@@ -278,7 +285,7 @@ describe("replayDynamicSessionTools", () => {
 
       // Execute the replayed tool — mock provides the callback context
       const tool = tools[0]!;
-      tool.execute!({ query: "test" });
+      tool.execute!({ query: "test" }, TEST_TOOL_EXECUTION_OPTIONS);
       expect(stepFn).toHaveBeenCalledWith(
         { apiUrl: "https://api.example.com", tenantName: "Acme" },
         { query: "test" },
@@ -319,11 +326,11 @@ describe("replayDynamicSessionTools", () => {
       const tools = replayDynamicSessionTools(metadata, []);
 
       const tool = tools[0]!;
-      tool.execute!({});
+      tool.execute!({}, TEST_TOOL_EXECUTION_OPTIONS);
 
       // Mutating the metadata object after replay should NOT affect calls
       closureVars.counter = 999;
-      tool.execute!({});
+      tool.execute!({}, TEST_TOOL_EXECUTION_OPTIONS);
 
       // Both calls get the same closure vars reference from metadata.
       // This documents current behavior: replay passes by reference.
@@ -794,7 +801,7 @@ describe("framework dynamic tools (no bundler transform)", () => {
     expect(replayedTools[0]!.name).toBe("search");
 
     // Execute the replayed tool — the original closure is invoked
-    await replayedTools[0]!.execute!({ query: "test" });
+    await replayedTools[0]!.execute!({ query: "test" }, TEST_TOOL_EXECUTION_OPTIONS);
     expect(executeFn).toHaveBeenCalledWith({ query: "test" });
   });
 
@@ -822,7 +829,7 @@ describe("framework dynamic tools (no bundler transform)", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]!.name).toBe("assist");
 
-    await tools[0]!.execute!({ action: "help" });
+    await tools[0]!.execute!({ action: "help" }, TEST_TOOL_EXECUTION_OPTIONS);
     expect(executeFn).toHaveBeenCalledWith({ action: "help" });
   });
 
@@ -1006,7 +1013,7 @@ describe("framework dynamic tools (no bundler transform)", () => {
 
     ctx.clearVirtualContext();
     let tools = buildDynamicTools(ctx);
-    const result1 = await tools[0]!.execute!({});
+    const result1 = await tools[0]!.execute!({}, TEST_TOOL_EXECUTION_OPTIONS);
     expect(result1).toEqual({ version: 1 });
 
     // Re-dispatch overwrites the resolver's slot
@@ -1020,7 +1027,7 @@ describe("framework dynamic tools (no bundler transform)", () => {
     ctx.clearVirtualContext();
     tools = buildDynamicTools(ctx);
     expect(tools[0]!.description).toBe("v2");
-    const result2 = await tools[0]!.execute!({});
+    const result2 = await tools[0]!.execute!({}, TEST_TOOL_EXECUTION_OPTIONS);
     expect(result2).toEqual({ version: 2 });
   });
 });

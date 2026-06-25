@@ -73,6 +73,11 @@ export interface ToolAuthOptions {
  */
 export type ToolContext = SessionContext & {
   /**
+   * Aborts when the active turn is cancelled. Pass this signal to
+   * cancellation-aware work started by the tool.
+   */
+  readonly abortSignal: AbortSignal;
+  /**
    * Resolves the bearer token for an inline provider. This accepts the same
    * auth shapes as a connection's `auth` field, including `connect("...")`
    * from `@vercel/connect/eve`.

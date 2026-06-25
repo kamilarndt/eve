@@ -16,6 +16,9 @@ import type { JsonObject } from "#shared/json.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { buildToolApproval, buildToolSet, buildToolSetWithProviderTools } from "#harness/tools.js";
 import type { HarnessToolMap } from "#harness/types.js";
+import { createToolExecuteWithAuth } from "#execution/tool-auth.js";
+import type { ToolContext } from "#public/definitions/tool.js";
+import type { ToolExecuteOptions } from "#shared/tool-definition.js";
 
 function getJsonSchema(tool: unknown): unknown {
   return (tool as { inputSchema: { jsonSchema: unknown } }).inputSchema.jsonSchema;
@@ -51,6 +54,7 @@ async function resolveApproval(
 }
 
 async function executeSdkTool(input: {
+  readonly abortSignal?: AbortSignal;
   readonly tool: unknown;
   readonly toolCallId?: string;
   readonly toolInput?: unknown;
@@ -59,12 +63,16 @@ async function executeSdkTool(input: {
     input.tool as {
       readonly execute?: (
         toolInput: unknown,
-        options: { readonly toolCallId: string },
+        options: ToolExecuteOptions,
       ) => Promise<unknown> | unknown;
     }
   ).execute;
   expect(execute).toBeTypeOf("function");
-  return await execute!(input.toolInput ?? {}, { toolCallId: input.toolCallId ?? "call_1" });
+  return await execute!(input.toolInput ?? {}, {
+    ...(input.abortSignal === undefined ? {} : { abortSignal: input.abortSignal }),
+    messages: [],
+    toolCallId: input.toolCallId ?? "call_1",
+  });
 }
 
 async function projectSdkToolOutput(input: {
@@ -90,6 +98,44 @@ async function projectSdkToolOutput(input: {
 }
 
 describe("buildToolSet", () => {
+  it("passes the AI SDK abort signal to the authored tool context", async () => {
+    const abortController = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const tools: HarnessToolMap = new Map<string, HarnessToolDefinition>([
+      [
+        "observe_signal",
+        {
+          description: "Observe the active turn signal.",
+          execute: createToolExecuteWithAuth({
+            execute(_input, ctx) {
+              receivedSignal = (ctx as ToolContext).abortSignal;
+              return { ok: true };
+            },
+            scope: "observe_signal",
+          }),
+          inputSchema: jsonSchema({ type: "object" }),
+          name: "observe_signal",
+        },
+      ],
+    ]);
+    const ctx = new ContextContainer();
+    ctx.set(SessionKey, {
+      auth: { current: null, initiator: null },
+      sessionId: "session-1",
+      turn: { id: "turn-1", sequence: 0 },
+    });
+
+    const result = buildToolSet({ tools });
+    await contextStorage.run(ctx, () =>
+      executeSdkTool({
+        abortSignal: abortController.signal,
+        tool: result.observe_signal,
+      }),
+    );
+
+    expect(receivedSignal).toBe(abortController.signal);
+  });
+
   it("passes through the input schema to the SDK tool", () => {
     const schema = {
       properties: { city: { type: "string" } },
