@@ -499,6 +499,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     const attributionHeaders = buildGatewayAttributionHeaders(model, config.runtimeIdentity);
 
     ({ messages, session } = await maybeCompact({
+      abortSignal: config.abortSignal,
       emit,
       emissionState,
       headers: attributionHeaders,
@@ -707,7 +708,10 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
       const executeModelCall = async (): Promise<HarnessStepResult> => {
         if (emit) {
-          const streamResult = await agent.stream({ messages: callMessages });
+          const streamResult = await agent.stream({
+            abortSignal: config.abortSignal,
+            messages: callMessages,
+          });
           const {
             handledInlineToolResultCallIds,
             inlineAuthorizationResults,
@@ -765,7 +769,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
           }
           return stepResult;
         }
-        await agent.generate({ messages: callMessages });
+        await agent.generate({ abortSignal: config.abortSignal, messages: callMessages });
         const stepResult = await hooks.stepResult;
         if (isEmptyModelResponse(stepResult)) {
           throw new EmptyModelResponseError();
@@ -1787,7 +1791,6 @@ async function continuePendingWorkflowInterrupt(input: {
     let resultIndex = 0;
     // Promise.all can park several child calls together. Resolve one ledger
     // entry per replay until every supplied child result has been consumed.
-    // eslint-disable-next-line no-constant-condition
     while (true) {
       continuationOutput = await continueWorkflowSandboxInterrupt({
         continuationSecurity,
@@ -1934,6 +1937,7 @@ function createNextCompactionConfig(
  * harness uses to rebuild `session.history` after the step.
  */
 async function maybeCompact(input: {
+  readonly abortSignal?: AbortSignal;
   readonly emit?: ToolLoopHarnessConfig["handleEvent"];
   readonly emissionState: ReturnType<typeof getHarnessEmissionState>;
   readonly headers?: Record<string, string>;
@@ -1978,6 +1982,7 @@ async function maybeCompact(input: {
     compaction.providerOptions,
     input.telemetry,
     input.headers,
+    input.abortSignal,
   );
 
   if (input.onCompaction) {

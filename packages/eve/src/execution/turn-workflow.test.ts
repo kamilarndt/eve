@@ -10,6 +10,19 @@ import {
 import { turnStep } from "#execution/workflow-steps.js";
 
 const resumeHookMock = vi.fn();
+const createHookMock = vi.fn((options?: { readonly token?: string }) => {
+  const pending = new Promise<never>(() => undefined);
+  return {
+    dispose: vi.fn(),
+    getConflict: vi.fn().mockResolvedValue(null),
+    then: pending.then.bind(pending),
+    token: options?.token ?? "cancel-token",
+  };
+});
+
+vi.mock("#compiled/@workflow/core/index.js", () => ({
+  createHook: (options?: { readonly token?: string }) => createHookMock(options),
+}));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
   resumeHook: (...args: unknown[]) => resumeHookMock(...args),
@@ -38,6 +51,7 @@ describe("turnWorkflow", () => {
     await turnWorkflow(input);
 
     expect(turnStep).toHaveBeenCalledWith({
+      abortSignal: expect.any(AbortSignal),
       input: input.stepInput.input,
       parentWritable,
       serializedContext: input.stepInput.serializedContext,
@@ -79,6 +93,7 @@ describe("turnWorkflow", () => {
     });
 
     expect(turnStep).toHaveBeenCalledWith({
+      abortSignal: expect.any(AbortSignal),
       input: delivery,
       parentWritable,
       serializedContext: { state: "start" },

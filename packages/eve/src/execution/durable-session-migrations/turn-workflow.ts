@@ -20,6 +20,8 @@ import { turnWorkflowInputV0ToV1 } from "./turn-workflow-v0-to-v1.js";
 export const TURN_WORKFLOW_INPUT_VERSION = 1;
 
 export interface TurnStepInput {
+  /** Cooperative cancellation signal owned by the root turn workflow. */
+  readonly abortSignal?: AbortSignal;
   readonly input: HookPayload | undefined;
   readonly parentWritable: WritableStream<Uint8Array>;
   readonly serializedContext: Record<string, unknown>;
@@ -35,6 +37,8 @@ export interface TurnWorkflowInput {
 }
 
 export interface TurnWorkflowDispatchInput {
+  /** Signal inherited from the root turn when dispatching nested turn work. */
+  readonly abortSignal?: AbortSignal;
   readonly capabilities: SessionCapabilities | undefined;
   readonly completionToken: string;
   readonly delivery: HookPayload;
@@ -52,6 +56,7 @@ export function createTurnWorkflowInput(input: TurnWorkflowDispatchInput): TurnW
     completionToken: input.completionToken,
     mode: input.mode,
     stepInput: {
+      abortSignal: input.abortSignal,
       input: input.delivery,
       parentWritable: input.parentWritable,
       serializedContext: input.serializedContext,
