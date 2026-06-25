@@ -1,3 +1,6 @@
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+
 import type { World } from "#compiled/@workflow/world/index.js";
 import { setWorld } from "#internal/workflow/runtime.js";
 
@@ -8,7 +11,14 @@ export interface ConfiguredWorkflowWorldModule {
 
 export interface InstallConfiguredWorkflowWorldInput {
   readonly module: ConfiguredWorkflowWorldModule | (() => unknown);
+  /** The npm package name of the configured Workflow world (e.g. `"@workflow/world-postgres"`). */
+  readonly packageName?: string;
 }
+
+// Stamped at build time with the major version of @workflow/world bundled by eve.
+// The stamp script sets this to a plain integer string (e.g. "5") so the startsWith
+// sentinel check below can detect an unstamped local-build token.
+const BUNDLED_WORKFLOW_WORLD_MAJOR: string = "__WORKFLOW_WORLD_MAJOR__";
 
 /**
  * Installs a Workflow world selected by the compiled agent config.
@@ -16,10 +26,92 @@ export interface InstallConfiguredWorkflowWorldInput {
 export async function installConfiguredWorkflowWorld(
   input: InstallConfiguredWorkflowWorldInput,
 ): Promise<World> {
+  if (input.packageName !== undefined) {
+    assertWorldPackageCompatibility(input.packageName);
+  }
+
   const world = await createWorkflowWorld(input);
   setWorld(world);
   await world.start?.();
   return world;
+}
+
+/**
+ * Checks that the installed world package declares a `@workflow/world` dependency
+ * whose major version matches the one bundled by eve. Throws an actionable error if
+ * they differ; silently skips the check when the package.json cannot be resolved (e.g.
+ * in unusual bundled deployments that do not include package metadata).
+ */
+function assertWorldPackageCompatibility(packageName: string): void {
+  const expectedMajor = resolveExpectedWorkflowWorldMajor();
+  if (expectedMajor === null) {
+    // Unstamped local build — skip the check.
+    return;
+  }
+
+  let packageJsonPath: string;
+  try {
+    const req = createRequire(process.cwd() + "/");
+    packageJsonPath = req.resolve(`${packageName}/package.json`);
+  } catch {
+    // Cannot locate the package.json — world package may be bundled without metadata.
+    // Proceed and let later runtime errors surface any real incompatibility.
+    return;
+  }
+
+  let worldPkgJson: Record<string, unknown>;
+  try {
+    worldPkgJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as Record<string, unknown>;
+  } catch {
+    return;
+  }
+
+  const deps = (worldPkgJson["dependencies"] ?? {}) as Record<string, unknown>;
+  const peerDeps = (worldPkgJson["peerDependencies"] ?? {}) as Record<string, unknown>;
+  const worldVersionRange =
+    (deps["@workflow/world"] as string | undefined) ??
+    (peerDeps["@workflow/world"] as string | undefined);
+
+  if (typeof worldVersionRange !== "string") {
+    // World package does not declare a @workflow/world dependency — nothing to check.
+    return;
+  }
+
+  const installedMajor = extractMajorFromVersionRange(worldVersionRange);
+  if (installedMajor === null) {
+    return;
+  }
+
+  if (installedMajor !== expectedMajor) {
+    throw new Error(
+      `Configured Workflow world "${packageName}" requires @workflow/world major ${installedMajor}, ` +
+        `but eve bundles @workflow/world major ${expectedMajor}. ` +
+        `Install a compatible world package version and restart.`,
+    );
+  }
+}
+
+function resolveExpectedWorkflowWorldMajor(): number | null {
+  // The token starts with "__" in an unstamped build.
+  if (BUNDLED_WORKFLOW_WORLD_MAJOR.startsWith("__")) {
+    return null;
+  }
+  const major = parseInt(BUNDLED_WORKFLOW_WORLD_MAJOR, 10);
+  return Number.isFinite(major) ? major : null;
+}
+
+/**
+ * Extracts the major version number from a semver range or version string.
+ * Returns null when the string does not start with a recognizable major number.
+ * Handles common range prefixes: `^`, `~`, `>=`, `>`, `=`, whitespace.
+ */
+function extractMajorFromVersionRange(range: string): number | null {
+  const match = range.trim().match(/^[~^>=\s]*(\d+)\./);
+  if (!match) return null;
+  const majorStr = match[1];
+  if (majorStr === undefined) return null;
+  const major = parseInt(majorStr, 10);
+  return Number.isFinite(major) ? major : null;
 }
 
 async function createWorkflowWorld(input: InstallConfiguredWorkflowWorldInput): Promise<World> {

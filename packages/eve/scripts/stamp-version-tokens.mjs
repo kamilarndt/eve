@@ -18,13 +18,23 @@ async function resolveCatalogVersion(packageName) {
     }
     if (inCatalog) {
       if (/^\S/.test(line)) break;
-      const match = line.match(/^\s+(?:"([^"]+)"|([\w@/.-]+)):\s*"([^"]+)"/);
+      const match = line.match(/^\s+(?:"([^"]+)"|(\w+[\w@/.-]*)):\s*"([^"]+)"/);
       if (!match) continue;
       const name = match[1] ?? match[2];
       if (name === packageName) return match[3];
     }
   }
   throw new Error(`Could not find "${packageName}" in catalog at ${workspaceYamlPath}`);
+}
+
+/**
+ * Extracts the major version integer from a version string like "5.0.0-beta.13".
+ * Returns the integer as a string (e.g. "5").
+ */
+function extractMajorVersion(version) {
+  const match = version.match(/^(\d+)\./);
+  if (!match) throw new Error(`Cannot extract major from version string: "${version}"`);
+  return match[1];
 }
 
 // These tokens are authored in source so scaffold templates can pin the same
@@ -39,9 +49,18 @@ if (typeof nodeEngine !== "string") {
   throw new Error("eve package.json is missing a string engines.node");
 }
 
+// Resolve the major version of @workflow/world bundled by eve so the runtime
+// compatibility check in configure-world.ts can compare against user-installed worlds.
+const workflowWorldVersion = packageJson.devDependencies?.["@workflow/world"];
+if (typeof workflowWorldVersion !== "string") {
+  throw new Error('eve package.json is missing a devDependencies["@workflow/world"] entry');
+}
+const workflowWorldMajor = extractMajorVersion(workflowWorldVersion);
+
 const replacements = {
   __EVE_PACKAGE_VERSION__: packageJson.version,
   __NODE_ENGINE__: nodeEngine,
+  __WORKFLOW_WORLD_MAJOR__: workflowWorldMajor,
   __AI_SDK_VERSION__: await resolveCatalogVersion("ai"),
   __VERCEL_CONNECT_VERSION__: await resolveCatalogVersion("@vercel/connect"),
   __NEXT_VERSION__: await resolveCatalogVersion("next"),

@@ -61,6 +61,29 @@ describe("installConfiguredWorkflowWorld", () => {
 
     expect(mocks.setWorld).not.toHaveBeenCalled();
   });
+
+  it("skips the compatibility check when no packageName is provided", async () => {
+    const world = createMockWorld();
+
+    // No packageName — should install without attempting to resolve any package.json.
+    await expect(
+      installConfiguredWorkflowWorld({
+        module: { default: () => world },
+      }),
+    ).resolves.toBe(world);
+  });
+
+  it("skips the compatibility check when BUNDLED_WORKFLOW_WORLD_MAJOR is unstamped", async () => {
+    // In unit tests the token is never stamped, so the check must be a no-op.
+    const world = createMockWorld();
+
+    await expect(
+      installConfiguredWorkflowWorld({
+        module: { default: () => world },
+        packageName: "@workflow/world-postgres",
+      }),
+    ).resolves.toBe(world);
+  });
 });
 
 function createMockWorld() {

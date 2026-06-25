@@ -74,8 +74,15 @@ export default defineAgent({
 });
 ```
 
-Install that package in your app. It should export a default factory or
-`createWorld()` function.
+Install the world package, pinning to a version whose major matches the `@workflow/world` major that this version of eve bundles. Check the eve [CHANGELOG](https://github.com/vercel/eve/blob/main/packages/eve/CHANGELOG.md) or the `@workflow/world` entry in eve's `package.json` for the exact bundled version. For example, if eve bundles `@workflow/world@5.x`, install a world package that depends on `@workflow/world@5.x`:
+
+```bash
+npm install @workflow/world-postgres@5
+```
+
+Eve checks the major version at startup and throws an actionable error if the world package requires a different `@workflow/world` major than the one bundled. The error names the configured package and both version majors.
+
+The world package should export a default factory or `createWorld()` function.
 
 Put credentials and host-specific options in runtime environment variables read
 by the world package, not in `agent.ts`. If the installed package must stay
