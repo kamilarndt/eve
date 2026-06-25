@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ClientSession } from "#client/session.js";
-import type { SessionState } from "#client/types.js";
+import type { ClientRedirectPolicy, SessionState } from "#client/types.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -9,14 +9,19 @@ afterEach(() => {
 
 function createSession(
   state: SessionState = { streamIndex: 0 },
-  options: { readonly preserveCompletedSessions?: boolean } = {},
+  options: {
+    readonly headers?: Readonly<Record<string, string>>;
+    readonly preserveCompletedSessions?: boolean;
+    readonly redirect?: ClientRedirectPolicy;
+  } = {},
 ) {
   const context: ConstructorParameters<typeof ClientSession>[0] = {
     host: "https://eve.test",
     maxReconnectAttempts: 0,
     preserveCompletedSessions: options.preserveCompletedSessions ?? false,
-    async resolveHeaders() {
-      return new Headers();
+    redirect: options.redirect,
+    async resolveHeaders(perRequest) {
+      return new Headers({ ...options.headers, ...perRequest });
     },
   };
 
@@ -34,6 +39,10 @@ function createAcceptedResponse() {
   );
 }
 
+function createContinuedResponse() {
+  return Response.json({ ok: true, sessionId: "session_1" }, { status: 200 });
+}
+
 function createStreamResponse(events: readonly unknown[]) {
   const encoder = new TextEncoder();
   return new Response(
@@ -49,6 +58,75 @@ function createStreamResponse(events: readonly unknown[]) {
 }
 
 describe("ClientSession", () => {
+  it("cancels a message response through the authenticated turn route", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createAcceptedResponse())
+      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 202 }));
+    const session = createSession(
+      { streamIndex: 0 },
+      { headers: { authorization: "Bearer test" }, redirect: "manual" },
+    );
+
+    const response = await session.send({
+      headers: { "x-request-id": "request-1" },
+      message: "Run until cancelled.",
+    });
+    await response.cancel();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [url, init] = fetchMock.mock.calls[1]!;
+    expect(String(url)).toBe("https://eve.test/eve/v1/session/session_1/cancel");
+    expect(init?.method).toBe("POST");
+    expect(init?.redirect).toBe("manual");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      continuationToken: "eve:test",
+      scope: "turn",
+    });
+    const headers = init?.headers as Headers;
+    expect(headers.get("authorization")).toBe("Bearer test");
+    expect(headers.get("x-request-id")).toBe("request-1");
+  });
+
+  it("retains the existing continuation token on follow-up responses", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createContinuedResponse())
+      .mockResolvedValueOnce(Response.json({ ok: true }, { status: 202 }));
+    const session = createSession({
+      continuationToken: "eve:existing",
+      sessionId: "session_1",
+      streamIndex: 0,
+    });
+
+    const response = await session.send("Follow up.");
+    await response.cancel();
+
+    expect(response.continuationToken).toBe("eve:existing");
+    const init = fetchMock.mock.calls[1]?.[1];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      continuationToken: "eve:existing",
+      scope: "turn",
+    });
+  });
+
+  it("throws ClientError when turn cancellation is rejected", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(createAcceptedResponse())
+      .mockResolvedValueOnce(
+        Response.json({ error: "No active turn.", ok: false }, { status: 409 }),
+      );
+    const session = createSession();
+    const response = await session.send("Run until cancelled.");
+
+    await expect(response.cancel()).rejects.toMatchObject({
+      body: JSON.stringify({ error: "No active turn.", ok: false }),
+      message: "No active turn.",
+      name: "ClientError",
+      status: 409,
+    });
+  });
+
   it("serializes clientContext when sending a create-session message", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(createAcceptedResponse());
     const session = createSession();

@@ -11,6 +11,7 @@ import type { MessageResult } from "#client/types.js";
  * Internal configuration passed to construct a {@link MessageResponse}.
  */
 interface MessageResponseInput {
+  readonly cancelTurn: () => Promise<void>;
   readonly continuationToken?: string;
   readonly createStream: () => AsyncGenerator<HandleMessageStreamEvent>;
   readonly sessionId: string;
@@ -35,13 +36,26 @@ export class MessageResponse<TOutput = unknown> implements AsyncIterable<HandleM
   readonly sessionId: string;
 
   #consumed = false;
+  readonly #cancelTurn: () => Promise<void>;
   readonly #createStream: () => AsyncGenerator<HandleMessageStreamEvent>;
 
   /** @internal */
   constructor(input: MessageResponseInput) {
+    this.#cancelTurn = input.cancelTurn;
     this.continuationToken = input.continuationToken;
     this.sessionId = input.sessionId;
     this.#createStream = input.createStream;
+  }
+
+  /**
+   * Requests server-side cancellation of this response's active turn.
+   *
+   * This does not merely stop local stream consumption: the server aborts
+   * active model, tool, and descendant work and settles the session at
+   * `turn.cancelled` followed by `session.waiting`.
+   */
+  async cancel(): Promise<void> {
+    await this.#cancelTurn();
   }
 
   /**

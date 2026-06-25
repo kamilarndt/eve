@@ -2,6 +2,7 @@ import type { HandleMessageStreamEvent } from "#protocol/message.js";
 import { EVE_SESSION_ID_HEADER, isCurrentTurnBoundaryEvent } from "#protocol/message.js";
 import {
   EVE_CREATE_SESSION_ROUTE_PATH,
+  createEveCancelTurnRoutePath,
   createEveContinueSessionRoutePath,
 } from "#protocol/routes.js";
 import { ClientError } from "#client/client-error.js";
@@ -70,13 +71,39 @@ export class ClientSession {
     const payload = normalizeSendTurnInput(input);
     const state = this.#state;
     const postResult = await this.#postTurn(payload, state);
-    const { continuationToken, sessionId } = postResult;
+    const continuationToken = postResult.continuationToken ?? state.continuationToken;
+    const { sessionId } = postResult;
 
     return new MessageResponse<TOutput>({
+      cancelTurn: () => this.#cancelTurn(sessionId, continuationToken, payload.headers),
       continuationToken,
       createStream: () => this.#createEventStream(sessionId, continuationToken, state, payload),
       sessionId,
     });
+  }
+
+  async #cancelTurn(
+    sessionId: string,
+    continuationToken: string | undefined,
+    headersInput?: Readonly<Record<string, string>>,
+  ): Promise<void> {
+    if (continuationToken === undefined) {
+      throw new Error("Message response has no continuation token.");
+    }
+
+    const url = createClientUrl(this.#context.host, createEveCancelTurnRoutePath(sessionId));
+    const headers = await this.#context.resolveHeaders(headersInput);
+    headers.set("content-type", "application/json");
+    const response = await fetch(url, {
+      body: JSON.stringify({ scope: "turn", continuationToken }),
+      headers,
+      method: "POST",
+      redirect: this.#context.redirect,
+    });
+
+    if (!response.ok) {
+      throw new ClientError(response.status, await response.text());
+    }
   }
 
   /**

@@ -127,6 +127,22 @@ await resumed.result();
 
 You can send `message`, `inputResponses`, and `clientContext` together when the resumed turn needs both a human answer and follow-up text.
 
+## Cancel an active turn
+
+Call `cancel()` on the response whose turn should stop:
+
+```ts
+const response = await session.send("Run the long analysis.");
+
+await response.cancel();
+const result = await response.result();
+```
+
+Cancellation stops server-side model, tool, and descendant work. The stream settles with
+`turn.cancelled` followed by `session.waiting`, so the same `ClientSession` can send a later
+follow-up. Aborting a request or stream with an `AbortSignal` only stops the local transport; it
+does not request server-side cancellation.
+
 ## Single-use responses
 
 `MessageResponse` is single-use. Either aggregate it:
