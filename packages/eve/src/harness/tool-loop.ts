@@ -6,6 +6,7 @@ import {
 } from "#compiled/@opentelemetry/api/index.js";
 import {
   isStepCount,
+  type ContentPart,
   type LanguageModel,
   type ModelMessage,
   type SystemModelMessage,
@@ -77,6 +78,7 @@ import {
   getHarnessEmissionState,
   setHarnessEmissionState,
 } from "#harness/emission.js";
+import { createStreamActionBatch } from "#harness/stream-actions.js";
 import {
   extractQuestionInputRequests,
   extractToolApprovalInputRequests,
@@ -663,10 +665,18 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
         session,
       });
 
+      let streamActionBatch: ReturnType<typeof createStreamActionBatch> | undefined;
       const agentSettings = {
         headers: attributionHeaders,
         instructions,
         model,
+        async onLanguageModelCallEnd({
+          content,
+        }: {
+          readonly content: readonly ContentPart<ToolSet>[];
+        }) {
+          await streamActionBatch?.onLanguageModelCallEnd(content);
+        },
         onToolExecutionEnd: logToolExecutionError,
         // Replaces the AI SDK's default `console.error`; the harness still
         // emits stream events, this just keeps the raw error from being silent.
@@ -691,16 +701,21 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
       const executeModelCall = async (): Promise<HarnessStepResult> => {
         if (emit) {
-          const streamResult = await agent.stream({ messages: callMessages });
           const excludedActionToolNames = new Set([ASK_QUESTION_TOOL_NAME, FINAL_OUTPUT_TOOL_NAME]);
+          streamActionBatch = createStreamActionBatch({
+            emitFn: emit,
+            excludedActionToolNames,
+            state: emissionState,
+            tools: config.tools,
+          });
+          const streamResult = await agent.stream({ messages: callMessages });
           const {
-            emittedActionCallIds,
             handledInlineToolResultCallIds,
             inlineAuthorizationResults,
             inlineToolResultParts,
           } = await emitStreamContent(emit, emissionState, streamResult.fullStream, {
+            actionBatch: streamActionBatch,
             excludedActionToolNames,
-            tools: config.tools,
           });
           const stepResult = await hooks.stepResult;
           if (
@@ -711,7 +726,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             throw new EmptyModelResponseError();
           }
           await emitStepActions(emit, emissionState, stepResult, {
-            emittedActionCallIds,
+            emittedActionCallIds: streamActionBatch.emittedActionCallIds,
             excludedActionToolNames,
             handledInlineToolResultCallIds,
             tools: config.tools,
