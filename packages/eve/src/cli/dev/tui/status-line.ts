@@ -7,6 +7,8 @@ import type { VercelStatusSnapshot } from "./vercel-status.js";
 import type { ModelEndpointStatus } from "#shared/model-endpoint-status.js";
 
 export interface StatusLineInput {
+  /** Port of the connected local development server; omitted for remote sessions. */
+  serverPort?: string;
   /** Resolved model slug, e.g. "anthropic/claude-sonnet-4-6"; absent when `/eve/v1/info` failed. */
   model?: string;
   /** Preformatted token-flow segment (formatTokenFlow output), e.g. `↑ 394.4K ↓ 4.3K`. */
@@ -37,6 +39,14 @@ function renderModel(
   return input.theme.colors.dim(model);
 }
 
+function renderServerPort(
+  input: Pick<StatusLineInput, "remote" | "serverPort" | "theme">,
+): string | undefined {
+  if (input.remote !== undefined || input.serverPort === undefined) return undefined;
+  const c = input.theme.colors;
+  return c.inverse(c.gray(` :${input.serverPort} `));
+}
+
 function renderEndpoint(
   input: Pick<StatusLineInput, "endpoint" | "remote" | "theme" | "vercel">,
 ): string | undefined {
@@ -51,7 +61,7 @@ function renderEndpoint(
 }
 
 /**
- * Builds `↗ project (environment) · model · tokens · /deploy pending`.
+ * Builds `↗ project (environment) · :port · model · tokens · /deploy pending`.
  * Remote sessions omit endpoint state and keep their badge as the final
  * narrow-width fallback. Returns undefined when every segment is empty.
  */
@@ -60,6 +70,7 @@ export function buildStatusLine(input: StatusLineInput): string | undefined {
   const c = theme.colors;
 
   const logLevel = input.logLevel === undefined ? undefined : c.cyan(`logs: ${input.logLevel}`);
+  const serverPort = renderServerPort(input);
   const model = renderModel(input);
   const tokens = input.tokens === undefined ? undefined : c.dim(input.tokens);
   const pending = input.vercel?.pendingDeploy ? c.yellow("/deploy pending") : undefined;
@@ -74,9 +85,10 @@ export function buildStatusLine(input: StatusLineInput): string | undefined {
   // leads every variant and gets the final stand-alone fallback. Without a
   // remote, the logs hint retains its previous priority.
   const variants = [
-    compose([remote?.full, logLevel, model, tokens, endpoint, pending]),
-    compose([remote?.full, logLevel, model, tokens, pending]),
-    compose([remote?.full, logLevel, tokens, pending]),
+    compose([remote?.full, logLevel, serverPort, model, tokens, endpoint, pending]),
+    compose([remote?.full, logLevel, serverPort, model, tokens, pending]),
+    compose([remote?.full, logLevel, serverPort, tokens, pending]),
+    compose([remote?.full, logLevel, serverPort]),
     compose([remote?.full, logLevel]),
     compose([remote?.badge, logLevel]),
     compose([remote?.badge]),

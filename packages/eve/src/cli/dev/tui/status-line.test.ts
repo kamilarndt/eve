@@ -37,6 +37,18 @@ function deployedRemote(
 }
 
 describe("buildStatusLine", () => {
+  it("renders the local server port as a gray reverse-video badge before the model", () => {
+    const line = buildStatusLine({
+      serverPort: "3000",
+      model: "openai/gpt-5.5",
+      theme,
+      width: 120,
+    })!;
+
+    expect(stripAnsi(line)).toBe(" :3000   ·  openai/gpt-5.5");
+    expect(line).toContain("\x1b[7m\x1b[90m :3000 \x1b[39m\x1b[27m");
+  });
+
   it("renders all segments in order with dot separators", () => {
     const line = buildStatusLine({
       model: "anthropic/claude-sonnet-4-6",

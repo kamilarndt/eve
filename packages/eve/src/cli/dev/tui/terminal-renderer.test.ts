@@ -2714,7 +2714,11 @@ describe("TerminalRenderer status line", () => {
     const promptRow = lines.findIndex((line) => line.includes("❯"));
     expect(promptRow).toBeGreaterThan(-1);
     const statusRow = lines.slice(promptRow + 1).join("\n");
+    expect(statusRow).toContain(":3000");
     expect(statusRow).toContain("anthropic/claude-sonnet-4-6");
+    expect(statusRow.indexOf(":3000")).toBeLessThan(
+      statusRow.indexOf("anthropic/claude-sonnet-4-6"),
+    );
     // The linked project folds into the connected gateway label.
     expect(statusRow).toContain("AI Gateway (my-agent)");
     expect(statusRow).not.toContain("⚠ AI Gateway");
