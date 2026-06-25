@@ -15,6 +15,12 @@ export const SANDBOX_CLI_TOKEN = "eve-greet-cli-ok-R7M";
 export const SESSION_MARKER_PATH = "/workspace/session-marker.txt";
 export const SESSION_MARKER_TOKEN = "sandbox-onsession-ok-X5T";
 
+/** Loopback HTTP server started by the sandbox `onSession` hook for fanout testing. */
+export const FANOUT_SERVER_URL = "http://127.0.0.1:43100/search";
+
+/** Fixed-latency loopback endpoint used to measure Bash curl scheduling. */
+export const FANOUT_DELAY_SERVER_URL = "http://127.0.0.1:43100/delay";
+
 /** Mounted from `agent/sandbox/workspace/seed-data.txt` at session start. */
 export const WORKSPACE_SEED_PATH = "/workspace/seed-data.txt";
 export const WORKSPACE_SEED_TOKEN = "sandbox-workspace-seed-ok-Z9W";

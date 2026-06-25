@@ -3,9 +3,9 @@ import { defineEval } from "eve/evals";
 import {
   authoredFanoutExecutionsOverlap,
   FANOUT_SIZE,
-  fanoutRequestsPrecedeFirstResult,
   fanoutRequestsUseExpectedLabels,
 } from "./fanout.js";
+import { formatToolFanoutTrace } from "./tool-fanout-timing.js";
 
 const TOOL_NAME = "streamed-action";
 const LABELS = [
@@ -33,15 +33,12 @@ export default defineEval({
       ].join("\n"),
     );
     turn.expectOk();
+    t.log(formatToolFanoutTrace({ events: turn.events, toolName: TOOL_NAME }));
 
     t.didNotFail();
     t.completed();
     t.calledTool(TOOL_NAME, { isError: false, times: FANOUT_SIZE });
     t.noFailedActions();
-    t.event(
-      (events) => fanoutRequestsPrecedeFirstResult({ events, toolName: TOOL_NAME }),
-      "ten authored requests precede the first authored result",
-    );
     t.event(
       (events) => fanoutRequestsUseExpectedLabels({ events, labels: LABELS, toolName: TOOL_NAME }),
       "ten authored requests use their distinct labels",

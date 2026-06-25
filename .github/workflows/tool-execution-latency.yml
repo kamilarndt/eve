@@ -1,0 +1,114 @@
+name: Tool Execution Latency
+
+on:
+  workflow_dispatch:
+    inputs:
+      trials:
+        default: "5"
+        description: "Independent real-model trials per fixture"
+        required: true
+        type: string
+
+concurrency:
+  group: tool-execution-latency-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: latency (${{ matrix.name }})
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - eval: static-tools/fanout-authored
+            fixture: e2e/fixtures/agent-tools
+            name: authored
+          - eval: sandbox/bash-curl-latency-fanout
+            fixture: e2e/fixtures/agent-tools-sandbox
+            name: bash-curl
+
+    env:
+      AI_GATEWAY_API_KEY: ${{ secrets.AI_GATEWAY_API_KEY }}
+      TRIALS: ${{ inputs.trials }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build eve package
+        run: pnpm --filter eve run build
+
+      - name: Run repeated evals
+        id: evals
+        env:
+          ARTIFACT_ROOT: ${{ github.workspace }}/.tool-execution-latency/${{ matrix.name }}
+          EVAL_ID: ${{ matrix.eval }}
+          FIXTURE_DIR: ${{ matrix.fixture }}
+        run: |
+          set -uo pipefail
+          case "$TRIALS" in
+            ''|*[!0-9]*)
+              echo "trials must be a positive integer; got $TRIALS" >&2
+              exit 2
+              ;;
+          esac
+          if [ "$TRIALS" -lt 1 ]; then
+            echo "trials must be a positive integer; got $TRIALS" >&2
+            exit 2
+          fi
+
+          mkdir -p "$ARTIFACT_ROOT"
+          failures=0
+          cd "$FIXTURE_DIR"
+          for trial in $(seq 1 "$TRIALS"); do
+            rm -rf .eve/evals
+            if ! pnpm exec eve eval "$EVAL_ID" --strict --verbose; then
+              failures=1
+            fi
+            if [ -d .eve/evals ]; then
+              cp -R .eve/evals "$ARTIFACT_ROOT/trial-$trial"
+            else
+              echo "Trial $trial did not produce eval artifacts." >&2
+              failures=1
+            fi
+          done
+
+          echo "failed=$failures" >> "$GITHUB_OUTPUT"
+
+      - name: Summarize trials
+        if: always()
+        env:
+          ARTIFACT_ROOT: ${{ github.workspace }}/.tool-execution-latency/${{ matrix.name }}
+        run: |
+          node scripts/summarize-tool-execution-latency.mjs "$ARTIFACT_ROOT" > "$ARTIFACT_ROOT/summary.json"
+          node scripts/summarize-tool-execution-latency.mjs "$ARTIFACT_ROOT" markdown >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload timing artifacts
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v6
+        with:
+          name: tool-execution-latency-${{ matrix.name }}
+          path: .tool-execution-latency/${{ matrix.name }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Fail when a trial failed
+        if: always() && steps.evals.outputs.failed == '1'
+        run: exit 1

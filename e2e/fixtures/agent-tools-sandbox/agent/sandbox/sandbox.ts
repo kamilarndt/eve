@@ -44,11 +44,110 @@ export const SANDBOX_CLI_TOKEN = "eve-greet-cli-ok-R7M";
 export const SANDBOX_SESSION_MARKER_PATH = "/workspace/session-marker.txt";
 export const SANDBOX_SESSION_MARKER_TOKEN = "sandbox-onsession-ok-X5T";
 
+/** Loopback search endpoint used to prove concurrent Bash HTTP requests. */
+export const FANOUT_SERVER_PORT = 43_100;
+export const FANOUT_SERVER_PATH = "/workspace/eve-fanout-server.py";
+const FANOUT_SERVER_LOG_PATH = "/workspace/eve-fanout-server.log";
+const FANOUT_DELAY_MS = 500;
+const FANOUT_SIZE = 10;
+
 const CLI_SCRIPT = [
   "#!/usr/bin/env python3",
   "import sys",
   'name = sys.argv[1] if len(sys.argv) > 1 else "world"',
   `print(f"${SANDBOX_CLI_TOKEN}:{name}")`,
+  "",
+].join("\n");
+
+const FANOUT_SERVER_SCRIPT = [
+  "import json",
+  "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer",
+  "from threading import Condition",
+  "from time import monotonic, sleep",
+  "from urllib.parse import parse_qs, urlparse",
+  "",
+  `EXPECTED_REQUESTS = ${FANOUT_SIZE}`,
+  "arrivals = {}",
+  "condition = Condition()",
+  "released_at_ms = None",
+  "",
+  "def now_ms():",
+  "    return int(monotonic() * 1000)",
+  "",
+  "class Handler(BaseHTTPRequestHandler):",
+  "    def do_GET(self):",
+  "        global released_at_ms",
+  "        parsed = urlparse(self.path)",
+  "        if parsed.path == '/health':",
+  "            self.respond(200, {'ok': True})",
+  "            return",
+  "        if parsed.path == '/delay':",
+  "            self.delay(parsed)",
+  "            return",
+  "        if parsed.path != '/search':",
+  "            self.respond(404, {'error': 'not found'})",
+  "            return",
+  "",
+  "        query = parse_qs(parsed.query)",
+  "        label = query.get('label', [''])[0]",
+  "        search_query = query.get('q', [''])[0]",
+  "        if not label:",
+  "            self.respond(400, {'error': 'label is required'})",
+  "            return",
+  "",
+  "        with condition:",
+  "            if label in arrivals:",
+  "                self.respond(409, {'error': 'duplicate label'})",
+  "                return",
+  "            arrivals[label] = now_ms()",
+  "            if len(arrivals) == EXPECTED_REQUESTS:",
+  "                released_at_ms = now_ms()",
+  "                condition.notify_all()",
+  "",
+  "            deadline = monotonic() + 20",
+  "            while released_at_ms is None:",
+  "                remaining = deadline - monotonic()",
+  "                if remaining <= 0:",
+  "                    self.respond(504, {'error': 'fanout barrier timed out'})",
+  "                    return",
+  "                condition.wait(remaining)",
+  "",
+  "            self.respond(200, {",
+  "                'label': label,",
+  "                'query': search_query,",
+  "                'receivedAtMs': arrivals[label],",
+  "                'releasedAtMs': released_at_ms,",
+  "            })",
+  "",
+  "    def delay(self, parsed):",
+  "        query = parse_qs(parsed.query)",
+  "        label = query.get('label', [''])[0]",
+  "        search_query = query.get('q', [''])[0]",
+  "        if not label:",
+  "            self.respond(400, {'error': 'label is required'})",
+  "            return",
+  "",
+  "        received_at_ms = now_ms()",
+  `        sleep(${FANOUT_DELAY_MS} / 1000)`,
+  "        self.respond(200, {",
+  "            'label': label,",
+  "            'query': search_query,",
+  "            'receivedAtMs': received_at_ms,",
+  "            'completedAtMs': now_ms(),",
+  "        })",
+  "",
+  "    def log_message(self, format, *args):",
+  "        return",
+  "",
+  "    def respond(self, status, body):",
+  "        encoded = json.dumps(body).encode('utf-8')",
+  "        self.send_response(status)",
+  "        self.send_header('Content-Type', 'application/json')",
+  "        self.send_header('Content-Length', str(len(encoded)))",
+  "        self.end_headers()",
+  "        self.wfile.write(encoded)",
+  "",
+  `ThreadingHTTPServer(('127.0.0.1', ${FANOUT_SERVER_PORT}), Handler).serve_forever()`,
   "",
 ].join("\n");
 
@@ -83,5 +182,22 @@ export default defineSandbox({
       path: SANDBOX_SESSION_MARKER_PATH,
       content: SANDBOX_SESSION_MARKER_TOKEN,
     });
+    await sandbox.writeTextFile({ path: FANOUT_SERVER_PATH, content: FANOUT_SERVER_SCRIPT });
+    const startServer = await sandbox.run({
+      command: [
+        `if ! curl -fsS http://127.0.0.1:${FANOUT_SERVER_PORT}/health >/dev/null; then`,
+        `  nohup python3 ${FANOUT_SERVER_PATH} >${FANOUT_SERVER_LOG_PATH} 2>&1 &`,
+        "fi",
+        "for attempt in $(seq 1 50); do",
+        `  if curl -fsS http://127.0.0.1:${FANOUT_SERVER_PORT}/health >/dev/null; then exit 0; fi`,
+        "  sleep 0.1",
+        "done",
+        `cat ${FANOUT_SERVER_LOG_PATH} >&2`,
+        "exit 1",
+      ].join("\n"),
+    });
+    if (startServer.exitCode !== 0) {
+      throw new Error(`Fanout server failed to start: ${startServer.stderr}`);
+    }
   },
 });
