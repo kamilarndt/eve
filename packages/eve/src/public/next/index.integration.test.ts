@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { DevelopmentServerState } from "#internal/nitro/host/dev-server-state.js";
+
 import {
   EVE_NEXT_SERVICE_PREFIX,
   withEve,
@@ -243,7 +245,7 @@ describe("withEve Vercel config", () => {
     });
   });
 
-  it("reuses an app-local development server registry before spawning", async () => {
+  it("reuses the app root's canonical development server", async () => {
     const appRoot = await createTempAppRoot();
     process.chdir(appRoot);
     const resolvedAppRoot = process.cwd();
@@ -252,27 +254,14 @@ describe("withEve Vercel config", () => {
       "fetch",
       vi.fn(async () => new Response(null, { status: 200 })),
     );
-    await mkdir(join(resolvedAppRoot, ".eve"), {
-      recursive: true,
-    });
-    await writeFile(
-      join(resolvedAppRoot, ".eve", "next-dev-server.json"),
-      `${JSON.stringify(
-        {
-          appRoot: resolvedAppRoot,
-          origin: "http://127.0.0.1:49152",
-          pid: null,
-          updatedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    await writeFile(join(resolvedAppRoot, "instructions.md"), "You are a test agent.\n");
+    await new DevelopmentServerState({ appRoot: resolvedAppRoot }).write("http://127.0.0.1:49152");
 
     const config = await resolveConfig(withEve<TestConfig>({}));
     const rewrites = await config.rewrites?.();
 
     expect(fetch).toHaveBeenCalledWith("http://127.0.0.1:49152/eve/v1/health", {
+      redirect: "error",
       signal: expect.any(AbortSignal),
     });
     expect(getBeforeFiles(rewrites)).toContainEqual({
