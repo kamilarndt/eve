@@ -1,6 +1,12 @@
 import { defaultBackend, defineSandbox } from "eve/sandbox";
 import { vercel } from "eve/sandbox/vercel";
 
+import {
+  CREDENTIAL_PROBE_PATH,
+  CREDENTIAL_PROBE_TOKEN,
+  CREDENTIAL_PROBE_UNAVAILABLE_PATH,
+} from "../credential-probe.js";
+
 /**
  * Sandbox lifecycle fixture exercising the surfaces an agent author relies
  * on. The matching evals live under `evals/sandbox/` and assert each piece
@@ -56,13 +62,38 @@ const authorSnapshotId = process.env.EVE_TEST_AUTHOR_SNAPSHOT_ID;
 const backend =
   authorSnapshotId !== undefined
     ? vercel({ source: { snapshotId: authorSnapshotId, type: "snapshot" } })
-    : defaultBackend();
+    : process.env.VERCEL === "1"
+      ? vercel({
+          networkPolicy: {
+            allow: {
+              "*.vercel.app": [
+                {
+                  auth: {
+                    getToken: async () => ({ token: CREDENTIAL_PROBE_TOKEN }),
+                  },
+                  match: { path: { exact: CREDENTIAL_PROBE_PATH } },
+                  transform: ({ token }) => [{ headers: { authorization: `Bearer ${token}` } }],
+                },
+                {
+                  auth: {
+                    getToken: async () => {
+                      throw new Error("credential-probe: intentionally unavailable credential");
+                    },
+                  },
+                  match: { path: { exact: CREDENTIAL_PROBE_UNAVAILABLE_PATH } },
+                  transform: ({ token }) => [{ headers: { authorization: `Bearer ${token}` } }],
+                },
+              ],
+            },
+          },
+        })
+      : defaultBackend();
 
 export default defineSandbox({
   backend,
   // Bump when the bootstrap output changes so the reusable template snapshot
   // is rebuilt rather than served stale.
-  revalidationKey: () => "agent-tools-sandbox-bootstrap-v2",
+  revalidationKey: () => "agent-tools-sandbox-bootstrap-v3",
   async bootstrap({ use }) {
     const sandbox = await use();
     await sandbox.writeTextFile({
