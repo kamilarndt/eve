@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
+import { getRun, getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
 
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
 import { createTestRuntime } from "#internal/testing/app-harness.js";
@@ -376,6 +376,100 @@ describe("workflowEntry integration", () => {
                 true,
           ),
         ).toBe(true);
+      } finally {
+        releaseTool();
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
+  it("settles a cancelled turn at turn.cancelled without failing the session", async () => {
+    let releaseTool = () => {};
+    let signalToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      signalToolStarted = resolve;
+    });
+    const waitForCancellationTool: ResolvedToolDefinition = {
+      description: "Wait until the active turn is cancelled.",
+      execute: createToolExecuteWithAuth({
+        scope: "wait_for_cancellation",
+        async execute(_input, rawCtx) {
+          const abortSignal = (rawCtx as ToolContext).abortSignal;
+          signalToolStarted();
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = () => reject(abortSignal.reason);
+            releaseTool = () => {
+              abortSignal.removeEventListener("abort", onAbort);
+              resolve();
+            };
+            if (abortSignal.aborted) {
+              onAbort();
+              return;
+            }
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+          });
+          return { status: "released" };
+        },
+      }),
+      inputSchema: {
+        additionalProperties: false,
+        properties: {},
+        type: "object",
+      },
+      logicalPath: "tools/wait_for_cancellation.ts",
+      name: "wait_for_cancellation",
+      sourceId: "tools/wait_for_cancellation.ts",
+      sourceKind: "module",
+    };
+    const runtime = createTestRuntime({
+      agent: { name: "workflow-entry-turn-cancellation" },
+      tools: [waitForCancellationTool],
+    });
+    const manifestTool = runtime.manifest.tools.find(
+      (tool) => tool.name === waitForCancellationTool.name,
+    );
+    if (manifestTool === undefined) {
+      throw new Error("Expected wait_for_cancellation to be present in the test manifest.");
+    }
+    runtime.moduleMap.nodes[ROOT_COMPILED_AGENT_NODE_ID]!.modules[manifestTool.sourceId] = {
+      default: { execute: waitForCancellationTool.execute },
+    };
+    const continuationToken = "http:workflow-entry-turn-cancellation";
+
+    await runtime.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "Use wait_for_cancellation before replying." },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken,
+            mode: "conversation",
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+
+      try {
+        await withTimeout(toolStarted, "wait_for_cancellation execution");
+        const cancellationHook = await resumeHook(`${continuationToken}:cancel`, {});
+
+        const cancelledTurn = await stream.nextTurn();
+        const cancelledTypes = cancelledTurn.map((event) => event.type);
+
+        expect(cancelledTypes.slice(-2)).toEqual(["turn.cancelled", "session.waiting"]);
+        expect(cancelledTypes).not.toContain("step.failed");
+        expect(cancelledTypes).not.toContain("turn.failed");
+        expect(cancelledTypes).not.toContain("session.failed");
+        expect(cancelledTypes).not.toContain("turn.completed");
+        expect(filterEventsByType(cancelledTurn, "turn.cancelled")).toEqual([
+          expect.objectContaining({
+            data: { sequence: 0, turnId: "turn_0" },
+          }),
+        ]);
+
+        await getRun(cancellationHook.runId).returnValue;
+        await expect(run.status).resolves.toBe("running");
       } finally {
         releaseTool();
         stream.dispose();

@@ -7,6 +7,7 @@ import {
   type TurnStepInput,
   type TurnWorkflowInput,
 } from "#execution/durable-session-migrations/turn-workflow.js";
+import { finalizeCancelledTurnStep } from "#execution/finalize-cancelled-turn-step.js";
 import { claimHookOwnership, disposeHook } from "#execution/hook-ownership.js";
 import { turnStep } from "#execution/workflow-steps.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
@@ -48,23 +49,35 @@ export async function turnWorkflow(rawInput: unknown): Promise<void> {
   };
 
   try {
-    if (cancelHook !== undefined) {
-      await claimHookOwnership(cancelHook);
+    let action: NextDriverAction;
+    try {
+      if (cancelHook !== undefined) {
+        await claimHookOwnership(cancelHook);
+      }
+
+      const execution = runTurnExecution(input, initialStepInput);
+      if (cancelHook === undefined || abortState.abortController === undefined) {
+        action = await execution;
+      } else {
+        const abortController = abortState.abortController;
+        action = await Promise.race([
+          execution,
+          cancelHook.then(() => {
+            abortController.abort();
+            return execution;
+          }),
+        ]);
+      }
+    } finally {
+      if (cancelHook !== undefined) {
+        await disposeHook(cancelHook);
+      }
     }
 
-    const execution = runTurnExecution(input, initialStepInput);
-    if (cancelHook === undefined || abortState.abortController === undefined) {
-      await execution;
-    } else {
-      const abortController = abortState.abortController;
-      await Promise.race([
-        execution,
-        cancelHook.then(() => {
-          abortController.abort();
-          return execution;
-        }),
-      ]);
-    }
+    await notifyDriverStep({
+      completionToken: input.completionToken,
+      payload: { action, kind: "turn-result" },
+    });
   } catch (error) {
     await notifyDriverStep({
       completionToken: input.completionToken,
@@ -74,53 +87,53 @@ export async function turnWorkflow(rawInput: unknown): Promise<void> {
       },
     });
     throw error;
-  } finally {
-    if (cancelHook !== undefined) {
-      await disposeHook(cancelHook);
-    }
   }
 }
 
 async function runTurnExecution(
   input: TurnWorkflowInput,
   initialStepInput: TurnStepInput,
-): Promise<void> {
+): Promise<NextDriverAction> {
   let currentStepInput = initialStepInput;
 
   while (true) {
-    const result = await turnStep(currentStepInput);
+    let result: Awaited<ReturnType<typeof turnStep>>;
+    try {
+      result = await turnStep(currentStepInput);
+    } catch (error) {
+      if (currentStepInput.abortSignal?.aborted !== true) {
+        throw error;
+      }
+
+      const cancelled = await finalizeCancelledTurnStep({
+        parentWritable: currentStepInput.parentWritable,
+        serializedContext: currentStepInput.serializedContext,
+        sessionState: currentStepInput.sessionState,
+      });
+      return {
+        kind: "park",
+        serializedContext: cancelled.serializedContext,
+        sessionState: cancelled.sessionState,
+      };
+    }
 
     if (result.action === "done") {
-      await notifyDriverStep({
-        completionToken: input.completionToken,
-        payload: {
-          action: {
-            kind: "done",
-            output: result.output ?? "",
-            isError: result.isError,
-            serializedContext: result.serializedContext,
-            sessionState: result.sessionState,
-          },
-          kind: "turn-result",
-        },
-      });
-      return;
+      return {
+        kind: "done",
+        output: result.output ?? "",
+        isError: result.isError,
+        serializedContext: result.serializedContext,
+        sessionState: result.sessionState,
+      };
     }
 
     if (result.action === "dispatch-workflow-runtime-actions") {
-      await notifyDriverStep({
-        completionToken: input.completionToken,
-        payload: {
-          action: {
-            kind: "dispatch-workflow-runtime-actions",
-            pendingActionKeys: result.pendingRuntimeActionKeys,
-            serializedContext: result.serializedContext,
-            sessionState: result.sessionState,
-          },
-          kind: "turn-result",
-        },
-      });
-      return;
+      return {
+        kind: "dispatch-workflow-runtime-actions",
+        pendingActionKeys: result.pendingRuntimeActionKeys,
+        serializedContext: result.serializedContext,
+        sessionState: result.sessionState,
+      };
     }
 
     if (result.action === "park") {
@@ -150,11 +163,7 @@ async function runTurnExecution(
               authorizationNames: result.authorizationNames,
             };
 
-      await notifyDriverStep({
-        completionToken: input.completionToken,
-        payload: { action, kind: "turn-result" },
-      });
-      return;
+      return action;
     }
 
     currentStepInput = {

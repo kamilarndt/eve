@@ -191,7 +191,8 @@ attachment, restart waits for the release barrier and creates S2 with that repla
 - Cooperative abort reaches models, tools, sandboxes, and delegates; the runtime remains responsible
   for terminating work that does not cooperate.
 - Late descendant results cannot resume a cancelled ancestor or mutate a replacement session.
-- Turn cancellation ends at `session.waiting`; session cancellation ends at `session.cancelled`.
+- Turn cancellation emits `turn.cancelled` and then ends at `session.waiting`; session cancellation
+  ends at `session.cancelled`.
 - Cancellation is intentional control flow and does not trigger generic user-facing failure output.
 - Completed external side effects remain recorded and are not rolled back.
 

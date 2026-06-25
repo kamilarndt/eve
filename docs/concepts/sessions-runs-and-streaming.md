@@ -56,6 +56,7 @@ The stream is newline-delimited JSON (NDJSON), one event per line:
 | `authorization.completed` | A connection's authorization resolved; carries `outcome`.                                                        |
 | `step.completed`          | A model step finished; carries `finishReason` and usage.                                                         |
 | `step.failed`             | A model step failed; carries `{ code, message, details? }`.                                                      |
+| `turn.cancelled`          | The active turn was intentionally cancelled; followed by `session.waiting`.                                      |
 | `turn.completed`          | The turn finished.                                                                                               |
 | `turn.failed`             | The turn failed; carries `{ code, message, details? }`.                                                          |
 | `session.waiting`         | The session parked, waiting for the next input (a message, an answer).                                           |

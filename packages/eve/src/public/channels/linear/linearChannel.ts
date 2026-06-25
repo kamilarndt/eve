@@ -144,6 +144,7 @@ export interface LinearChannelEvents {
   readonly "message.completed"?: LinearEventHandler<"message.completed">;
   readonly "message.appended"?: LinearEventHandler<"message.appended">;
   readonly "input.requested"?: LinearEventHandler<"input.requested">;
+  readonly "turn.cancelled"?: LinearEventHandler<"turn.cancelled">;
   readonly "turn.failed"?: LinearEventHandler<"turn.failed">;
   readonly "turn.completed"?: LinearEventHandler<"turn.completed">;
   readonly "session.failed"?: LinearSessionFailedHandler;

@@ -142,6 +142,10 @@ describe("turnWorkflow", () => {
 
     await expect(workflow).resolves.toBeUndefined();
     expect(hook.dispose).toHaveBeenCalledTimes(1);
+    expect(resumeHookMock).toHaveBeenCalledTimes(1);
+    expect(hook.dispose.mock.invocationCallOrder[0]).toBeLessThan(
+      resumeHookMock.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("migrates a pre-version (unversioned) input and runs the first turn step", async () => {

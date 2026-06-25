@@ -396,6 +396,17 @@ export interface TurnCompletedStreamEvent {
 }
 
 /**
+ * Stream event emitted when one active turn is intentionally cancelled.
+ */
+export interface TurnCancelledStreamEvent {
+  data: {
+    sequence: number;
+    turnId: string;
+  };
+  type: "turn.cancelled";
+}
+
+/**
  * Stream event emitted when one turn fails.
  */
 export interface TurnFailedStreamEvent {
@@ -546,6 +557,7 @@ export type HandleMessageStreamEvent = (
   | StepCompletedStreamEvent
   | StepFailedStreamEvent
   | StepStartedStreamEvent
+  | TurnCancelledStreamEvent
   | TurnCompletedStreamEvent
   | TurnFailedStreamEvent
   | TurnStartedStreamEvent
@@ -1044,6 +1056,22 @@ export function createTurnCompletedEvent(input: {
       turnId: input.turnId,
     },
     type: "turn.completed",
+  };
+}
+
+/**
+ * Creates the `turn.cancelled` event for one intentionally cancelled turn.
+ */
+export function createTurnCancelledEvent(input: {
+  readonly sequence: number;
+  readonly turnId: string;
+}): TurnCancelledStreamEvent {
+  return {
+    data: {
+      sequence: input.sequence,
+      turnId: input.turnId,
+    },
+    type: "turn.cancelled",
   };
 }
 

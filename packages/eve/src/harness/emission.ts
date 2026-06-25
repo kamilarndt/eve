@@ -26,6 +26,7 @@ import {
   createSessionWaitingEvent,
   createStepFailedEvent,
   createStepStartedEvent,
+  createTurnCancelledEvent,
   createTurnCompletedEvent,
   createTurnFailedEvent,
   createTurnStartedEvent,
@@ -248,6 +249,30 @@ export function advanceStep(state: HarnessEmissionState): HarnessEmissionState {
   return {
     ...state,
     stepIndex: state.stepIndex + 1,
+  };
+}
+
+/**
+ * Emits `turn.cancelled` followed by `session.waiting` and advances the
+ * session to its next between-turn state.
+ */
+export async function emitCancelledTurn(
+  emitFn: HarnessEmitFn,
+  state: HarnessEmissionState,
+): Promise<HarnessEmissionState> {
+  await emitFn(
+    createTurnCancelledEvent({
+      sequence: state.sequence,
+      turnId: state.turnId,
+    }),
+  );
+  await emitFn(createSessionWaitingEvent());
+
+  return {
+    sessionStarted: state.sessionStarted,
+    sequence: state.sequence + 1,
+    stepIndex: 0,
+    turnId: "",
   };
 }
 
