@@ -26,6 +26,14 @@ import {
   requestAuthorization,
 } from "#harness/authorization.js";
 import { setPendingInputBatch } from "#harness/input-requests.js";
+import {
+  clearPendingRuntimeActionBatchForResults,
+  getPendingRuntimeActionBatch,
+  recordPendingSubagentChildToken,
+  resolvePendingRuntimeActions,
+  setPendingRuntimeActionBatch,
+} from "#harness/runtime-actions.js";
+import { getProxyInputRequests, upsertProxyInputRequests } from "#harness/proxy-input-requests.js";
 import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import type { HarnessEmitFn, HarnessSession, ToolLoopHarnessConfig } from "#harness/types.js";
@@ -1839,6 +1847,99 @@ describe("createToolLoopHarness", () => {
     expect(result.session.state?.["eve.runtime.pendingActionBatch"]).toBeUndefined();
     expect(events.some((event) => event.type === "actions.requested")).toBe(false);
     expect(events.some((event) => event.type === "turn.failed")).toBe(false);
+  });
+
+  it("leaves code-mode runtime-action batches for code-mode continuation", async () => {
+    const callId = "delegate_interrupt_1";
+    const session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId,
+          description: "",
+          input: { task: "do it" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "workers",
+          subagentName: "worker",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "code-mode-dispatch" },
+      origin: "code-mode",
+      responseMessages: [],
+      session: createTestSession({ history: [{ content: "Go", role: "user" }] }),
+    });
+
+    const events: HandleMessageStreamEvent[] = [];
+    const result = await resolvePendingRuntimeActions({
+      emit: async (event) => {
+        events.push(event);
+      },
+      session,
+      stepInput: {
+        runtimeActionResults: [
+          {
+            callId,
+            kind: "subagent-result",
+            output: "done",
+            subagentName: "worker",
+          },
+        ],
+      },
+    });
+
+    expect(result.outcome).toBe("continue");
+    expect(result.session).toBe(session);
+    expect(result.messages).toEqual([{ content: "Go", role: "user" }]);
+    expect(events).toEqual([]);
+    expect(getPendingRuntimeActionBatch(result.session.state)?.origin).toBe("code-mode");
+  });
+
+  it("clears code-mode runtime-action dispatch batches with completed child proxy entries", () => {
+    const callId = "delegate_interrupt_1";
+    let session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId,
+          description: "",
+          input: { task: "do it" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "workers",
+          subagentName: "worker",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "code-mode-dispatch" },
+      origin: "code-mode",
+      responseMessages: [],
+      session: createTestSession(),
+    });
+
+    session = recordPendingSubagentChildToken({
+      callId,
+      childContinuationToken: "child-token",
+      session,
+    });
+    session = upsertProxyInputRequests({
+      entries: [["approval-1", "child-token"]],
+      forChildContinuationToken: "child-token",
+      session,
+    });
+
+    const next = clearPendingRuntimeActionBatchForResults({
+      origin: "code-mode",
+      results: [
+        {
+          callId,
+          kind: "subagent-result",
+          output: "done",
+          subagentName: "worker",
+        },
+      ],
+      session,
+    });
+
+    expect(getPendingRuntimeActionBatch(next.state)).toBeUndefined();
+    expect([...getProxyInputRequests(next.state)]).toEqual([]);
   });
 
   it("stamps the live emission state onto a parked runtime-action batch so resume is a continuation", async () => {

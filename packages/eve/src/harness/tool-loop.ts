@@ -133,6 +133,7 @@ import {
 } from "#harness/prompt-cache.js";
 import { resolveFrameworkToolFromUpstreamType } from "#harness/provider-tools.js";
 import {
+  clearPendingRuntimeActionBatchForResults,
   createRuntimeActionRequestFromToolCall,
   resolvePendingRuntimeActions,
   setPendingRuntimeActionBatch,
@@ -1755,7 +1756,7 @@ async function finishConversationTurn(input: {
  */
 async function continuePendingCodeModeInterrupt(input: {
   readonly capabilities?: SessionCapabilities;
-  readonly childResults?: readonly { readonly output?: unknown }[];
+  readonly childResults?: StepInput["runtimeActionResults"];
   readonly config: ToolLoopHarnessConfig;
   readonly emit?: ToolLoopHarnessConfig["handleEvent"];
   readonly emissionState: ReturnType<typeof getHarnessEmissionState>;
@@ -1801,6 +1802,10 @@ async function continuePendingCodeModeInterrupt(input: {
         : undefined,
   });
 
+  const codeModeRuntimeActionResults = isCodeModeRuntimeActionInterrupt(interrupt)
+    ? input.childResults
+    : undefined;
+
   let continuationOutput: unknown;
   try {
     const hostTools = await buildSandboxHostTools({
@@ -1824,7 +1829,11 @@ async function continuePendingCodeModeInterrupt(input: {
         options,
       });
     } else if (isCodeModeRuntimeActionInterrupt(interrupt)) {
-      const childResults = input.childResults ?? [];
+      const childResults = input.childResults;
+      if (childResults === undefined || childResults.length === 0) {
+        return { next: null, session: input.session };
+      }
+
       let currentInterrupt = interrupt;
       let resultIndex = 0;
       // Each cycle resolves one interrupted entry. For Promise.all with
@@ -1868,8 +1877,17 @@ async function continuePendingCodeModeInterrupt(input: {
       )
     : replaceCodeModeInterruptResult(baseMessages, interrupt as never, finalOutput);
 
+  const sessionAfterRuntimeActions =
+    codeModeRuntimeActionResults === undefined
+      ? input.session
+      : clearPendingRuntimeActionBatchForResults({
+          origin: "code-mode",
+          results: codeModeRuntimeActionResults,
+          session: input.session,
+        });
+
   let session = clearPendingCodeModeInterrupt({
-    ...input.session,
+    ...sessionAfterRuntimeActions,
     history: replacedMessages,
   });
 

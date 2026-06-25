@@ -37,10 +37,13 @@ interface PendingRuntimeActionEventMetadata {
  * the harness can clear proxy-input entries on result resolution
  * without re-deriving the token (keeps `harness/` runtime-agnostic).
  */
+type PendingRuntimeActionBatchOrigin = "code-mode";
+
 interface PendingRuntimeActionBatch {
   readonly actions: readonly RuntimeActionRequest[];
   readonly childContinuationTokens?: Readonly<Record<string, string>>;
   readonly event: PendingRuntimeActionEventMetadata;
+  readonly origin?: PendingRuntimeActionBatchOrigin;
   readonly responseMessages: readonly ModelMessage[];
 }
 
@@ -85,12 +88,46 @@ export function hasPendingRuntimeActionBatch(state: SessionStateMap | undefined)
 }
 
 export function clearPendingRuntimeActionBatch(session: HarnessSession): HarnessSession {
-  if (session.state?.[PENDING_RUNTIME_ACTION_BATCH_KEY] === undefined) {
-    return session;
+  return clearPendingRuntimeActionBatchForResults({ session });
+}
+
+export function clearPendingRuntimeActionBatchForResults(input: {
+  readonly origin?: PendingRuntimeActionBatchOrigin;
+  readonly results?: readonly RuntimeActionResult[];
+  readonly session: HarnessSession;
+}): HarnessSession {
+  const batch = getPendingRuntimeActionBatch(input.session.state);
+
+  if (
+    batch === undefined ||
+    (input.origin !== undefined && !runtimeActionBatchMatchesOrigin(batch, input.origin))
+  ) {
+    return input.session;
   }
-  const state = { ...session.state };
+
+  const state = { ...input.session.state };
   delete state[PENDING_RUNTIME_ACTION_BATCH_KEY];
-  return { ...session, state: Object.keys(state).length > 0 ? state : undefined };
+
+  let nextSession: HarnessSession = {
+    ...input.session,
+    state: Object.keys(state).length > 0 ? state : undefined,
+  };
+
+  const childTokens = batch.childContinuationTokens;
+  if (childTokens !== undefined) {
+    for (const result of input.results ?? []) {
+      if (result.kind !== "subagent-result") {
+        continue;
+      }
+
+      const childToken = childTokens[result.callId];
+      if (childToken !== undefined) {
+        nextSession = clearProxyInputRequestsForChild(nextSession, childToken);
+      }
+    }
+  }
+
+  return nextSession;
 }
 
 /**
@@ -99,15 +136,27 @@ export function clearPendingRuntimeActionBatch(session: HarnessSession): Harness
 export function setPendingRuntimeActionBatch(input: {
   readonly actions: readonly RuntimeActionRequest[];
   readonly event: PendingRuntimeActionEventMetadata;
+  readonly origin?: PendingRuntimeActionBatchOrigin;
   readonly responseMessages: readonly ModelMessage[];
   readonly session: HarnessSession;
 }): HarnessSession {
   const state = { ...input.session.state };
-  state[PENDING_RUNTIME_ACTION_BATCH_KEY] = {
+  const batch: {
+    actions: RuntimeActionRequest[];
+    event: PendingRuntimeActionEventMetadata;
+    origin?: PendingRuntimeActionBatchOrigin;
+    responseMessages: ModelMessage[];
+  } = {
     actions: [...input.actions],
     event: input.event,
     responseMessages: [...input.responseMessages],
-  } satisfies PendingRuntimeActionBatch;
+  };
+
+  if (input.origin !== undefined) {
+    batch.origin = input.origin;
+  }
+
+  state[PENDING_RUNTIME_ACTION_BATCH_KEY] = batch satisfies PendingRuntimeActionBatch;
 
   return { ...input.session, state };
 }
@@ -233,6 +282,13 @@ function resolveRuntimeActionResultsForBatch(input: {
   });
 }
 
+function runtimeActionBatchMatchesOrigin(
+  batch: PendingRuntimeActionBatch,
+  origin: PendingRuntimeActionBatchOrigin,
+): boolean {
+  return batch.origin === origin;
+}
+
 function resolveRuntimeActionResultsForKeys(input: {
   readonly pendingKeys: readonly string[];
   readonly results: readonly RuntimeActionResult[];
@@ -288,6 +344,14 @@ export async function resolvePendingRuntimeActions(input: {
     };
   }
 
+  if (runtimeActionBatchMatchesOrigin(batch, "code-mode")) {
+    return {
+      messages: [...input.session.history],
+      outcome: "continue",
+      session: input.session,
+    };
+  }
+
   const readyResults = resolveReadyRuntimeActionResults({
     results: input.stepInput?.runtimeActionResults ?? [],
     session: input.session,
@@ -326,29 +390,10 @@ export async function resolvePendingRuntimeActions(input: {
     }
   }
 
-  const state = { ...input.session.state };
-  delete state[PENDING_RUNTIME_ACTION_BATCH_KEY];
-
-  let nextSession: HarnessSession = {
-    ...input.session,
-    state: Object.keys(state).length > 0 ? state : undefined,
-  };
-
-  // Clear proxy-input entries for completed children so future
-  // deliveries don't route responses to a dead child.
-  const childTokens = batch.childContinuationTokens;
-  if (childTokens !== undefined) {
-    for (const result of readyResults) {
-      if (result.kind !== "subagent-result") {
-        continue;
-      }
-
-      const childToken = childTokens[result.callId];
-      if (childToken !== undefined) {
-        nextSession = clearProxyInputRequestsForChild(nextSession, childToken);
-      }
-    }
-  }
+  const nextSession = clearPendingRuntimeActionBatchForResults({
+    results: readyResults,
+    session: input.session,
+  });
 
   const toolResults = readyResults.map((result) => {
     switch (result.kind) {

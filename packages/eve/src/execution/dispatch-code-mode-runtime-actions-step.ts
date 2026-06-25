@@ -3,10 +3,10 @@
  *
  * Reads the pending code mode runtime action from session state,
  * builds a runtime action request from the interrupt payload, stores
- * it as a temporary PendingRuntimeActionBatch, and delegates to the
- * standard dispatch step. The batch is only needed for dispatch —
- * the harness never sees it because results flow through
- * continuePendingCodeModeRuntimeAction, not resolvePendingRuntimeActions.
+ * it as a code-mode PendingRuntimeActionBatch, and delegates to the
+ * standard dispatch step. The batch is only needed for dispatch and child
+ * proxy cleanup. The generic runtime-action resolver skips it because results
+ * flow through the code-mode continuation path.
  */
 
 import { buildRuntimeActionFromInterrupt } from "#harness/code-mode-runtime-action-state.js";
@@ -56,6 +56,7 @@ export async function dispatchCodeModeRuntimeActionsStep(input: {
   const sessionWithBatch = setPendingRuntimeActionBatch({
     actions: [action],
     event: { sequence: 0, stepIndex: 0, turnId: "code-mode-dispatch" },
+    origin: "code-mode",
     responseMessages: [],
     session,
   });
