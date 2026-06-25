@@ -45,7 +45,6 @@ minimumReleaseAge: 2880 # 2 days
 minimumReleaseAgeExclude:
   - "@ai-sdk/*"
   - "@rolldown/*"
-  - "@typescript/typescript-*"
   - "@turbo/*"
   - "@workflow/*"
   - "@vercel/*"

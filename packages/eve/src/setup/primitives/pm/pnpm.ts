@@ -15,12 +15,18 @@ export const PNPM_WORKSPACE_MEMBERSHIP_ARGUMENTS = ["list", "--depth", "-1", "--
 const RELEASE_AGE_EXCLUSIONS = [
   "@ai-sdk/*",
   "@rolldown/*",
-  "@vercel/*",
+  "@turbo/*",
   "@workflow/*",
+  "@vercel/*",
   "ai",
+  "crossws",
+  "experimental-ai-sdk-code-mode",
   "eve",
   "nitro",
   "rolldown",
+  "turbo",
+  "typescript",
+  "vercel",
   "workflow",
 ] as const;
 
