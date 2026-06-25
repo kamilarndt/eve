@@ -60,13 +60,14 @@ function setupSelectRequest<T extends PrompterValue>(
     return withNotices(request);
   }
 
-  if (opts.search === true && opts.hintLayout !== undefined) {
-    throw new Error("Searchable setup questions do not support a hint layout.");
+  if (opts.search === true && opts.hintLayout === "stacked") {
+    throw new Error("Searchable setup questions do not support a stacked hint layout.");
   }
 
   let request: SetupSelectRequest;
   if (opts.search === true) {
     request = { ...base, kind: "search" };
+    if (opts.hintLayout === "inline") request.layout = "task-list";
     if (opts.placeholder !== undefined) request.placeholder = opts.placeholder;
     if (opts.searchAction !== undefined) {
       request.searchAction = { label: opts.searchAction.label };

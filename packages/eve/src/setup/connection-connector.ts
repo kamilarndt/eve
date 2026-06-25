@@ -1,10 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
 
 import { createPromptCommandOutput, type ChannelSetupLog, withPhase } from "#setup/cli/index.js";
 import type { ProcessOutputHandler } from "#setup/primitives/process-output.js";
 import type { Prompter } from "#setup/prompter.js";
+import { readProjectLink, type VercelProjectReference } from "#setup/project-resolution.js";
 import { captureVercel, runVercel, runVercelCaptureStdout } from "#setup/primitives/run-vercel.js";
 
 /** Controls connector selection while adding a Connect-backed connection. */
@@ -29,11 +28,6 @@ export interface ConnectConnectorRef {
 export type SetupConnectionConnectorResult =
   | { kind: "existing"; connectorUid: string }
   | { kind: "created"; connectorUid: string; connectorId: string };
-
-interface ProjectLink {
-  projectId: string;
-  orgId: string;
-}
 
 type ConnectorResolution =
   | { kind: "existing"; connector: ConnectConnectorRef }
@@ -92,22 +86,9 @@ export function parseConnectors(value: unknown, service: string): ConnectConnect
   return connectors;
 }
 
-async function readProjectLink(projectRoot: string): Promise<ProjectLink | undefined> {
-  try {
-    const value: unknown = JSON.parse(
-      await readFile(join(projectRoot, ".vercel", "project.json"), "utf8"),
-    );
-    return isRecord(value) &&
-      typeof value["projectId"] === "string" &&
-      typeof value["orgId"] === "string"
-      ? { projectId: value["projectId"], orgId: value["orgId"] }
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function ensureLinkedProject(options: SetupConnectionConnectorOptions): Promise<ProjectLink> {
+async function ensureLinkedProject(
+  options: SetupConnectionConnectorOptions,
+): Promise<VercelProjectReference> {
   const expectedProjectId = await options.linkProject();
   const project = await readProjectLink(options.projectRoot);
   if (project === undefined || project.projectId !== expectedProjectId) {
@@ -149,7 +130,7 @@ async function listConnectors(
 
 async function supportsUserAuthorization(
   options: SetupConnectionConnectorOptions,
-  project: ProjectLink,
+  project: VercelProjectReference,
   connector: ConnectConnectorRef,
   onOutput: ProcessOutputHandler,
 ): Promise<boolean> {
@@ -240,7 +221,7 @@ async function attach(
 
 async function resolveFallbackConnector(
   options: SetupConnectionConnectorOptions,
-  project: ProjectLink,
+  project: VercelProjectReference,
   onOutput: ProcessOutputHandler,
   initialNotice: string,
 ): Promise<ConnectorResolution> {

@@ -18,7 +18,7 @@ import {
 } from "../project-resolution.js";
 import type { Prompter, SelectOption, SingleSelectOptions } from "../prompter.js";
 import { runInteractive, type AnySetupBox } from "../runner.js";
-import { createDefaultSetupState, snapshotSetupState, type SetupState } from "../state.js";
+import { snapshotSetupState, type SetupState } from "../state.js";
 import { WizardCancelledError } from "../step.js";
 import {
   getVercelAuthStatus,
@@ -27,7 +27,7 @@ import {
 } from "../vercel-project.js";
 import { withSpinner } from "../with-spinner.js";
 
-import { prompterSink } from "./in-project.js";
+import { inProjectSetupState, prompterSink } from "./in-project.js";
 import { runLinkFlow } from "./link.js";
 
 export const CONNECTIONS_PROMPT_MESSAGE =
@@ -36,7 +36,6 @@ export const CONNECTIONS_PROMPT_MESSAGE =
 const USER_AUTH_CONNECTIONS = CONNECTION_CATALOG.filter(
   (entry) => entry.slug === "linear" || entry.slug === "notion",
 );
-const USER_AUTH_CONNECTION_SLUGS = new Set(USER_AUTH_CONNECTIONS.map((entry) => entry.slug));
 
 export interface ConnectionsFlowDeps {
   detectDeployment: typeof detectDeployment;
@@ -60,38 +59,34 @@ function connectionRows(
 ): SelectOption<string>[] {
   const blocker = vercelAuthBlockerReason(authStatus);
   const rows: SelectOption<string>[] = USER_AUTH_CONNECTIONS.map((entry) => {
+    const row = { value: entry.slug, label: entry.label };
     if (authored.has(entry.slug)) {
-      return {
-        value: entry.slug,
-        label: entry.label,
-        completed: true,
-        focusHint: "Already added",
-      };
+      return { ...row, completed: true, focusHint: "Already added" };
     }
     if (blocker !== undefined) {
       return {
-        value: entry.slug,
-        label: entry.label,
+        ...row,
         disabled: true,
         disabledReason: blocker,
         disabledReasonTone: "warning",
       };
     }
-    return { value: entry.slug, label: entry.label, hint: entry.hint };
+    return { ...row, hint: entry.hint };
   });
-  rows.push({ value: "done", label: "Done" });
+  rows.push({ value: "done", label: "Done", trailingAction: true });
   return rows;
 }
 
-async function pickConnection(input: {
-  authored: ReadonlySet<string>;
-  authStatus: VercelAuthStatus;
-  prompter: Prompter;
-}): Promise<string | undefined> {
-  const options = connectionRows(input.authored, input.authStatus);
+async function pickConnection(
+  prompter: Prompter,
+  authored: ReadonlySet<string>,
+  authStatus: VercelAuthStatus,
+): Promise<string | undefined> {
+  const options = connectionRows(authored, authStatus);
   const request: SingleSelectOptions<string> = {
     message: CONNECTIONS_PROMPT_MESSAGE,
     options,
+    hintLayout: "inline",
     search: true,
     placeholder: "type to search MCP servers",
   };
@@ -103,32 +98,10 @@ async function pickConnection(input: {
     request.initialValue = "done";
   }
   try {
-    return await input.prompter.select(request);
+    return await prompter.select(request);
   } catch (error) {
     if (error instanceof WizardCancelledError) return undefined;
     throw error;
-  }
-}
-
-async function installConnectionDependencies(input: {
-  appRoot: string;
-  deps: ConnectionsFlowDeps;
-  prompter: Prompter;
-  signal?: AbortSignal;
-}): Promise<void> {
-  const packageManager = await input.deps.detectPackageManager(input.appRoot);
-  await input.deps.ensureConnectionDependencies({ projectRoot: input.appRoot });
-  const installed = await withPhase(
-    input.prompter.log,
-    `Installing connection dependencies (${packageManager.kind} install)...`,
-    () =>
-      input.deps.runPackageManagerInstall(packageManager.kind, input.appRoot, {
-        onOutput: createPromptCommandOutput(input.prompter.log),
-        signal: input.signal,
-      }),
-  );
-  if (!installed) {
-    throw new Error(`Dependency installation failed. Run \`${packageManager.kind} install\`.`);
   }
 }
 
@@ -162,27 +135,19 @@ export async function runConnectionsFlow(input: {
   );
   signal?.throwIfAborted();
 
-  let state: SetupState = {
-    ...createDefaultSetupState(),
-    project: projectResolutionFromDeployment(deployment),
-    projectPath: { kind: "resolved", inPlace: true, path: appRoot },
-  };
+  let state = inProjectSetupState(appRoot, projectResolutionFromDeployment(deployment));
   let authored = new Set(initialAuthored);
   const added: string[] = [];
   let dependenciesReady = false;
 
   while (true) {
-    const selected = await pickConnection({
-      authored,
-      authStatus,
-      prompter,
-    });
+    const selected = await pickConnection(prompter, authored, authStatus);
     if (selected === undefined || selected === "done") {
       return added.length === 0 && selected === undefined
         ? { kind: "cancelled" }
         : { kind: "done", addedConnections: added };
     }
-    if (authored.has(selected) || !USER_AUTH_CONNECTION_SLUGS.has(selected)) continue;
+    if (authored.has(selected)) continue;
 
     if (!isProjectResolved(state.project)) {
       const link = await deps.runLinkFlow({
@@ -214,7 +179,22 @@ export async function runConnectionsFlow(input: {
         deps: deps.addConnections,
         beforeScaffold: async () => {
           if (dependenciesReady) return;
-          await installConnectionDependencies({ appRoot, deps, prompter, signal });
+          const packageManager = await deps.detectPackageManager(appRoot);
+          await deps.ensureConnectionDependencies({ projectRoot: appRoot });
+          const installed = await withPhase(
+            prompter.log,
+            `Installing connection dependencies (${packageManager.kind} install)...`,
+            () =>
+              deps.runPackageManagerInstall(packageManager.kind, appRoot, {
+                onOutput: createPromptCommandOutput(prompter.log),
+                signal,
+              }),
+          );
+          if (!installed) {
+            throw new Error(
+              `Dependency installation failed. Run \`${packageManager.kind} install\`.`,
+            );
+          }
           dependenciesReady = true;
         },
       }),

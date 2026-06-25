@@ -32,6 +32,7 @@ interface SetupSearchAction extends SearchActionOption {
 
 interface SetupSearchSelectRequest extends SetupSelectRequestBase {
   kind: "search";
+  layout?: "task-list";
   initialValue?: string;
   placeholder?: string;
   searchAction?: SetupSearchAction;

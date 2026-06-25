@@ -25,6 +25,14 @@ const create = vi.mocked(runVercelCaptureStdout);
 const SERVICE = "mcp.linear.app";
 const CANONICAL_UID = "mcp.linear.app/linear";
 
+function jsonResult(value: unknown) {
+  return { ok: true as const, stdout: JSON.stringify(value) };
+}
+
+function connectorResult(uid: string, id: string, subject: "app" | "user") {
+  return jsonResult({ uid, id, service: SERVICE, supportedSubjectTypes: [subject] });
+}
+
 describe("connector response parsing", () => {
   it("parses terminal JSON and rejects created connectors without user support", () => {
     const response = { uid: "linear/acme", id: "scl_1", supportedSubjectTypes: ["user"] };
@@ -94,35 +102,15 @@ describe("setupConnectionConnector", () => {
   it("paginates and offers only existing connectors that support user authorization", async () => {
     run.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     capture
-      .mockResolvedValueOnce({
-        ok: true,
-        stdout: JSON.stringify({
+      .mockResolvedValueOnce(
+        jsonResult({
           connectors: [{ uid: "linear/app", id: "scl_app" }],
           cursor: "next_page",
         }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        stdout: JSON.stringify({ connectors: [{ uid: "linear/user", id: "scl_user" }] }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        stdout: JSON.stringify({
-          uid: "linear/app",
-          id: "scl_app",
-          service: SERVICE,
-          supportedSubjectTypes: ["app"],
-        }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        stdout: JSON.stringify({
-          uid: "linear/user",
-          id: "scl_user",
-          service: SERVICE,
-          supportedSubjectTypes: ["user"],
-        }),
-      });
+      )
+      .mockResolvedValueOnce(jsonResult({ connectors: [{ uid: "linear/user", id: "scl_user" }] }))
+      .mockResolvedValueOnce(connectorResult("linear/app", "scl_app", "app"))
+      .mockResolvedValueOnce(connectorResult("linear/user", "scl_user", "user"));
     const answers = ["find", "linear/user"];
     const fake = createFakePrompter({ single: () => answers.shift()! });
 
@@ -142,20 +130,10 @@ describe("setupConnectionConnector", () => {
 
   it("removes a created connector when attach fails", async () => {
     run.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    capture.mockResolvedValue({
-      ok: true,
-      stdout: JSON.stringify({
-        connectors: [{ uid: CANONICAL_UID, id: "scl_existing", name: "Linear" }],
-      }),
-    });
-    create.mockResolvedValue({
-      ok: true,
-      stdout: JSON.stringify({
-        uid: "linear/linear-2",
-        id: "scl_created",
-        supportedSubjectTypes: ["user"],
-      }),
-    });
+    capture.mockResolvedValue(
+      jsonResult({ connectors: [{ uid: CANONICAL_UID, id: "scl_existing", name: "Linear" }] }),
+    );
+    create.mockResolvedValue(connectorResult("linear/linear-2", "scl_created", "user"));
     const fake = createFakePrompter({
       single: () => "create",
       text: (input) => input.defaultValue!,
@@ -176,7 +154,7 @@ describe("setupConnectionConnector", () => {
 
   it("recovers a partially created connector id from CLI progress and removes it", async () => {
     run.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    capture.mockResolvedValue({ ok: true, stdout: JSON.stringify({ connectors: [] }) });
+    capture.mockResolvedValue(jsonResult({ connectors: [] }));
     create.mockImplementation(async (_args, createOptions) => {
       createOptions.onOutput?.({ stream: "stderr", text: "Connector created: scl_partial" });
       return { ok: false, stdout: "" };

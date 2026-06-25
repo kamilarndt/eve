@@ -2055,7 +2055,7 @@ describe("TerminalRenderer setup flow session", () => {
         focusHint: "Already installed",
       },
       { value: "slack", label: "Slack", hint: "Creates slackbot and deploys to Vercel" },
-      { value: "done", label: "Done" },
+      { value: "done", label: "Done", trailingAction: true },
     ];
 
     renderer.setupFlow.begin("Agent channels");
@@ -2074,7 +2074,8 @@ describe("TerminalRenderer setup flow session", () => {
       "warning",
     );
     const second = renderer.setupFlow.readSelect({
-      kind: "task-list",
+      kind: "search",
+      layout: "task-list",
       message: "Where will you chat with your agent?",
       options,
     });
@@ -2101,11 +2102,14 @@ describe("TerminalRenderer setup flow session", () => {
     expect(snapshot).not.toContain("✓ Terminal UI");
     expect(snapshot).toContain("✓ Web Chat");
     expect(snapshot).toContain("Slack       · Creates slackbot and deploys to Vercel");
-    expect(snapshot.indexOf("Done")).toBeLessThan(snapshot.indexOf("Overwrote /tmp/weather-agent"));
+    expect(snapshot.indexOf("Slack       · Creates slackbot and deploys to Vercel")).toBeLessThan(
+      snapshot.indexOf("Overwrote /tmp/weather-agent"),
+    );
     expect(snapshot.indexOf("Overwrote /tmp/weather-agent")).toBeLessThan(
       snapshot.indexOf("Scaffolded channel: web"),
     );
-    expect(snapshot.indexOf("Scaffolded channel: web")).toBeLessThan(snapshot.indexOf("↑/↓ move"));
+    expect(snapshot.indexOf("Scaffolded channel: web")).toBeLessThan(snapshot.indexOf("Done"));
+    expect(snapshot.indexOf("Done")).toBeLessThan(snapshot.indexOf("↑/↓ move"));
     expect(snapshot).toContain("Dependency installation failed.");
 
     input.send("\x1b");
@@ -2126,7 +2130,7 @@ describe("TerminalRenderer setup flow session", () => {
           completed: true,
           focusHint: "Already installed",
         },
-        { value: "done", label: "Done" },
+        { value: "done", label: "Done", trailingAction: true },
       ],
     });
     let settled = false;

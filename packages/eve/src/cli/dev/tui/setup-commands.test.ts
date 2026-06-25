@@ -326,58 +326,29 @@ describe("runTuiSetupCommand", () => {
     });
   });
 
-  it("reports configured connections", async () => {
-    const flows = fakeFlows({
-      runConnectionsFlow: vi.fn<TuiSetupFlows["runConnectionsFlow"]>(async () => ({
-        kind: "done",
-        addedConnections: ["linear", "notion"],
-      })),
-    });
-
-    await expect(run({ command: "connect", flows })).resolves.toEqual({
-      message: "Connections added: linear, notion.",
-      preserveFlowDiagnostics: true,
-      effect: { kind: "model-access-changed" },
-    });
-    expect(flows.runConnectionsFlow).toHaveBeenCalledWith(
-      expect.objectContaining({ appRoot: APP_ROOT }),
-    );
-  });
-
-  it("reports empty, cancelled, and partially failed connection flows", async () => {
-    await expect(run({ command: "connect", flows: fakeFlows() })).resolves.toEqual({
-      message: "No connections added.",
-      preserveFlowDiagnostics: true,
-      effect: { kind: "model-access-changed" },
-    });
+  it.each([
+    [
+      "configured",
+      { kind: "done", addedConnections: ["linear", "notion"] },
+      "Connections added: linear, notion.",
+    ],
+    ["empty", { kind: "done", addedConnections: [] }, "No connections added."],
+    ["cancelled", { kind: "cancelled" }, "/connect cancelled."],
+    [
+      "partially failed",
+      { kind: "failed", addedConnections: ["linear"], message: "install failed" },
+      "Connection files changed, but /connect failed: install failed",
+    ],
+  ] as const)("reports %s connection flows", async (_case, result, message) => {
+    const runConnectionsFlow = vi.fn(async () => result);
     await expect(
-      run({
-        command: "connect",
-        flows: fakeFlows({
-          runConnectionsFlow: async () => ({ kind: "cancelled" }),
-        }),
-      }),
+      run({ command: "connect", flows: fakeFlows({ runConnectionsFlow }) }),
     ).resolves.toEqual({
-      message: "/connect cancelled.",
+      message,
       preserveFlowDiagnostics: true,
       effect: { kind: "model-access-changed" },
     });
-    await expect(
-      run({
-        command: "connect",
-        flows: fakeFlows({
-          runConnectionsFlow: async () => ({
-            kind: "failed",
-            addedConnections: ["linear"],
-            message: "install failed",
-          }),
-        }),
-      }),
-    ).resolves.toEqual({
-      message: "Connection files changed, but /connect failed: install failed",
-      preserveFlowDiagnostics: true,
-      effect: { kind: "model-access-changed" },
-    });
+    expect(runConnectionsFlow).toHaveBeenCalledWith(expect.objectContaining({ appRoot: APP_ROOT }));
   });
 
   it("keeps deploy pending when channel files landed before a sub-flow failure", async () => {

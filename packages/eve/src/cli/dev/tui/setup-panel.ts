@@ -95,7 +95,11 @@ interface SetupInlineEditRow {
  */
 type SetupOptionSelectPanelState =
   | (SetupSelectPanelBase & { kind: "single" })
-  | (SetupSelectPanelBase & { kind: "search"; placeholder?: string })
+  | (SetupSelectPanelBase & {
+      kind: "search";
+      layout?: "task-list";
+      placeholder?: string;
+    })
   | (SetupSelectPanelBase & { kind: "multi" })
   | (SetupSelectPanelBase & { kind: "searchable-multi"; placeholder?: string })
   | (SetupSelectPanelBase & { kind: "stacked" })
@@ -350,7 +354,7 @@ function selectPresentation(state: SetupOptionSelectPanelState): SelectPresentat
       return {
         selection: "single",
         filter: { placeholder: state.placeholder },
-        layout: "plain",
+        layout: state.layout ?? "plain",
         edit: undefined,
       };
     case "multi":
@@ -501,13 +505,10 @@ function optionWithoutStackedHint(
 
 function optionUsesPlaceholder(
   presentation: SelectPresentation,
-  index: number,
-  optionCount: number,
+  isTrailingTaskAction: boolean,
 ): boolean {
   // A type-ahead list draws no placeholder dots — the filter row leads instead.
-  const isFiltered = presentation.filter !== undefined;
-  // The task list's trailing action (Done) reads as a button, not an option.
-  const isTrailingTaskAction = presentation.layout === "task-list" && index === optionCount - 1;
+  const isFiltered = presentation.filter !== undefined && presentation.layout !== "task-list";
   // Checklists and the explicit menu layouts (stacked, task-list) present every
   // row as a pickable option, so each carries the placeholder dot.
   const isMultiSelect = presentation.selection === "multiple";
@@ -527,7 +528,7 @@ function appendSelectOptionRows(input: {
   visibleLabelWidth: number;
   width: number;
   theme: Theme;
-}): void {
+}): boolean {
   const {
     rows,
     state,
@@ -541,11 +542,18 @@ function appendSelectOptionRows(input: {
     theme,
   } = input;
   const c = theme.colors;
+  let renderedTrailingTaskAction = false;
 
   for (let index = start; index < end; index += 1) {
     const option = visible[index]!;
     const isCursor = index === cursor;
-    if (presentation.layout === "task-list" && index === end - 1 && index > start) {
+    const isTrailingTaskAction =
+      presentation.layout === "task-list" && option.trailingAction === true;
+    if (isTrailingTaskAction) {
+      appendSelectNotices(rows, state.notices, presentation.layout, theme, width);
+      renderedTrailingTaskAction = true;
+    }
+    if (isTrailingTaskAction && (index > start || (state.notices?.length ?? 0) > 0)) {
       rows.push("");
     }
 
@@ -563,7 +571,7 @@ function appendSelectOptionRows(input: {
         option: rowOption,
         isCursor,
         isChecked: presentation.selection === "multiple" && state.select.selected.has(option.value),
-        placeholder: optionUsesPlaceholder(presentation, index, visible.length),
+        placeholder: optionUsesPlaceholder(presentation, isTrailingTaskAction),
         hintPadding: Math.max(0, visibleLabelWidth - rowOption.label.length),
         theme,
       })}`,
@@ -598,6 +606,7 @@ function appendSelectOptionRows(input: {
     }
     if (presentation.layout === "stacked" && index < end - 1) rows.push("");
   }
+  return renderedTrailingTaskAction;
 }
 
 function appendSubmitRow(rows: string[], cursor: number, submitIndex: number, theme: Theme): void {
@@ -746,7 +755,7 @@ export function renderSelectQuestion(
     rows.push(`  ${c.dim("(no matches)")}`);
   }
 
-  appendSelectOptionRows({
+  const renderedTrailingTaskAction = appendSelectOptionRows({
     rows,
     state,
     presentation,
@@ -764,7 +773,9 @@ export function renderSelectQuestion(
     rows.push(`  ${c.dim(`↑↓ ${visible.length} options, showing ${start + 1}–${end}`)}`);
   }
 
-  appendSelectNotices(rows, state.notices, presentation.layout, theme, width);
+  if (!renderedTrailingTaskAction) {
+    appendSelectNotices(rows, state.notices, presentation.layout, theme, width);
+  }
 
   if (state.error !== undefined) {
     rows.push("", `  ${c.red(state.error)}`);

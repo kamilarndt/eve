@@ -247,11 +247,12 @@ describe("renderSelectQuestion", () => {
         focusHint: "Already installed",
       },
       { value: "slack", label: "Slack", hint: "Creates slackbot and deploys to Vercel" },
-      { value: "done", label: "Done" },
+      { value: "done", label: "Done", trailingAction: true },
     ];
     const rows = renderSelectQuestion(
       {
-        kind: "task-list",
+        kind: "search",
+        layout: "task-list",
         message: "Where will you chat with your agent?",
         options,
         notices: [
@@ -269,16 +270,19 @@ describe("renderSelectQuestion", () => {
     expect(rows).not.toContain("   ✓ Terminal UI");
     // An unfocused completed row keeps its check.
     expect(rows).toContain("   ✓ Web Chat");
-    expect(rows).toContain("   ◦ Slack       · Creates slackbot and deploys to Vercel");
     expect(rows).toContain("     Done");
-    expect(rows).toContain("  ⚠ Overwrote /tmp/weather-agent");
-    expect(rows).toContain("  ✓ Scaffolded channel: web");
-    expect(rows.indexOf("     Done")).toBeLessThan(
-      rows.indexOf("  ⚠ Overwrote /tmp/weather-agent"),
+    const warning = rows.indexOf("  ⚠ Overwrote /tmp/weather-agent");
+    const success = rows.indexOf("  ✓ Scaffolded channel: web");
+    const done = rows.indexOf("     Done");
+    expect(rows.indexOf("   ◦ Slack       · Creates slackbot and deploys to Vercel")).toBeLessThan(
+      warning,
     );
+    expect(warning).toBeLessThan(success);
+    expect(success).toBeLessThan(done);
+    expect([rows[warning - 1], rows[done - 1]]).toEqual(["", ""]);
     expect(rows.at(-1)).toContain("↑/↓ move · enter to select · esc to cancel");
 
-    const coloredRow = renderSelectQuestion(
+    const coloredRows = renderSelectQuestion(
       {
         kind: "task-list",
         message: "Where will you chat with your agent?",
@@ -287,7 +291,9 @@ describe("renderSelectQuestion", () => {
       },
       colorTheme,
       80,
-    ).find((row) => row.includes("Terminal UI"));
+    );
+    const coloredRow = coloredRows.find((row) => row.includes("Terminal UI"));
+    expect(coloredRows[coloredRows.findIndex((row) => row.includes("Done")) - 1]).toBe("");
     // Focused completed row: dim pointer matching the dim label, never green or cyan.
     expect(coloredRow).toContain("\x1b[2m▷\x1b[22m");
     expect(coloredRow).toContain("\x1b[2mTerminal UI\x1b[22m");
@@ -394,11 +400,14 @@ describe("renderSelectQuestion", () => {
 
   it("wraps a long notice with a hanging indent under the glyph", () => {
     const plain = createTheme({ color: false });
-    const options = [{ value: "done", label: "Done" }];
+    const options = [
+      { value: "find", label: "Find" },
+      { value: "create", label: "Create" },
+    ];
     const rows = renderSelectQuestion(
       {
-        kind: "single",
-        message: "Configure the agent model",
+        kind: "task-list",
+        message: "Select a connector",
         options,
         select: initialSelectState({ options }),
         notices: [
@@ -411,6 +420,9 @@ describe("renderSelectQuestion", () => {
 
     const first = rows.find((line) => line.includes("⚠"));
     expect(first).toMatch(/⚠ alpha/);
+    expect(rows.findIndex((line) => line.includes("Create"))).toBeLessThan(
+      rows.indexOf(first ?? ""),
+    );
     // A continuation line is indented and carries no glyph.
     const continuation = rows.find((line) => !line.includes("⚠") && /^\s{3,}\S/.test(line));
     expect(continuation).toBeDefined();

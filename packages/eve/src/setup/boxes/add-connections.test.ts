@@ -75,6 +75,28 @@ function createDeps() {
   };
 }
 
+function createdConnectorDeps() {
+  const deps = createDeps();
+  deps.setupConnectionConnector.mockResolvedValueOnce({
+    kind: "created",
+    connectorUid: "linear/new",
+    connectorId: "scl_new",
+  });
+  return deps;
+}
+
+function runCreatedConnector(
+  deps: ReturnType<typeof createDeps>,
+  beforeScaffold: (projectRoot: string) => Promise<void> = async () => {},
+) {
+  return runInteractive(
+    makeBoxes({ prompter: createPrompter(), presetConnections: ["linear"], deps, beforeScaffold }),
+    resolvedState(),
+    silentSink,
+    snapshot,
+  );
+}
+
 function resolvedState(): SetupState {
   const state = createDefaultSetupState();
   state.projectPath = { kind: "resolved", inPlace: false, path: "/tmp/project" };
@@ -310,46 +332,23 @@ describe("selectConnections + addConnections boxes", () => {
   });
 
   test("removes a connector created before a scaffold failure", async () => {
-    const deps = createDeps();
-    deps.setupConnectionConnector.mockResolvedValueOnce({
-      kind: "created",
-      connectorUid: "linear/new",
-      connectorId: "scl_new",
-    });
+    const deps = createdConnectorDeps();
     deps.ensureConnection.mockRejectedValueOnce(new Error("write failed"));
-    const boxes = makeBoxes({
-      prompter: createPrompter(),
-      presetConnections: ["linear"],
-      deps,
-    });
 
-    await expect(runInteractive(boxes, resolvedState(), silentSink, snapshot)).rejects.toThrow(
-      "write failed",
-    );
+    await expect(runCreatedConnector(deps)).rejects.toThrow("write failed");
     expect(deps.cleanupCreatedConnectionConnector).toHaveBeenCalledWith(
       expect.objectContaining({ connectorId: "scl_new" }),
     );
   });
 
   test("removes a created connector when pre-scaffold preparation fails", async () => {
-    const deps = createDeps();
-    deps.setupConnectionConnector.mockResolvedValueOnce({
-      kind: "created",
-      connectorUid: "linear/new",
-      connectorId: "scl_new",
-    });
-    const boxes = makeBoxes({
-      prompter: createPrompter(),
-      presetConnections: ["linear"],
-      deps,
-      beforeScaffold: async () => {
-        throw new Error("install failed");
-      },
-    });
+    const deps = createdConnectorDeps();
 
-    await expect(runInteractive(boxes, resolvedState(), silentSink, snapshot)).rejects.toThrow(
-      "install failed",
-    );
+    await expect(
+      runCreatedConnector(deps, async () => {
+        throw new Error("install failed");
+      }),
+    ).rejects.toThrow("install failed");
     expect(deps.ensureConnection).not.toHaveBeenCalled();
     expect(deps.cleanupCreatedConnectionConnector).toHaveBeenCalledWith(
       expect.objectContaining({ connectorId: "scl_new" }),
@@ -357,25 +356,12 @@ describe("selectConnections + addConnections boxes", () => {
   });
 
   test("reports both scaffold and connector cleanup failures", async () => {
-    const deps = createDeps();
-    deps.setupConnectionConnector.mockResolvedValueOnce({
-      kind: "created",
-      connectorUid: "linear/new",
-      connectorId: "scl_new",
-    });
+    const deps = createdConnectorDeps();
     deps.ensureConnection.mockRejectedValueOnce(new Error("write failed"));
     deps.cleanupCreatedConnectionConnector.mockRejectedValueOnce(
       new Error("remove scl_new manually"),
     );
-    const boxes = makeBoxes({
-      prompter: createPrompter(),
-      presetConnections: ["linear"],
-      deps,
-    });
-
-    await expect(runInteractive(boxes, resolvedState(), silentSink, snapshot)).rejects.toThrow(
-      "write failed remove scl_new manually",
-    );
+    await expect(runCreatedConnector(deps)).rejects.toThrow("write failed remove scl_new manually");
   });
 
   test("is skipped in headless mode when no connections are requested", async () => {

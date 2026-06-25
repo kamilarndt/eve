@@ -1303,7 +1303,7 @@ export class TerminalRenderer implements AgentTUIRenderer {
     };
 
     let notices = opts.notices;
-    if (opts.kind === "task-list") {
+    if (opts.kind === "task-list" || (opts.kind === "search" && opts.layout === "task-list")) {
       const start = flow.taskListLineStart ?? flow.lines.length;
       const outcomes: SelectNotice[] = flow.lines
         .slice(start)
