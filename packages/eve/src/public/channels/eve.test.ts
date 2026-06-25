@@ -69,6 +69,7 @@ function createEveCreateHandler(input: EveChannelInput) {
     send: mockSend,
     async fetch(req: Request) {
       const args: RouteHandlerArgs = {
+        cancelTurn: vi.fn(),
         send: mockSend,
         getSession: vi.fn(),
         receive: vi.fn() as any,
@@ -107,6 +108,7 @@ function createEveContinueHandler(input: EveChannelInput) {
     send: mockSend,
     async fetch(req: Request) {
       const args: RouteHandlerArgs = {
+        cancelTurn: vi.fn(),
         send: mockSend,
         getSession: mockGetSession,
         receive: vi.fn() as any,

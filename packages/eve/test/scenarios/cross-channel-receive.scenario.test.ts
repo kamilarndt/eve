@@ -79,6 +79,9 @@ interface CapturedRun {
 
 function createCapturingRuntime(captured: CapturedRun[]): Runtime {
   return {
+    async cancelTurn() {
+      throw new Error("cancelTurn should not be called in this scenario");
+    },
     async run(input) {
       captured.push({
         adapter: input.adapter,
@@ -164,6 +167,9 @@ describe("cross-channel receive end-to-end", () => {
           }),
         }),
         {
+          cancelTurn: async () => {
+            throw new Error("webhook should not cancel turns");
+          },
           receive,
           send: async () => {
             throw new Error("webhook should delegate to args.receive()");

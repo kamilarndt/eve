@@ -19,6 +19,7 @@ declare const CHANNEL_METADATA_TYPE: unique symbol;
 export type { Session, SessionHandle } from "#channel/session.js";
 export { GET, POST, PUT, PATCH, DELETE, WS } from "#channel/routes.js";
 export type {
+  CancelTurnFn,
   HttpRouteDefinition,
   RouteDefinition,
   RouteHandlerArgs,

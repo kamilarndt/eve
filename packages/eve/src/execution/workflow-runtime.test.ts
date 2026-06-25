@@ -52,6 +52,19 @@ describe("workflowEntryReference", () => {
   });
 });
 
+describe("createWorkflowRuntime#cancelTurn", () => {
+  it("resumes the deterministic cancel hook for the continuation", async () => {
+    resumeHookMock.mockResolvedValue({ runId: "turn-run" });
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    await expect(runtime.cancelTurn("test:active-session")).resolves.toBeUndefined();
+
+    expect(resumeHookMock).toHaveBeenCalledWith("test:active-session:cancel", {});
+  });
+});
+
 describe("createWorkflowRuntime#deliver", () => {
   const NOT_FOUND_TOKEN = "test:no-such-hook";
 

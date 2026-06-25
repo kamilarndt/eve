@@ -174,8 +174,47 @@ describe("dispatchChannelRequest", () => {
     expect(typeof ctx.send).toBe("function");
   });
 
+  it("namespaces route cancellation with the channel name", async () => {
+    const cancelTurn = vi.fn().mockResolvedValue(undefined);
+    const runtimeForTest: Runtime = {
+      cancelTurn,
+      deliver: vi.fn(),
+      getEventStream: vi.fn(),
+      run: vi.fn(),
+    };
+    mockedResolveNitroChannelRuntimeBundle.mockResolvedValue({
+      channels: [
+        {
+          handler: async (_req, args) => {
+            await args.cancelTurn("conversation-1");
+            return new Response("ok");
+          },
+          fetch: async () => new Response("ok"),
+          adapter: { kind: "channel:webhook" },
+          logicalPath: "agent/channels/webhook.ts",
+          method: "POST",
+          name: "webhook",
+          sourceId: "channel-webhook",
+          sourceKind: "module",
+          urlPath: "/webhook",
+        } satisfies ResolvedChannelDefinition,
+      ],
+      runtime: runtimeForTest,
+    });
+
+    const response = await dispatchChannelRequest(
+      createEvent({ waitUntil: vi.fn() }),
+      "POST /webhook",
+      {} as never,
+    );
+
+    expect(response.status).toBe(200);
+    expect(cancelTurn).toHaveBeenCalledWith("webhook:conversation-1");
+  });
+
   it("tags route sends with Vercel's request id", async () => {
     const runtimeForTest: Runtime = {
+      cancelTurn: vi.fn(),
       deliver: vi.fn().mockResolvedValue({ sessionId: "sess_route" }),
       getEventStream: vi.fn().mockResolvedValue(new ReadableStream()),
       run: vi.fn(),
@@ -221,6 +260,7 @@ describe("dispatchChannelRequest", () => {
 
   it("does not invent a channel request id when Vercel did not send one", async () => {
     const runtimeForTest: Runtime = {
+      cancelTurn: vi.fn(),
       deliver: vi.fn().mockResolvedValue({ sessionId: "sess_route" }),
       getEventStream: vi.fn().mockResolvedValue(new ReadableStream()),
       run: vi.fn(),
@@ -261,6 +301,7 @@ describe("dispatchChannelRequest", () => {
 
   it("does not mutate route-owned run and deliver inputs", async () => {
     const runtimeForTest: Runtime = {
+      cancelTurn: vi.fn(),
       deliver: vi.fn().mockResolvedValue({ sessionId: "sess_deliver" }),
       getEventStream: vi.fn().mockResolvedValue(new ReadableStream()),
       run: vi.fn().mockResolvedValue({

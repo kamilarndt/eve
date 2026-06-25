@@ -15,6 +15,7 @@ export {
   type SessionHandle,
   type RouteDefinition,
   type RouteHandlerArgs,
+  type CancelTurnFn,
   type SendFn,
   type SendOptions,
   type SendPayload,

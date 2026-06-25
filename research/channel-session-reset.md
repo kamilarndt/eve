@@ -40,6 +40,14 @@ callbacks, and evals.
   turn execution. A `turnWorkflow` entered through a subagent or recursive agent call accepts the
   inherited signal, creates no controller, and races no cancellation hook of its own.
 
+### Known Workflow issue
+
+The local Workflow world can execute the successful cancellation-finalizer step twice under one
+correlation id, even with optimistic inline start disabled, duplicating `turn.cancelled` and
+`session.waiting`. This is not a hook-conflict result: the cancel hook is disposed before driver
+notification and the immediate follow-up is accepted. The focused reclaim probe remains skipped
+pending an upstream fix; eve must not hide the issue with stream-event deduplication.
+
 ## Authoring API
 
 ### eve HTTP channel

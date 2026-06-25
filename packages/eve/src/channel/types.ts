@@ -319,6 +319,11 @@ export interface RunHandle {
  */
 export interface Runtime {
   /**
+   * Cancels the active turn addressed by a continuation token.
+   */
+  cancelTurn(continuationToken: string): Promise<void>;
+
+  /**
    * Starts a new run from a flat platform-shape input.
    *
    * Loads the compiled bundle (using the node id baked in at construction

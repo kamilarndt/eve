@@ -478,6 +478,117 @@ describe("workflowEntry integration", () => {
     });
   });
 
+  it.skip("reclaims the cancel hook for an immediate follow-up turn", async () => {
+    let releaseTool = () => {};
+    let signalToolStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      signalToolStarted = resolve;
+    });
+    const waitForCancellationTool: ResolvedToolDefinition = {
+      description: "Wait until the active turn is cancelled.",
+      execute: createToolExecuteWithAuth({
+        scope: "wait_for_cancellation",
+        async execute(_input, rawCtx) {
+          const abortSignal = (rawCtx as ToolContext).abortSignal;
+          signalToolStarted();
+          await new Promise<void>((resolve, reject) => {
+            const onAbort = () => reject(abortSignal.reason);
+            releaseTool = () => {
+              abortSignal.removeEventListener("abort", onAbort);
+              resolve();
+            };
+            if (abortSignal.aborted) {
+              onAbort();
+              return;
+            }
+            abortSignal.addEventListener("abort", onAbort, { once: true });
+          });
+          return { status: "released" };
+        },
+      }),
+      inputSchema: {
+        additionalProperties: false,
+        properties: {},
+        type: "object",
+      },
+      logicalPath: "tools/wait_for_cancellation.ts",
+      name: "wait_for_cancellation",
+      sourceId: "tools/wait_for_cancellation.ts",
+      sourceKind: "module",
+    };
+    const runtime = createTestRuntime({
+      agent: { name: "workflow-entry-turn-cancellation-reclaim" },
+      tools: [waitForCancellationTool],
+    });
+    const manifestTool = runtime.manifest.tools.find(
+      (tool) => tool.name === waitForCancellationTool.name,
+    );
+    if (manifestTool === undefined) {
+      throw new Error("Expected wait_for_cancellation to be present in the test manifest.");
+    }
+    runtime.moduleMap.nodes[ROOT_COMPILED_AGENT_NODE_ID]!.modules[manifestTool.sourceId] = {
+      default: { execute: waitForCancellationTool.execute },
+    };
+    const continuationToken = "http:workflow-entry-turn-cancellation-reclaim";
+
+    await runtime.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "Use wait_for_cancellation before replying." },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken,
+            mode: "conversation",
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+
+      try {
+        await withTimeout(toolStarted, "wait_for_cancellation execution");
+        const cancellationHook = await resumeHook(`${continuationToken}:cancel`, {});
+
+        const cancelledTurn = await stream.nextTurn();
+        expect(cancelledTurn.map((event) => event.type).slice(-2)).toEqual([
+          "turn.cancelled",
+          "session.waiting",
+        ]);
+
+        const workflowRuntime = createWorkflowRuntime({
+          compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+        });
+        await expect(
+          workflowRuntime.deliver({
+            auth: null,
+            continuationToken,
+            payload: { message: "follow up immediately after cancellation" },
+          }),
+        ).resolves.toEqual({ sessionId: run.runId });
+
+        await getRun(cancellationHook.runId).returnValue;
+        const followUpTurn = await stream.nextTurn();
+        const followUpTypes = followUpTurn.map((event) => event.type);
+
+        expect(followUpTurn.at(-1)?.type).toBe("session.waiting");
+        expect(followUpTypes).not.toContain("turn.cancelled");
+        expect(followUpTypes).not.toContain("turn.failed");
+        expect(followUpTypes).not.toContain("session.failed");
+        expect(
+          followUpTurn.some(
+            (event) =>
+              event.type === "message.completed" &&
+              event.data.message?.includes("follow up immediately after cancellation") === true,
+          ),
+        ).toBe(true);
+        await expect(run.status).resolves.toBe("running");
+      } finally {
+        releaseTool();
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  });
+
   it("fails a competing continuation owner before its first turn", async () => {
     const runtime = createTestRuntime({ agent: { name: "workflow-entry-hook-owner" } });
     const continuationToken = "http:workflow-entry-hook-owner";

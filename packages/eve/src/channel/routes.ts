@@ -12,12 +12,14 @@ type WebSocketHeaders = Headers | readonly (readonly [string, string])[] | Recor
 
 /**
  * Second argument passed to every route handler. `send` starts or continues a
- * session on this channel; `getSession` looks one up by id; `receive` hands
- * inbound work to a different channel; `params` contains the matched path
- * parameters; `waitUntil` keeps background work alive past the response;
- * `requestIp` is the client IP, or `null` when the host cannot provide it.
+ * session on this channel; `cancelTurn` cancels its active turn; `getSession`
+ * looks one up by id; `receive` hands inbound work to a different channel;
+ * `params` contains the matched path parameters; `waitUntil` keeps background
+ * work alive past the response; `requestIp` is the client IP, or `null` when
+ * the host cannot provide it.
  */
 export interface RouteHandlerArgs<TState = undefined> {
+  cancelTurn: CancelTurnFn;
   send: SendFn<TState>;
   getSession: GetSessionFn;
   /**
@@ -49,6 +51,9 @@ export interface SendPayload {
    */
   readonly outputSchema?: JsonObject;
 }
+
+/** Cancels the active turn addressed by a channel-local continuation token. */
+export type CancelTurnFn = (continuationToken: string) => Promise<void>;
 
 /**
  * Starts or continues a session on this channel. Accepts a plain string,

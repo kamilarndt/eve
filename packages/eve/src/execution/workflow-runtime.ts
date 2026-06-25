@@ -94,6 +94,10 @@ export function createWorkflowRuntime(config: {
   readonly nodeId?: string;
 }): Runtime {
   return {
+    async cancelTurn(continuationToken: string): Promise<void> {
+      await resumeHook(`${continuationToken}:cancel`, {});
+    },
+
     async run(input: RunInput): Promise<RunHandle> {
       const bundle = await getCompiledRuntimeAgentBundle({
         compiledArtifactsSource: config.compiledArtifactsSource,

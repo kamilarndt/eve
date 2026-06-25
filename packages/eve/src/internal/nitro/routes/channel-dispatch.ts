@@ -147,6 +147,9 @@ function buildRouteArgs(
   const channel = bundle.channels.find((candidate) => candidate.name === channelName);
   const adapter = channel?.adapter ?? { kind: "channel" };
   const agent = createRouteAgent(bundle.runtime, requestId);
+  const cancelTurn = async (continuationToken: string): Promise<void> => {
+    await bundle.runtime.cancelTurn(`${channelName}:${continuationToken}`);
+  };
   const send = createSendFn(bundle.runtime, adapter, channelName, { requestId });
   const getSession = createGetSessionFn(bundle.runtime);
   const receive = createCrossChannelReceiveFn(
@@ -157,6 +160,7 @@ function buildRouteArgs(
   return {
     agent,
     args: {
+      cancelTurn,
       send,
       getSession,
       receive,
