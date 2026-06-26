@@ -444,8 +444,8 @@ export class EveTUIRunner {
   readonly #subagentRuns = new Map<string, SubagentRun>();
   /**
    * callId → AbortController for the parallel child-session stream pump
-   * launched on `subagent.called`. Cancelled on `subagent.completed` or
-   * when the runner shuts down.
+   * launched on `subagent.called`. Cancelled on `subagent.completed`, when
+   * the session resets, or when the runner shuts down.
    */
   readonly #subagentChildPumps = new Map<string, AbortController>();
   /**
@@ -587,6 +587,7 @@ export class EveTUIRunner {
     } finally {
       this.#disposed = true;
       this.#authProbeAbort.abort();
+      this.#abortSubagentChildPumps();
       // Restore captured stdout/stderr before a fatal error reaches the CLI.
       this.#unsubscribeDevelopmentSandboxLogs?.();
       this.#unsubscribeDevelopmentSandboxLogs = undefined;
@@ -819,10 +820,7 @@ export class EveTUIRunner {
    * In-flight subagent child-session streams are aborted.
    */
   #startNewSession(): void {
-    for (const controller of this.#subagentChildPumps.values()) {
-      controller.abort();
-    }
-    this.#subagentChildPumps.clear();
+    this.#abortSubagentChildPumps();
     this.#subagentRuns.clear();
     this.#pendingInputRequests.clear();
     this.#connectionAuthRuns.clear();
@@ -832,6 +830,13 @@ export class EveTUIRunner {
       this.#session = this.#client.session();
     }
     this.#runtimeArtifacts?.clear();
+  }
+
+  #abortSubagentChildPumps(): void {
+    for (const controller of this.#subagentChildPumps.values()) {
+      controller.abort();
+    }
+    this.#subagentChildPumps.clear();
   }
 
   async #readPromptWithIdleRefresh(options: AgentTUISessionOptions): Promise<string | undefined> {
@@ -1580,8 +1585,7 @@ async function* eveEventsToTUIStream(
   // `step.started` since the part completed is the discriminator.
   let stepEpoch = 0;
   const knownToolCalls = new Set<string>();
-  const ignoredToolCallIds = new Set<string>();
-  const seenToolBatches = new Set<string>();
+  const seenInputRequestIds = new Set<string>();
   // The harness reports one underlying failure as a cascade (`step.failed` →
   // `turn.failed` → `session.failed`) with an identical payload on each
   // event. Render it once, not three times.
@@ -1752,17 +1756,6 @@ async function* eveEventsToTUIStream(
         const actions = data.actions.filter((action) => action.kind === "tool-call");
         if (actions.length === 0) break;
 
-        const batchKey = toolBatchKey("actions.requested", data.turnId, data.stepIndex, actions);
-        if (seenToolBatches.has(batchKey)) {
-          for (const action of actions) {
-            if (!knownToolCalls.has(action.callId)) {
-              ignoredToolCallIds.add(action.callId);
-            }
-          }
-          break;
-        }
-        seenToolBatches.add(batchKey);
-
         for (const action of actions) {
           if (knownToolCalls.has(action.callId)) continue;
           knownToolCalls.add(action.callId);
@@ -1781,17 +1774,6 @@ async function* eveEventsToTUIStream(
         const requests = data.requests.filter((request) => request.action.kind === "tool-call");
         if (requests.length === 0) break;
 
-        const batchKey = inputRequestBatchKey(data.turnId, data.stepIndex, requests);
-        if (seenToolBatches.has(batchKey)) {
-          for (const request of requests) {
-            if (!knownToolCalls.has(request.action.callId)) {
-              ignoredToolCallIds.add(request.action.callId);
-            }
-          }
-          break;
-        }
-        seenToolBatches.add(batchKey);
-
         for (const request of requests) {
           const toolCallId = request.action.callId;
 
@@ -1805,6 +1787,8 @@ async function* eveEventsToTUIStream(
             };
           }
 
+          if (seenInputRequestIds.has(request.requestId)) continue;
+          seenInputRequestIds.add(request.requestId);
           pendingInputRequests.set(request.requestId, request);
 
           if (isQuestionRequest(request)) {
@@ -1828,7 +1812,6 @@ async function* eveEventsToTUIStream(
           break;
         }
         const callId = resultEvent.data.result.callId;
-        if (ignoredToolCallIds.has(callId)) break;
         if (!knownToolCalls.has(callId)) {
           // Results for calls this turn never announced (e.g. subagent
           // dispatches, which surface through the subagent section instead)
@@ -2078,62 +2061,6 @@ function isPostTurnVisibleEvent(event: HandleMessageStreamEvent): boolean {
     default:
       return false;
   }
-}
-
-function toolBatchKey(
-  type: string,
-  turnId: string,
-  stepIndex: number,
-  actions: readonly { input: unknown; toolName: string }[],
-): string {
-  return `${type}:${turnId}:${String(stepIndex)}:${stableStringify(
-    actions.map((action) => ({
-      input: action.input,
-      toolName: action.toolName,
-    })),
-  )}`;
-}
-
-function inputRequestBatchKey(
-  turnId: string,
-  stepIndex: number,
-  requests: readonly InputRequest[],
-): string {
-  return toolBatchKey(
-    "input.requested",
-    turnId,
-    stepIndex,
-    requests.map((request) => ({
-      input: request.action.input,
-      toolName: request.action.toolName,
-    })),
-  );
-}
-
-function stableStringify(value: unknown): string {
-  return JSON.stringify(toStableJson(value)) ?? "undefined";
-}
-
-function toStableJson(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null || typeof value !== "object") {
-    return value;
-  }
-
-  if (seen.has(value)) {
-    return "[Circular]";
-  }
-  seen.add(value);
-
-  if (Array.isArray(value)) {
-    return value.map((item) => toStableJson(item, seen));
-  }
-
-  const object = value as Record<string, unknown>;
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(object).sort()) {
-    result[key] = toStableJson(object[key], seen);
-  }
-  return result;
 }
 
 function formatActionResultError(event: ActionResultStreamEvent): string {
