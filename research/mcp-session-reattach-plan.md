@@ -65,6 +65,53 @@ The planned eve implementation assumes `@ai-sdk/mcp` exposes:
 
 If that PR changes shape, adapt this plan to the final AI SDK API before implementation.
 
+## Developer-facing behavior
+
+The first version should be automatic for existing Streamable HTTP MCP connections. App authors keep
+defining MCP connections with `defineMcpClientConnection`; they do not pass, persist, or inspect MCP
+session ids.
+
+```ts title="agent/connections/workspace.ts"
+import { connect } from "@vercel/connect/eve";
+import { defineMcpClientConnection } from "eve/connections";
+
+export default defineMcpClientConnection({
+  url: "https://service.example/mcp",
+  description:
+    "Workspace service. Use its setup tools before follow-up tools that depend on selected state.",
+  auth: connect({ connector: "workspace/my-agent", principalType: "user" }),
+});
+```
+
+During one eve session, the expected behavior is:
+
+1. The model discovers remote tools through `connection_search`.
+2. A remote setup tool stores working context in the upstream MCP session.
+3. The turn parks or crosses a workflow/model step boundary.
+4. eve rebuilds the live MCP client, reattaches with framework-owned context metadata, and later
+   remote tools observe the same upstream MCP session.
+
+Example tool trace:
+
+```text
+connection_search("workspace")
+workspace__set_selected_state({ id: "..." })
+...durable step boundary...
+workspace__get_selected_state({})
+```
+
+`workspace__get_selected_state` should see the state selected earlier because eve reused the same
+upstream MCP session. This is session continuity, not a new durable app-state API: the selected
+state still belongs to the MCP server, and eve only stores the protocol metadata required to
+reattach.
+
+For legacy SSE MCP servers, app behavior is unchanged because there is no `MCP-Session-Id` reattach
+mechanism. For expired upstream sessions, the first implementation should clear the stale protocol
+metadata and surface the failure or retry only safe metadata operations; the MCP server should expose
+enough setup tools and descriptions for the model to establish state again. A future replay layer can
+add an authored hook or connection option for re-establishing setup after expiry, but valid-session
+reattach should not require new app code.
+
 ## Where state is saved
 
 Use durable context, not the workflow body as an authored input shape and not external storage.
