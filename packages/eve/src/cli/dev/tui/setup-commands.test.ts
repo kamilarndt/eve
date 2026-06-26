@@ -339,6 +339,11 @@ describe("runTuiSetupCommand", () => {
       { kind: "failed", addedConnections: ["linear"], message: "install failed" },
       "Connection files changed, but /connect failed: install failed",
     ],
+    [
+      "failed before a connection file was written",
+      { kind: "failed", addedConnections: [], message: "connector setup failed" },
+      "/connect failed: connector setup failed",
+    ],
   ] as const)("reports %s connection flows", async (_case, result, message) => {
     const runConnectionsFlow = vi.fn(async () => result);
     await expect(

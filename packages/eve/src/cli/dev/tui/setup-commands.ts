@@ -250,7 +250,10 @@ async function executeSetupCommand(
             };
           case "failed":
             return {
-              message: `Connection files changed, but /connect failed: ${result.message}`,
+              message:
+                result.addedConnections.length === 0
+                  ? `/connect failed: ${result.message}`
+                  : `Connection files changed, but /connect failed: ${result.message}`,
               preserveFlowDiagnostics: true,
               effect: { kind: "model-access-changed" },
             };
