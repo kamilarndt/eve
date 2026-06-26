@@ -10,6 +10,7 @@ import { isStreamDisconnectError, readNdjsonStream } from "#client/ndjson.js";
 import { openStreamBody, openStreamIterable } from "#client/open-stream.js";
 import { normalizeOutputSchemaForRequest } from "#client/output-schema.js";
 import { advanceSession, createSessionEventIdentity, readTurnId } from "#client/session-utils.js";
+import { TurnReplayFilter } from "#client/turn-replay-filter.js";
 import { createClientUrl } from "#client/url.js";
 import type {
   ClientRedirectPolicy,
@@ -169,10 +170,8 @@ export class ClientSession {
       const previousEventIds = new Set(
         initialState.sessionId === sessionId ? initialState.lastTurnEventIds : undefined,
       );
-      let currentTurnId: string | undefined;
       let remainingReconnectAttempts = this.#context.maxReconnectAttempts;
-      const currentEventIds = new Set<string>();
-      let suppressConcurrentReplay = false;
+      const replayFilter = new TurnReplayFilter();
       let sawCurrentTurnEvent = false;
 
       while (true) {
@@ -199,13 +198,6 @@ export class ClientSession {
               ) {
                 continue;
               }
-              if (currentTurnId !== turnId) {
-                currentTurnId = turnId;
-                currentEventIds.clear();
-                suppressConcurrentReplay = false;
-              } else if (event.type === "turn.started" && currentEventIds.has(identity)) {
-                suppressConcurrentReplay = true;
-              }
               sawCurrentTurnEvent = true;
             }
 
@@ -219,13 +211,7 @@ export class ClientSession {
               continue;
             }
 
-            if (
-              currentEventIds.has(identity) &&
-              (suppressConcurrentReplay || isUniqueTurnLifecycleEvent(event))
-            ) {
-              continue;
-            }
-            currentEventIds.add(identity);
+            if (replayFilter.shouldSuppress(event)) continue;
 
             events.push(event);
             yield event;
@@ -292,6 +278,8 @@ export class ClientSession {
     const initialState = this.#state;
     const streamIndex = options?.startIndex ?? initialState.streamIndex;
     const events: HandleMessageStreamEvent[] = [];
+    const replayFilter = new TurnReplayFilter();
+    let currentStreamIndex = streamIndex;
 
     try {
       for await (const event of openStreamIterable({
@@ -303,6 +291,8 @@ export class ClientSession {
         signal: options?.signal,
         startIndex: streamIndex,
       })) {
+        currentStreamIndex += 1;
+        if (replayFilter.shouldSuppress(event)) continue;
         events.push(event);
         yield event;
       }
@@ -313,13 +303,10 @@ export class ClientSession {
         preserveCompletedSessions: this.#context.preserveCompletedSessions,
         session: { ...initialState, sessionId, streamIndex },
         sessionId,
+        streamIndex: currentStreamIndex,
       });
     }
   }
-}
-
-function isUniqueTurnLifecycleEvent(event: HandleMessageStreamEvent): boolean {
-  return !["message.appended", "reasoning.appended", "subagent.event"].includes(event.type);
 }
 
 async function postTurnWithRetry(input: {

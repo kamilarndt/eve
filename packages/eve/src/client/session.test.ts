@@ -245,6 +245,20 @@ describe("ClientSession", () => {
     expect(session.state).toMatchObject({ lastTurnId: "turn_0", streamIndex: 6 });
   });
 
+  it("suppresses replayed lifecycle events from an attached stream", async () => {
+    const [started, completed, turnCompleted, waiting] = turnEvents(0, "answer");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      createStreamResponse([started, completed, completed, turnCompleted, waiting]),
+    );
+    const session = createSession({ sessionId: "session_1", streamIndex: 0 });
+
+    const events = [];
+    for await (const event of session.stream()) events.push(event);
+
+    expect(events).toEqual(turnEvents(0, "answer"));
+    expect(session.state).toMatchObject({ lastTurnId: "turn_0", streamIndex: 5 });
+  });
+
   it("cancels a parked stream after collecting its result", async () => {
     const encoder = new TextEncoder();
     let cancelled = false;
