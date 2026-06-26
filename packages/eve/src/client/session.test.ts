@@ -8,7 +8,6 @@ import {
   createTurnCompletedEvent,
   createTurnStartedEvent,
   timestampHandleMessageStreamEvent,
-  type HandleMessageStreamEvent,
 } from "#protocol/message.js";
 
 afterEach(() => {
@@ -280,8 +279,11 @@ describe("ClientSession", () => {
       if ((init?.method ?? "GET") === "POST") return createAcceptedResponse();
 
       streamRequest += 1;
-      if (streamRequest === 1) return createStreamResponse(turnEvents(0, "first", 0));
-      return createStreamResponse([...turnEvents(0, "first", 0), ...turnEvents(1, "second", 4)]);
+      if (streamRequest === 1) return createStreamResponse(turnEvents(0, "first", "step_0"));
+      return createStreamResponse([
+        ...turnEvents(0, "first", "step_0"),
+        ...turnEvents(1, "second", "step_1"),
+      ]);
     });
     const session = createSession();
 
@@ -289,16 +291,16 @@ describe("ClientSession", () => {
     const second = await (await session.send("second")).result();
 
     expect(second.message).toBe("second");
-    expect(second.events).toEqual(turnEvents(1, "second", 4));
+    expect(second.events).toEqual(turnEvents(1, "second", "step_1"));
     expect(session.state.streamIndex).toBe(12);
-    expect(session.state.eventCursor?.settledTurnSequence).toBe(1);
+    expect(session.state.seenEventIds).toHaveLength(8);
   });
 
   it("filters interleaved concurrent copies while advancing the physical cursor", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_request, init) => {
       if ((init?.method ?? "GET") === "POST") return createAcceptedResponse();
 
-      const [started, completed, turnCompleted, waiting] = turnEvents(0, "answer", 0);
+      const [started, completed, turnCompleted, waiting] = turnEvents(0, "answer", "step_0");
       return createStreamResponse([
         started,
         started,
@@ -313,14 +315,12 @@ describe("ClientSession", () => {
 
     const result = await (await session.send("question")).result();
 
-    expect(result.events).toEqual(turnEvents(0, "answer", 0));
+    expect(result.events).toEqual(turnEvents(0, "answer", "step_0"));
     expect(session.state.streamIndex).toBe(7);
   });
 
-  it("reconstructs replay state before resuming a legacy saved cursor", async () => {
-    const oldTurn = legacyTurnEvents(0, "old");
-    const replayedOldTurn = turnEvents(0, "old", 0);
-    const newTurn = turnEvents(1, "new", 4);
+  it("does not infer duplicates when a saved cursor has no event IDs", async () => {
+    const newTurn = turnEvents(1, "new", "step_1");
     const streamUrls: string[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (request, init) => {
       if ((init?.method ?? "GET") === "POST") return createAcceptedResponse();
@@ -328,46 +328,35 @@ describe("ClientSession", () => {
       const url =
         typeof request === "string" ? request : request instanceof URL ? request.href : request.url;
       streamUrls.push(url);
-      return streamUrls.length === 1
-        ? createStreamResponse(oldTurn)
-        : createStreamResponse([...replayedOldTurn, ...newTurn]);
+      return createStreamResponse(newTurn);
     });
     const session = createSession({
       continuationToken: "eve:test",
       sessionId: "session_1",
-      streamIndex: oldTurn.length,
+      streamIndex: 4,
     });
 
     const result = await (await session.send("next")).result();
 
     expect(result.message).toBe("new");
     expect(result.events).toEqual(newTurn);
-    expect(new URL(streamUrls[0]!).searchParams.get("startIndex")).toBeNull();
-    expect(new URL(streamUrls[1]!).searchParams.get("startIndex")).toBe("4");
+    expect(streamUrls).toHaveLength(1);
+    expect(new URL(streamUrls[0]!).searchParams.get("startIndex")).toBe("4");
   });
 });
 
-function turnEvents(sequence: number, message: string, startEventIndex: number) {
+function turnEvents(sequence: number, message: string, stepId: string) {
   const turnId = `turn_${sequence}`;
   return [
     createTurnStartedEvent({ sequence, turnId }),
     createMessageCompletedEvent({ finishReason: "stop", message, sequence, stepIndex: 0, turnId }),
     createTurnCompletedEvent({ sequence, turnId }),
-    createSessionWaitingEvent({ sequence, turnId }),
+    createSessionWaitingEvent(),
   ].map((event, index) =>
     timestampHandleMessageStreamEvent(event, "2026-06-26T00:00:00.000Z", {
-      eventIndex: startEventIndex + index,
-      sessionId: "session_1",
+      ordinal: index,
+      stepId,
+      workflowRunId: `run_${sequence}`,
     }),
   );
-}
-
-function legacyTurnEvents(sequence: number, message: string): HandleMessageStreamEvent[] {
-  const turnId = `turn_${sequence}`;
-  return [
-    createTurnStartedEvent({ sequence, turnId }),
-    createMessageCompletedEvent({ finishReason: "stop", message, sequence, stepIndex: 0, turnId }),
-    createTurnCompletedEvent({ sequence, turnId }),
-    { data: { wait: "next-user-message" }, type: "session.waiting" },
-  ];
 }

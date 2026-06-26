@@ -1,6 +1,6 @@
 import type { HandleMessageStreamEvent, MessageCompletedStreamEvent } from "#protocol/message.js";
 import { isCurrentTurnBoundaryEvent } from "#protocol/message.js";
-import type { SessionEventCursor, SessionState } from "#client/types.js";
+import type { SessionState } from "#client/types.js";
 import type { InputRequest } from "#runtime/input/types.js";
 
 /**
@@ -20,8 +20,8 @@ export function createInitialSessionState(): SessionState {
 export function advanceSession(input: {
   readonly continuationToken?: string;
   readonly events: readonly HandleMessageStreamEvent[];
-  readonly eventCursor?: SessionEventCursor;
   readonly preserveCompletedSessions?: boolean;
+  readonly seenEventIds?: readonly string[];
   readonly sessionId: string;
   readonly session: SessionState;
   readonly streamIndex?: number;
@@ -35,7 +35,7 @@ export function advanceSession(input: {
   ) {
     return {
       continuationToken: input.continuationToken ?? input.session.continuationToken,
-      eventCursor: input.eventCursor ?? input.session.eventCursor,
+      seenEventIds: input.seenEventIds ?? input.session.seenEventIds,
       sessionId: input.sessionId,
       streamIndex,
     };
@@ -44,7 +44,7 @@ export function advanceSession(input: {
   if (boundaryEvent === undefined) {
     return {
       continuationToken: input.continuationToken ?? input.session.continuationToken,
-      eventCursor: input.eventCursor ?? input.session.eventCursor,
+      seenEventIds: input.seenEventIds ?? input.session.seenEventIds,
       sessionId: input.sessionId,
       streamIndex,
     };

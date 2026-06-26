@@ -9,7 +9,7 @@ Every eve client turn returns two handles, and mixing them up is a common mistak
 - `sessionId`: the stream-and-inspect handle. Use it to attach to event history.
 
 `ClientSession` also tracks `streamIndex`, the count of physical events already consumed, and a
-bounded logical event cursor used to hide Workflow replays. Together these fields make a
+serializable set of event IDs already exposed by the client. Together these fields make a
 `SessionState`.
 
 ## Read and persist state
@@ -30,16 +30,16 @@ Store the full state object:
 ```ts
 interface SessionState {
   continuationToken?: string;
-  eventCursor?: SessionEventCursor;
+  seenEventIds?: readonly string[];
   sessionId?: string;
   streamIndex: number;
 }
 ```
 
 The continuation token resumes the conversation. The session ID and stream index let the client
-reconnect to the right physical stream position. `eventCursor` retains only the active turn's event
-IDs and a settled-turn watermark, so its size does not grow with the conversation. Treat it as opaque
-client state and store the full object rather than rebuilding selected fields.
+reconnect to the right physical stream position. `seenEventIds` retains event IDs so exact
+re-deliveries remain hidden even when Workflow appends them much later. Treat it as opaque client
+state and store the full object rather than rebuilding selected fields.
 
 `SessionState` is a cursor, not a chat transcript. If your app shows historical messages, persist the stream events separately and store them under your own chat or thread ID. On reload, pass the saved `SessionState` back to `client.session(savedState)` or `useEveAgent({ initialSession })`, and pass the saved events to your renderer or `useEveAgent({ initialEvents })`.
 

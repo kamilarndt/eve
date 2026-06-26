@@ -203,7 +203,7 @@ describe("useEveAgent", () => {
     expect(seenSessions).toEqual([
       {
         continuationToken: "http:session_1",
-        eventCursor: { version: 1 },
+        seenEventIds: [],
         sessionId: "session_1",
         streamIndex: 3,
       },
@@ -211,7 +211,7 @@ describe("useEveAgent", () => {
     expect(helpers?.status).toBe("ready");
     expect(helpers?.session).toEqual({
       continuationToken: "http:session_1",
-      eventCursor: { version: 1 },
+      seenEventIds: [],
       sessionId: "session_1",
       streamIndex: 3,
     });

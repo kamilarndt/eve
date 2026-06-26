@@ -36,7 +36,7 @@ import {
   startRemoteAgentSession,
 } from "#execution/remote-agent-dispatch.js";
 import { hydrateDurableSession } from "#execution/session.js";
-import { createSessionEventMetadataCursorForSession } from "#execution/session-event-metadata.js";
+import { createStepEventMetadataCursor } from "#execution/session-event-metadata.js";
 import { buildSubagentRunInput } from "#execution/subagent-tool.js";
 import { createWorkflowRuntime, workflowEntryReference } from "#execution/workflow-runtime.js";
 import { createLogger, logError } from "#internal/logging.js";
@@ -74,7 +74,7 @@ export async function dispatchRuntimeActionsStep(input: {
     turnAgent: bundle.turnAgent,
   });
   const adapter = ctx.require(ChannelKey);
-  const eventMetadata = createSessionEventMetadataCursorForSession(session);
+  const eventMetadata = createStepEventMetadataCursor();
   const auth = ctx.get(AuthKey) ?? null;
   const capabilities = ctx.get(CapabilitiesKey);
   const channelMetadata = ctx.get(ChannelInstrumentationKey);
@@ -175,7 +175,6 @@ export async function dispatchRuntimeActionsStep(input: {
     writer.releaseLock();
   }
 
-  nextSession = eventMetadata.apply(nextSession);
   const nextState =
     nextSession === session
       ? input.sessionState

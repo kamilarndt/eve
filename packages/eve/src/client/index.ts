@@ -50,7 +50,6 @@ export type {
   MessageResult,
   SendTurnInput,
   SendTurnPayload,
-  SessionEventCursor,
   SessionState,
   StreamOptions,
   TokenValue,

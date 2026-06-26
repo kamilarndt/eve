@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Make the TypeScript client suppress duplicate and late replayed Workflow stream events while preserving the physical reconnect cursor. Stream events now carry stable logical identity and turn metadata so clients can correlate at-least-once deliveries without comparing payloads.
+Make the TypeScript client suppress exact re-deliveries from Workflow while preserving the physical reconnect cursor. Stream event IDs now derive from Workflow's stable run and step IDs plus a step-local ordinal, and every previously unseen ID remains visible to consumers.

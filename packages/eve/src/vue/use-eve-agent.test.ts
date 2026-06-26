@@ -191,7 +191,7 @@ describe("EveAgentStore (Vue composable backing store)", () => {
     expect(seenSessions).toEqual([
       {
         continuationToken: "http:session_1",
-        eventCursor: { version: 1 },
+        seenEventIds: [],
         sessionId: "session_1",
         streamIndex: 3,
       },

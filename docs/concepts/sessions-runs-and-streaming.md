@@ -96,13 +96,14 @@ curl "http://127.0.0.1:3000/eve/v1/session/<sessionId>/stream?startIndex=<count>
 
 Workflow execution is at least once, so this raw physical stream can contain another copy of an
 event or an entire completed turn. `startIndex` counts every physical event, including those copies.
-Stream v17 events carry `meta.eventId` and `meta.turn` so clients can correlate replayed events
-without comparing their payloads.
+Stream v17 events carry a stable `meta.eventId` derived from the Workflow run ID, step ID, and the
+event's ordinal inside that step. Replaying the same step reproduces the same event IDs.
 
 The TypeScript client consumes the physical copies but exposes one logical stream. It suppresses
-duplicate events and late events from settled turns while still advancing `SessionState.streamIndex`,
-so a stale replayed `session.waiting` cannot finish the next `send()`. Raw HTTP consumers that need
-the same behavior should persist the physical offset plus their logical event cursor.
+only event IDs it has already exposed while still advancing `SessionState.streamIndex`, so a stale
+replayed `session.waiting` cannot finish the next `send()`. A new event ID is always exposed,
+regardless of its type, payload, timestamp, or turn coordinates. Raw HTTP consumers that need the
+same behavior should persist the physical offset plus the set of event IDs they have exposed.
 
 ## Use the client from TypeScript
 

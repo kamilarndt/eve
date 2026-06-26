@@ -1,52 +1,47 @@
 import { describe, expect, it } from "vitest";
 
-import { SessionEventMetadataCursor } from "#execution/session-event-metadata.js";
-import { getHarnessEmissionState } from "#harness/emission.js";
-import type { HarnessSession } from "#harness/types.js";
-import { createSessionWaitingEvent, createTurnStartedEvent } from "#protocol/message.js";
+import { StepEventMetadataCursor } from "#execution/session-event-metadata.js";
+import { createTurnStartedEvent } from "#protocol/message.js";
 
-describe("SessionEventMetadataCursor", () => {
-  it("reuses event IDs when a durable execution replays from the same cursor", () => {
-    const first = new SessionEventMetadataCursor({ eventIndex: 7, sessionId: "session_1" });
-    const replay = new SessionEventMetadataCursor({ eventIndex: 7, sessionId: "session_1" });
+describe("StepEventMetadataCursor", () => {
+  it("reuses event IDs when Workflow replays the same step", () => {
+    const first = cursor("step_7");
+    const replay = cursor("step_7");
     const event = createTurnStartedEvent({ sequence: 2, turnId: "turn_2" });
 
     expect(first.stamp(event).meta.eventId).toBe(replay.stamp(event).meta.eventId);
   });
 
-  it("gives equal legitimate events distinct IDs within one execution", () => {
-    const cursor = new SessionEventMetadataCursor({ eventIndex: 7, sessionId: "session_1" });
+  it("gives distinct Workflow steps distinct event IDs", () => {
+    const first = cursor("step_7");
+    const second = cursor("step_8");
     const event = createTurnStartedEvent({ sequence: 2, turnId: "turn_2" });
 
-    expect(cursor.stamp(event).meta.eventId).not.toBe(cursor.stamp(event).meta.eventId);
+    expect(first.stamp(event).meta.eventId).not.toBe(second.stamp(event).meta.eventId);
   });
 
-  it("carries active turn coordinates onto session boundaries", () => {
-    const cursor = new SessionEventMetadataCursor({ eventIndex: 0, sessionId: "session_1" });
-    cursor.stamp(createTurnStartedEvent({ sequence: 2, turnId: "turn_2" }));
+  it("namespaces the same step ID by Workflow run", () => {
+    const first = cursor("step_7");
+    const second = new StepEventMetadataCursor({
+      stepId: "step_7",
+      workflowRunId: "run_2",
+    });
+    const event = createTurnStartedEvent({ sequence: 2, turnId: "turn_2" });
 
-    const waiting = cursor.stamp(createSessionWaitingEvent({ sequence: 2, turnId: "turn_2" }));
-
-    expect(waiting.meta.turn).toEqual({ id: "turn_2", sequence: 2 });
+    expect(first.stamp(event).meta.eventId).not.toBe(second.stamp(event).meta.eventId);
   });
 
-  it("persists the next event position on the returned session", () => {
-    const cursor = new SessionEventMetadataCursor({ eventIndex: 7, sessionId: "session_1" });
-    cursor.stamp(createTurnStartedEvent({ sequence: 2, turnId: "turn_2" }));
-    cursor.stamp(createSessionWaitingEvent({ sequence: 2, turnId: "turn_2" }));
+  it("gives every event in one step a unique ordinal", () => {
+    const metadata = cursor("step_7");
+    const event = createTurnStartedEvent({ sequence: 2, turnId: "turn_2" });
 
-    const updated = cursor.apply(createSession());
-
-    expect(getHarnessEmissionState(updated.state).eventIndex).toBe(9);
+    expect(metadata.stamp(event).meta.eventId).not.toBe(metadata.stamp(event).meta.eventId);
   });
 });
 
-function createSession(): HarnessSession {
-  return {
-    agent: { modelReference: { id: "test-model" }, system: "test", tools: [] },
-    compaction: { recentWindowSize: 10, threshold: 100_000 },
-    continuationToken: "eve:test",
-    history: [],
-    sessionId: "session_1",
-  };
+function cursor(stepId: string): StepEventMetadataCursor {
+  return new StepEventMetadataCursor({
+    stepId,
+    workflowRunId: "run_1",
+  });
 }

@@ -68,8 +68,6 @@ import type {
  * workflow runtime recreates the harness at each `"use step"` boundary.
  */
 export interface HarnessEmissionState {
-  /** Next durable event position. Optional on snapshots written before stream v17. */
-  readonly eventIndex?: number;
   readonly sessionStarted: boolean;
   readonly sequence: number;
   readonly stepIndex: number;
@@ -79,7 +77,6 @@ export interface HarnessEmissionState {
 const HARNESS_EMISSION_STATE_KEY = "eve.harness.emission";
 
 const DEFAULT_EMISSION_STATE: HarnessEmissionState = {
-  eventIndex: 0,
   sessionStarted: false,
   sequence: 0,
   stepIndex: 0,
@@ -125,17 +122,6 @@ export function setHarnessEmissionState(
       [HARNESS_EMISSION_STATE_KEY]: state,
     },
   };
-}
-
-/** Advances the durable event identity cursor without changing turn lifecycle state. */
-export function setHarnessEmissionEventIndex(
-  session: HarnessSession,
-  eventIndex: number,
-): HarnessSession {
-  return setHarnessEmissionState(session, {
-    ...getHarnessEmissionState(session.state),
-    eventIndex,
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -244,13 +230,7 @@ export async function emitFailedStep(
   input: FailedStepPayload & { readonly sessionId: string },
 ): Promise<void> {
   await emitStepAndTurnFailed(emitFn, state, input);
-  await emitFn(
-    createSessionFailedEvent({
-      ...input,
-      sequence: state.sequence,
-      turnId: state.turnId,
-    }),
-  );
+  await emitFn(createSessionFailedEvent(input));
 }
 
 /**
@@ -263,7 +243,7 @@ export async function emitRecoverableFailedTurn(
   input: FailedStepPayload,
 ): Promise<HarnessEmissionState> {
   await emitStepAndTurnFailed(emitFn, state, input);
-  await emitFn(createSessionWaitingEvent({ sequence: state.sequence, turnId: state.turnId }));
+  await emitFn(createSessionWaitingEvent());
 
   return {
     sessionStarted: state.sessionStarted,
@@ -300,9 +280,9 @@ export async function emitTurnEpilogue(
   );
 
   if (mode === "conversation") {
-    await emitFn(createSessionWaitingEvent({ sequence: state.sequence, turnId: state.turnId }));
+    await emitFn(createSessionWaitingEvent());
   } else {
-    await emitFn(createSessionCompletedEvent({ sequence: state.sequence, turnId: state.turnId }));
+    await emitFn(createSessionCompletedEvent());
   }
 
   return {

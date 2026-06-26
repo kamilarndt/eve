@@ -44,12 +44,16 @@ describe("message stream protocol", () => {
         turnId: "turn_0",
       }),
       "2026-04-17T10:14:22.123Z",
+      {
+        ordinal: 3,
+        stepId: "step_7",
+        workflowRunId: "run_2",
+      },
     );
 
     expect(timed.meta).toEqual({
       at: "2026-04-17T10:14:22.123Z",
-      eventId: "session:turn_0:0:step.started",
-      turn: { id: "turn_0", sequence: 0 },
+      eventId: "run_2:step_7:3",
     });
 
     const encoded = encodeMessageStreamEvent(timed);

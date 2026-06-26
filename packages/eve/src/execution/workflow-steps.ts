@@ -34,7 +34,6 @@ import {
   createSessionFailedEvent,
   encodeMessageStreamEvent,
   type HandleMessageStreamEvent,
-  timestampHandleMessageStreamEvent,
 } from "#protocol/message.js";
 import {
   CallbackBaseUrlKey,
@@ -59,7 +58,7 @@ import {
 import { createExecutionNodeStep } from "#execution/node-step.js";
 import { emitProxiedInputRequest, routeDeliverPayload } from "#execution/subagent-hitl-proxy.js";
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
-import { createSessionEventMetadataCursorForSession } from "#execution/session-event-metadata.js";
+import { createStepEventMetadataCursor } from "#execution/session-event-metadata.js";
 import { buildTurnAttributes, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import { normalizeEveAttributes } from "#runtime/attributes/normalize.js";
 import {
@@ -241,7 +240,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
   }
 
   const writer = input.parentWritable.getWriter();
-  const eventMetadata = createSessionEventMetadataCursorForSession(initialSession);
+  const eventMetadata = createStepEventMetadataCursor();
   const hookRegistry = bundle.hookRegistry;
   const dynamicInstructionsResolvers = bundle.resolvedAgent.dynamicInstructionsResolvers ?? [];
   const dynamicSkillResolvers = bundle.resolvedAgent.dynamicSkillResolvers ?? [];
@@ -338,7 +337,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
 
   // Re-stamp the in-memory session's continuation token in case a
   // handler called `setContinuationToken(...)` (eg. Slack auto-anchor).
-  const rekeyed = eventMetadata.apply(reconcileSessionContinuationToken(ctx, stepResult.session));
+  const rekeyed = reconcileSessionContinuationToken(ctx, stepResult.session);
   const nextSerializedContext = serializeContext(ctx);
   stepResult = { ...stepResult, session: rekeyed };
 
@@ -478,6 +477,7 @@ export async function emitTerminalSessionFailureStep(input: {
   const code = typeof details.name === "string" ? details.name : "WORKFLOW_EXECUTION_FAILED";
   const message = typeof details.message === "string" ? details.message : String(input.error);
   const sessionId = (input.serializedContext["eve.sessionId"] as string | undefined) ?? "";
+  const eventMetadata = createStepEventMetadataCursor();
 
   log.error("workflow loop threw — emitting terminal session.failed", {
     sessionId,
@@ -513,13 +513,7 @@ export async function emitTerminalSessionFailureStep(input: {
   try {
     const writer = input.parentWritable.getWriter();
     try {
-      await writer.write(
-        encodeMessageStreamEvent(
-          timestampHandleMessageStreamEvent(event, undefined, {
-            eventId: `${sessionId}:session:terminal:session.failed`,
-          }),
-        ),
-      );
+      await writer.write(encodeMessageStreamEvent(eventMetadata.stamp(event)));
     } finally {
       writer.releaseLock();
     }
@@ -562,7 +556,7 @@ export async function runProxyInputRequestStep(input: {
     durable: durableSession,
     turnAgent: bundle.turnAgent,
   });
-  const eventMetadata = createSessionEventMetadataCursorForSession(session);
+  const eventMetadata = createStepEventMetadataCursor();
   const writer = input.parentWritable.getWriter();
 
   let scopeResult: {
@@ -602,9 +596,7 @@ export async function runProxyInputRequestStep(input: {
     forChildContinuationToken: input.hookPayload.childContinuationToken,
     session: scopeResult.session,
   });
-  const nextSession = eventMetadata.apply(
-    reconcileSessionContinuationToken(ctx, sessionWithProxyEntries),
-  );
+  const nextSession = reconcileSessionContinuationToken(ctx, sessionWithProxyEntries);
   const nextState = createDurableSessionState({ session: nextSession });
 
   return {

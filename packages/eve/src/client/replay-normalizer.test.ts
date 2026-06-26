@@ -4,70 +4,61 @@ import { ReplayNormalizer } from "#client/replay-normalizer.js";
 import type { HandleMessageStreamEvent } from "#protocol/message.js";
 
 describe("ReplayNormalizer", () => {
-  it("suppresses interleaved copies of the same logical event", () => {
+  it("suppresses only repeated event IDs", () => {
     const normalizer = new ReplayNormalizer();
-    const started = event("turn.started", "turn_0:start", 0);
-    const completed = event("turn.completed", "turn_0:complete", 0);
+    const first = event("turn.started", "step_1:0", 0, "turn_0");
+    const second = event("turn.completed", "step_1:1", 0, "turn_0");
 
     expect(
-      [started, started, completed, completed].filter((value) => normalizer.shouldExpose(value)),
-    ).toEqual([started, completed]);
+      [first, first, second, second].filter((value) => normalizer.shouldExpose(value)),
+    ).toEqual([first, second]);
   });
 
-  it("suppresses every late event from a settled turn", () => {
+  it("exposes every new ID regardless of turn coordinates", () => {
     const normalizer = new ReplayNormalizer();
-    const started = event("turn.started", "turn_0:start", 0);
-    const waiting = event("session.waiting", "turn_0:waiting", 0);
-    const nextStarted = event("turn.started", "turn_1:start", 1);
+    const events = [
+      event("turn.started", "step_1:0", 4, "turn_4"),
+      event("subagent.called", "step_2:0", 0, "workflow-dispatch"),
+      event("action.result", "step_3:0", 2, "turn_2"),
+      event("session.waiting", "step_4:0", 1, "turn_1"),
+    ];
 
-    expect(normalizer.shouldExpose(started)).toBe(true);
-    expect(normalizer.shouldExpose(waiting)).toBe(true);
-    expect(normalizer.shouldExpose(started)).toBe(false);
-    expect(normalizer.shouldExpose(waiting)).toBe(false);
-    expect(normalizer.shouldExpose(nextStarted)).toBe(true);
+    expect(events.filter((value) => normalizer.shouldExpose(value))).toEqual(events);
   });
 
-  it("preserves equal payloads with distinct logical IDs", () => {
+  it("preserves equal payloads with distinct event IDs", () => {
     const normalizer = new ReplayNormalizer();
-    const first = event("message.appended", "turn_0:text:1", 0);
-    const second = event("message.appended", "turn_0:text:2", 0);
+    const first = event("message.appended", "step_1:0", 0, "turn_0");
+    const second = event("message.appended", "step_1:1", 0, "turn_0");
 
     expect(normalizer.shouldExpose(first)).toBe(true);
     expect(normalizer.shouldExpose(second)).toBe(true);
   });
 
-  it("restores active-turn identities across reconnects", () => {
+  it("restores seen event IDs across reconnects", () => {
     const first = new ReplayNormalizer();
-    const started = event("turn.started", "turn_0:start", 0);
-    const message = event("message.appended", "turn_0:text:1", 0);
+    const started = event("turn.started", "step_1:0", 0, "turn_0");
+    const message = event("message.appended", "step_1:1", 0, "turn_0");
+    first.shouldExpose(started);
+    first.shouldExpose(message);
 
-    expect(first.shouldExpose(started)).toBe(true);
-    expect(first.shouldExpose(message)).toBe(true);
+    const restored = new ReplayNormalizer(first.seenEventIds);
 
-    const restored = new ReplayNormalizer(first.cursor);
     expect(restored.shouldExpose(started)).toBe(false);
     expect(restored.shouldExpose(message)).toBe(false);
+    expect(restored.shouldExpose(event("turn.completed", "step_1:2", 0, "turn_0"))).toBe(true);
   });
 
-  it("uses a legacy history prefix to reject a late replay", () => {
+  it("uses the first observation when one ID carries conflicting data", () => {
     const normalizer = new ReplayNormalizer();
-    const started = { data: { sequence: 0, turnId: "turn_0" }, type: "turn.started" } as const;
-    const completed = {
-      data: { sequence: 0, turnId: "turn_0" },
-      type: "turn.completed",
-    } as const;
-    const waiting = { data: { wait: "next-user-message" }, type: "session.waiting" } as const;
+    const first = event("turn.started", "step_1:0", 0, "turn_0");
+    const conflict = event("action.result", "step_1:0", 9, "other-turn");
 
-    normalizer.observeHistory(started);
-    normalizer.observeHistory(completed);
-    normalizer.observeHistory(waiting);
-
-    expect(normalizer.shouldExpose(event("turn.started", "turn_0:start", 0))).toBe(false);
-    expect(normalizer.shouldExpose(event("turn.completed", "turn_0:complete", 0))).toBe(false);
-    expect(normalizer.shouldExpose(event("session.waiting", "turn_0:waiting", 0))).toBe(false);
+    expect(normalizer.shouldExpose(first)).toBe(true);
+    expect(normalizer.shouldExpose(conflict)).toBe(false);
   });
 
-  it("passes legacy events through without guessing identity", () => {
+  it("always exposes events without an ID", () => {
     const normalizer = new ReplayNormalizer();
     const legacy = { data: { sequence: 0, turnId: "turn_0" }, type: "turn.started" } as const;
 
@@ -80,15 +71,15 @@ function event(
   type: HandleMessageStreamEvent["type"],
   eventId: string,
   sequence: number,
+  turnId: string,
 ): HandleMessageStreamEvent {
-  const turn = { id: `turn_${sequence}`, sequence };
   const data =
     type === "session.waiting"
-      ? { sequence, turnId: turn.id, wait: "next-user-message" as const }
-      : { sequence, turnId: turn.id };
+      ? { sequence, turnId, wait: "next-user-message" as const }
+      : { sequence, turnId };
   return {
     data,
-    meta: { at: "2026-06-26T00:00:00.000Z", eventId, turn },
+    meta: { at: "2026-06-26T00:00:00.000Z", eventId },
     type,
   } as HandleMessageStreamEvent;
 }

@@ -97,14 +97,14 @@ const client = new Client({
 
 The durable stream is an at-least-once physical log: Workflow may append concurrent or late copies
 of events from the same logical turn. The client consumes those copies, advances its physical cursor,
-and suppresses them before they reach iteration, `result()`, evals, or frontend stores. Equal payloads
-from distinct logical events are preserved; filtering uses server-provided event identity and turn
-coordinates, not payload hashing.
+and suppresses an event before it reaches iteration, `result()`, evals, or frontend stores only when
+its server-provided event ID was already exposed. Equal payloads with distinct IDs are preserved, and
+events without IDs are always exposed. Filtering never infers duplication from payloads, event types,
+timestamps, or turn coordinates.
 
 Persist the complete `session.state` after consuming a response. In addition to `streamIndex`, it
-contains a bounded logical cursor that keeps replay filtering correct after a process restart. A
-saved state from before this cursor existed is upgraded by silently reconstructing it from the
-durable stream prefix once.
+contains the exposed event IDs that keep replay filtering correct after a process restart. When a
+state has no `seenEventIds`, the client starts with an empty set and exposes every subsequent ID once.
 
 ## Open a stream manually
 
@@ -130,8 +130,8 @@ for await (const event of session.stream({ startIndex: 0 })) {
 }
 ```
 
-`startIndex` is a physical offset. Overriding it to a different position also reconstructs the
-logical cursor through that prefix before exposing events.
+`startIndex` is a physical offset. Overriding it to a different position starts a fresh event-ID set
+at that position, so the client does not hide requested history based on a cursor from another offset.
 
 `stream()` throws if the session has no `sessionId`, because there's no stream to attach to before the first send.
 

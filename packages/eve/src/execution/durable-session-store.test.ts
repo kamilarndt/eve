@@ -45,7 +45,6 @@ describe("durable-session-store cross-version contract", () => {
     // Emission state is projected onto the handle so framework steps
     // can stamp protocol events without taking an extra step boundary.
     expect(state.emissionState).toEqual({
-      eventIndex: 0,
       sequence: 0,
       sessionStarted: false,
       stepIndex: 0,

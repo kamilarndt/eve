@@ -243,24 +243,8 @@ export interface HealthResult {
  */
 export interface SessionState {
   readonly continuationToken?: string;
-  /** Bounded logical cursor used to suppress Workflow stream replays. */
-  readonly eventCursor?: SessionEventCursor;
+  /** Event identities already exposed by this client session. */
+  readonly seenEventIds?: readonly string[];
   readonly sessionId?: string;
   readonly streamIndex: number;
-}
-
-/** Serializable logical event cursor retained alongside the physical stream offset. */
-export interface SessionEventCursor {
-  readonly version: 1;
-  readonly activeTurn?: {
-    readonly id: string;
-    readonly sequence: number;
-  };
-  readonly physicalTurn?: {
-    readonly id: string;
-    readonly sequence: number;
-  };
-  readonly sawSessionStarted?: boolean;
-  readonly seenEventIds?: readonly string[];
-  readonly settledTurnSequence?: number;
 }
