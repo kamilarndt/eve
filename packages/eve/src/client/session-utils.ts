@@ -23,9 +23,17 @@ export function advanceSession(input: {
   readonly preserveCompletedSessions?: boolean;
   readonly sessionId: string;
   readonly session: SessionState;
+  readonly streamIndex?: number;
 }): SessionState {
   const boundaryEvent = findBoundaryEvent(input.events);
-  const streamIndex = input.session.streamIndex + input.events.length;
+  const streamIndex = input.streamIndex ?? input.session.streamIndex + input.events.length;
+  const observedTurnId = findLastTurnId(input.events);
+  const lastTurnId = observedTurnId ?? input.session.lastTurnId;
+  const observedEventIds = input.events.map(createSessionEventIdentity);
+  const lastTurnEventIds =
+    observedTurnId !== undefined && observedTurnId === input.session.lastTurnId
+      ? [...new Set([...(input.session.lastTurnEventIds ?? []), ...observedEventIds])]
+      : observedEventIds;
 
   if (
     boundaryEvent?.type === "session.waiting" ||
@@ -33,12 +41,31 @@ export function advanceSession(input: {
   ) {
     return {
       continuationToken: input.continuationToken ?? input.session.continuationToken,
+      lastTurnEventIds,
+      lastTurnId,
       sessionId: input.sessionId,
       streamIndex,
     };
   }
 
   return createInitialSessionState();
+}
+
+function findLastTurnId(events: readonly HandleMessageStreamEvent[]): string | undefined {
+  let turnId: string | undefined;
+  for (const event of events) {
+    turnId = readTurnId(event) ?? turnId;
+  }
+  return turnId;
+}
+
+export function readTurnId(event: HandleMessageStreamEvent): string | undefined {
+  const turnId = "data" in event ? (event.data as { readonly turnId?: unknown }).turnId : undefined;
+  return typeof turnId === "string" && turnId.length > 0 ? turnId : undefined;
+}
+
+export function createSessionEventIdentity(event: HandleMessageStreamEvent): string {
+  return JSON.stringify([event.type, "data" in event ? event.data : undefined]);
 }
 
 /**

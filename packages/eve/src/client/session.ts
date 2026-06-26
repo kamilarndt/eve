@@ -9,7 +9,7 @@ import { MessageResponse } from "#client/message-response.js";
 import { isStreamDisconnectError, readNdjsonStream } from "#client/ndjson.js";
 import { openStreamBody, openStreamIterable } from "#client/open-stream.js";
 import { normalizeOutputSchemaForRequest } from "#client/output-schema.js";
-import { advanceSession } from "#client/session-utils.js";
+import { advanceSession, createSessionEventIdentity, readTurnId } from "#client/session-utils.js";
 import { createClientUrl } from "#client/url.js";
 import type {
   ClientRedirectPolicy,
@@ -161,10 +161,18 @@ export class ClientSession {
     input: SendTurnPayload,
   ): AsyncGenerator<HandleMessageStreamEvent> {
     const events: HandleMessageStreamEvent[] = [];
+    let currentStreamIndex = initialState.sessionId === sessionId ? initialState.streamIndex : 0;
 
     try {
-      let currentStreamIndex = initialState.sessionId === sessionId ? initialState.streamIndex : 0;
+      const previousTurnId =
+        initialState.sessionId === sessionId ? initialState.lastTurnId : undefined;
+      const previousEventIds = new Set(
+        initialState.sessionId === sessionId ? initialState.lastTurnEventIds : undefined,
+      );
+      let currentTurnId: string | undefined;
       let remainingReconnectAttempts = this.#context.maxReconnectAttempts;
+      const currentEventIds = new Set<string>();
+      let sawCurrentTurnEvent = false;
 
       while (true) {
         const body = await this.#openStreamBody(
@@ -178,8 +186,39 @@ export class ClientSession {
 
         try {
           for await (const event of readNdjsonStream(body)) {
-            events.push(event);
             currentStreamIndex += 1;
+
+            const identity = createSessionEventIdentity(event);
+            const turnId = readTurnId(event);
+            if (turnId !== undefined) {
+              if (
+                previousTurnId !== undefined &&
+                turnId === previousTurnId &&
+                previousEventIds.has(identity)
+              ) {
+                continue;
+              }
+              if (currentTurnId !== turnId) {
+                currentTurnId = turnId;
+                currentEventIds.clear();
+              }
+              sawCurrentTurnEvent = true;
+            }
+
+            // A replay can leave the previous turn's trailing wait boundary
+            // immediately before the next real turn in the raw stream.
+            if (
+              event.type === "session.waiting" &&
+              !sawCurrentTurnEvent &&
+              previousEventIds.has(identity)
+            ) {
+              continue;
+            }
+
+            if (currentEventIds.has(identity)) continue;
+            currentEventIds.add(identity);
+
+            events.push(event);
             yield event;
 
             if (isCurrentTurnBoundaryEvent(event)) {
@@ -216,6 +255,7 @@ export class ClientSession {
         preserveCompletedSessions: this.#context.preserveCompletedSessions,
         sessionId,
         session: initialState,
+        streamIndex: currentStreamIndex,
       });
     }
   }

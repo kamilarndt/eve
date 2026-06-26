@@ -188,13 +188,13 @@ describe("EveAgentStore (Vue composable backing store)", () => {
         userMessage: "Hello",
       }),
     );
-    expect(seenSessions).toEqual([
-      {
-        continuationToken: "http:session_1",
-        sessionId: "session_1",
-        streamIndex: 3,
-      },
-    ]);
+    expect(seenSessions).toHaveLength(1);
+    expect(seenSessions[0]).toMatchObject({
+      continuationToken: "http:session_1",
+      lastTurnId: "turn_1",
+      sessionId: "session_1",
+      streamIndex: 3,
+    });
   });
 
   it("surfaces transport errors", async () => {

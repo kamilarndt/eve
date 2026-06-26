@@ -243,6 +243,10 @@ export interface HealthResult {
  */
 export interface SessionState {
   readonly continuationToken?: string;
+  /** Event identities retained to suppress replayed chunks from the last turn. */
+  readonly lastTurnEventIds?: readonly string[];
+  /** Identifier of the last turn consumed from this session's raw event stream. */
+  readonly lastTurnId?: string;
   readonly sessionId?: string;
   readonly streamIndex: number;
 }

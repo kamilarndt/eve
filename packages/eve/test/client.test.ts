@@ -675,8 +675,9 @@ describe("Session state", () => {
 
     await (await session.send("Hello")).result();
 
-    expect(session.state).toEqual({
+    expect(session.state).toMatchObject({
       continuationToken: "http:session_001",
+      lastTurnId: "turn_001",
       sessionId: "session_001",
       streamIndex: 5,
     });

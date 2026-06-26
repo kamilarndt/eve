@@ -200,16 +200,17 @@ describe("useEveAgent", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(seenEvents).toEqual(events);
-    expect(seenSessions).toEqual([
-      {
-        continuationToken: "http:session_1",
-        sessionId: "session_1",
-        streamIndex: 3,
-      },
-    ]);
-    expect(helpers?.status).toBe("ready");
-    expect(helpers?.session).toEqual({
+    expect(seenSessions).toHaveLength(1);
+    expect(seenSessions[0]).toMatchObject({
       continuationToken: "http:session_1",
+      lastTurnId: "turn_1",
+      sessionId: "session_1",
+      streamIndex: 3,
+    });
+    expect(helpers?.status).toBe("ready");
+    expect(helpers?.session).toMatchObject({
+      continuationToken: "http:session_1",
+      lastTurnId: "turn_1",
       sessionId: "session_1",
       streamIndex: 3,
     });
