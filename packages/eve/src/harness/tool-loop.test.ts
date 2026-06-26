@@ -2118,7 +2118,7 @@ describe("createToolLoopHarness", () => {
     const abortReason = new Error("turn cancelled");
 
     vi.mocked(ToolLoopAgent).mockImplementation(function (
-      this: Record<string, unknown>,
+      this: ToolLoopAgent,
       settings: MockAgentSettings,
     ) {
       this.stream = vi
@@ -2143,8 +2143,8 @@ describe("createToolLoopHarness", () => {
             steps: new Promise<never>(() => {}),
           };
         });
-      return this as unknown as ToolLoopAgent;
-    } as unknown as MockAgentConstructor);
+      return this;
+    } as MockAgentConstructor);
 
     const { emit, events } = createEventCollector();
     const runStep = createToolLoopHarness(

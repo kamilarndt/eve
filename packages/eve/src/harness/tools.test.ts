@@ -69,7 +69,7 @@ async function executeSdkTool(input: {
   ).execute;
   expect(execute).toBeTypeOf("function");
   return await execute!(input.toolInput ?? {}, {
-    ...(input.abortSignal === undefined ? {} : { abortSignal: input.abortSignal }),
+    abortSignal: input.abortSignal,
     messages: [],
     toolCallId: input.toolCallId ?? "call_1",
   });

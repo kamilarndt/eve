@@ -27,7 +27,7 @@ export async function dispatchAndAwaitTurn(input: {
 
   try {
     await dispatchTurnStep({
-      ...(input.abortSignal === undefined ? {} : { abortSignal: input.abortSignal }),
+      abortSignal: input.abortSignal,
       capabilities: input.capabilities,
       completionToken: control.token,
       delivery: input.delivery,

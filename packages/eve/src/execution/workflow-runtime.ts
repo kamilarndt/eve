@@ -138,7 +138,7 @@ export function createWorkflowRuntime(config: {
           workflowEntryReference,
           [
             {
-              ...(config.abortSignal === undefined ? {} : { abortSignal: config.abortSignal }),
+              abortSignal: config.abortSignal,
               input: input.input,
               serializedContext,
             },

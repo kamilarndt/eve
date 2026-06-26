@@ -1,6 +1,7 @@
 import { createHook, getWorkflowMetadata } from "#compiled/@workflow/core/index.js";
 
 import type { DeliverHookPayload } from "#channel/types.js";
+import { cancelPendingRemoteAgentTurnsStep } from "#execution/cancel-pending-remote-agent-turns-step.js";
 import { sendTurnControlStep, type TurnInboxPayload } from "#execution/turn-control-protocol.js";
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
 import { dispatchWorkflowRuntimeActionsStep } from "#execution/dispatch-workflow-runtime-actions-step.js";
@@ -165,6 +166,11 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
         }
       },
       inheritedSignal: input.stepInput.abortSignal,
+      onCancel: () =>
+        cancelPendingRemoteAgentTurnsStep({
+          serializedContext: cursor.serializedContext,
+          sessionState: cursor.sessionState,
+        }),
     });
 
     await cursor.finish(terminal, terminal.action, bufferedDeliveries);
@@ -356,6 +362,7 @@ async function runWithTurnCancellation<T>(input: {
   readonly continuationToken: string;
   readonly execute: (abortSignal: AbortSignal) => Promise<T>;
   readonly inheritedSignal: AbortSignal | undefined;
+  readonly onCancel?: () => Promise<void>;
 }): Promise<T> {
   const abortState = resolveAbortState(input.inheritedSignal);
   const cancelHook =
@@ -375,14 +382,15 @@ async function runWithTurnCancellation<T>(input: {
       return await execution;
     }
 
-    const abortController = abortState.abortController;
-    return await Promise.race([
-      execution,
-      cancelHook.then(() => {
-        abortController.abort();
-        return execution;
-      }),
+    const outcome = await Promise.race([
+      execution.then((value) => ({ kind: "completed" as const, value })),
+      cancelHook.then(() => ({ kind: "cancelled" as const })),
     ]);
+    if (outcome.kind === "completed") return outcome.value;
+
+    abortState.abortController.abort();
+    await input.onCancel?.();
+    return await execution;
   } finally {
     if (ownsCancelHook && cancelHook !== undefined) {
       await disposeHook(cancelHook);

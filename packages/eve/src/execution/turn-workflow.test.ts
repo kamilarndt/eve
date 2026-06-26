@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HookPayload } from "#channel/types.js";
+import { cancelPendingRemoteAgentTurnsStep } from "#execution/cancel-pending-remote-agent-turns-step.js";
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
 import { dispatchWorkflowRuntimeActionsStep } from "#execution/dispatch-workflow-runtime-actions-step.js";
 import type { DurableSessionState } from "#execution/durable-session-store.js";
@@ -57,6 +58,10 @@ vi.mock("#compiled/@workflow/core/runtime.js", () => ({
 
 vi.mock("./route-child-delivery.js", () => ({
   routeDeliverToChildren: vi.fn(),
+}));
+
+vi.mock("./cancel-pending-remote-agent-turns-step.js", () => ({
+  cancelPendingRemoteAgentTurnsStep: vi.fn(),
 }));
 
 vi.mock("./workflow-steps.js", () => ({
@@ -165,6 +170,10 @@ describe("turnWorkflow", () => {
 
     await vi.waitFor(() => {
       expect(abortSignal?.aborted).toBe(true);
+      expect(cancelPendingRemoteAgentTurnsStep).toHaveBeenCalledWith({
+        serializedContext: input.stepInput.serializedContext,
+        sessionState,
+      });
     });
     await Promise.resolve();
     expect(workflowSettled).toBe(false);
