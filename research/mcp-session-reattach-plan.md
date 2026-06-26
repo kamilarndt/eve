@@ -127,6 +127,30 @@ to establish state again. A future replay layer can add an authored hook or conn
 re-establishing setup after expiry, but valid-session reattach should not require app code beyond the
 connection-level opt-in.
 
+## DX options considered
+
+There are a few plausible public API shapes. The strongest option is a small declarative opt-in,
+with more explicit helpers added later only where they solve a concrete authoring problem.
+
+| Option | Example shape | Strengths | Risks |
+| --- | --- | --- | --- |
+| Connection-level opt-in | `session: { continuity: "durable" }` | Smallest app-facing API; keeps MCP session ids out of user code; lets eve enforce per-session and per-principal scoping; works with existing model/tool flow. | Less flexible when upstream sessions expire; naming must be clear that this is MCP-session continuity, not durable business state. |
+| Lower-level session helpers | `ctx.connections.workspace.clearSession()` / `terminateSession()` | Useful for explicit reset, logout, tests, and operational cleanup; action-oriented helpers avoid exposing raw protocol tokens. | Still leaks MCP session lifecycle into authored code; helpers need careful availability rules so models cannot accidentally clear shared context through ordinary remote tools. |
+| Raw session metadata access | `getSessionId()` / `setSessionId(...)` | Maximum escape hatch; mirrors the underlying protocol closely. | Easy to misuse; authors may store or share session ids incorrectly; creates cross-user leakage and resource-lifetime hazards; couples eve's public API to AI SDK transport details. |
+| Authored replay hook | `session: { continuity: "durable", replay: async (...) => ... }` | Handles expired upstream sessions and server restarts by re-establishing setup state; keeps raw session ids hidden. | Requires a durable, JSON-serializable app state model; replayed setup must be idempotent and safe; too much surface for the first version. |
+| Server/app state instead of MCP session state | Include the selected id in each tool call, or have the MCP server persist state by user/token. | Most robust when the server can support it; avoids client-side session lifetime concerns. | Not always available for third-party MCP servers; can make model prompts and tool schemas more repetitive. |
+| Session-level global switch | `client.session({ mcpSessionContinuity: true })` | Easy for a whole app or UI to turn on. | Too broad: different MCP servers have different lifetime semantics, so the choice belongs on the connection. |
+
+Recommended layering:
+
+1. Ship connection-level opt-in as the first public API.
+2. Keep raw session ids and initialize metadata framework-owned.
+3. Add action-oriented helpers only if authors need explicit reset or cleanup.
+4. Add a replay hook later if valid-session reattach is not enough for servers with short-lived or
+   in-memory sessions.
+5. Avoid a public `getSessionId()`/`setSessionId()` API unless there is a strong debugging need and
+   it can be clearly marked unstable/internal.
+
 ## Where state is saved
 
 Use durable context, not the workflow body as an authored input shape and not external storage.
