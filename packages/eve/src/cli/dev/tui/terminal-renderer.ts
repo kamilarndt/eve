@@ -2810,8 +2810,8 @@ export class TerminalRenderer implements AgentTUIRenderer {
   }
 
   /**
-   * Appends the persistent bottom status line (model · tokens · Vercel link ·
-   * pending deploy) when any segment has content.
+   * Appends the persistent bottom status line (local address badge, model,
+   * tokens · Vercel link · pending deploy) when any segment has content.
    */
   #pushStatusLine(rows: string[], width: number): void {
     const padding = this.#remoteConnection === undefined ? "" : STATUS_LINE_LEFT_PADDING;
@@ -2837,7 +2837,11 @@ export class TerminalRenderer implements AgentTUIRenderer {
       input.tokens = formatTokenFlow(flow, this.#theme.glyph);
     }
     if (this.#vercelStatus !== undefined) input.vercel = this.#vercelStatus;
-    if (this.#remoteConnection !== undefined) input.remote = this.#remoteConnection;
+    if (this.#remoteConnection !== undefined) {
+      input.remote = this.#remoteConnection;
+    } else if (this.#agentHeader?.serverUrl !== undefined) {
+      input.localServerUrl = this.#agentHeader.serverUrl;
+    }
     const line = buildStatusLine(input);
     if (line !== undefined) rows.push(clip(`${padding}${line}`, width));
   }

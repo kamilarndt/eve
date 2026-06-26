@@ -2706,7 +2706,7 @@ describe("TerminalRenderer status line", () => {
     pendingDeploy: false,
   };
 
-  it("renders model and Vercel link under the prompt row", async () => {
+  it("renders the local server, model, and Vercel link under the prompt row", async () => {
     const { screen, input, renderer } = makeRenderer();
     renderer.renderAgentHeader({
       name: "Weather Agent",
@@ -2736,6 +2736,7 @@ describe("TerminalRenderer status line", () => {
     const promptRow = lines.findIndex((line) => line.includes("❯"));
     expect(promptRow).toBeGreaterThan(-1);
     const statusRow = lines.slice(promptRow + 1).join("\n");
+    expect(statusRow).toContain("localhost:3000");
     expect(statusRow).toContain("anthropic/claude-sonnet-4-6");
     // The linked project folds into the connected gateway label.
     expect(statusRow).toContain("AI Gateway (my-agent)");
@@ -2815,7 +2816,7 @@ describe("TerminalRenderer status line", () => {
       "",
       "   Select your team",
     ]);
-    const status = lines.indexOf("   ↗ vpoke.playground-vercel.tools  · Authenticating via OIDC…");
+    const status = lines.indexOf("   ↗ vpoke.playground-vercel.tools · Authenticating via OIDC…");
     expect(status).toBeGreaterThan(title);
     expect(lines[status - 1]).toBe("");
 
