@@ -2,6 +2,7 @@ export { CUSTOM_CHANNEL_PORTABILITY_DESCRIPTOR } from "#internal/testing/scenari
 export { DISCORD_ROUTE_PORTABILITY_DESCRIPTOR } from "#internal/testing/scenario-apps/discord-route-portability.js";
 export { EXTENSION_AGENT_DESCRIPTOR } from "#internal/testing/scenario-apps/extension-agent.js";
 export { GITHUB_ROUTE_PORTABILITY_DESCRIPTOR } from "#internal/testing/scenario-apps/github-route-portability.js";
+export { IDLE_STREAM_REPRO_DESCRIPTOR } from "#internal/testing/scenario-apps/idle-stream-repro.js";
 export { EVE_ROUTE_PORTABILITY_DESCRIPTOR } from "#internal/testing/scenario-apps/eve-route-portability.js";
 export { SANDBOX_BUNDLING_DESCRIPTOR } from "#internal/testing/scenario-apps/sandbox-bundling.js";
 export { SANDBOX_WORKSPACES_DESCRIPTOR } from "#internal/testing/scenario-apps/sandbox-workspaces.js";
