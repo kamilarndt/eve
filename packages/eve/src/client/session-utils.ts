@@ -65,6 +65,9 @@ export function readTurnId(event: HandleMessageStreamEvent): string | undefined 
 }
 
 export function createSessionEventIdentity(event: HandleMessageStreamEvent): string {
+  if (event.type === "subagent.completed") {
+    return JSON.stringify([event.type, event.data.callId]);
+  }
   return JSON.stringify([event.type, "data" in event ? canonicalizeJson(event.data) : undefined]);
 }
 

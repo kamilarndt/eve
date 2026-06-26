@@ -231,7 +231,7 @@ describe("ClientSession", () => {
       const reorderedReplay = {
         data: {
           subagentName: "helper",
-          output: "answer",
+          output: "replayed answer",
           callId: "call_1",
         },
         type: "subagent.completed",
