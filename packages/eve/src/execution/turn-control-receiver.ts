@@ -109,7 +109,8 @@ export class TurnControlReceiver {
       return;
     }
 
-    const accepted = this.executionClaimId === undefined;
+    const accepted =
+      this.executionClaimId === undefined || this.executionClaimId === payload.claimId;
     this.executionClaimId ??= payload.claimId;
 
     try {

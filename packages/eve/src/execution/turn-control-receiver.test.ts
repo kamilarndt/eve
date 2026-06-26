@@ -116,7 +116,7 @@ describe("TurnControlReceiver", () => {
     ]);
   });
 
-  it("rejects a retried claim after the first acceptance", async () => {
+  it("accepts a replayed claim from the established child run", async () => {
     installControlHook([
       { claimId: "first-run", inboxToken: "first-inbox", kind: "turn-execution-claim" },
       { claimId: "first-run", inboxToken: "first-inbox", kind: "turn-execution-claim" },
@@ -127,7 +127,7 @@ describe("TurnControlReceiver", () => {
 
     expect(sendTurnExecutionClaimResultStep).toHaveBeenCalledTimes(2);
     expect(sendTurnExecutionClaimResultStep).toHaveBeenLastCalledWith({
-      accepted: false,
+      accepted: true,
       claimId: "first-run",
       inboxToken: "first-inbox",
     });
