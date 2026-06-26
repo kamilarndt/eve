@@ -1,5 +1,6 @@
 import { defaultBackend, defineSandbox } from "eve/sandbox";
 import { vercel } from "eve/sandbox/vercel";
+import { getVercelOidcToken } from "@vercel/oidc";
 
 import { CREDENTIAL_PROBE_PATH, CREDENTIAL_PROBE_TOKEN } from "../credential-probe.js";
 
@@ -66,13 +67,7 @@ const backend =
               [credentialProbeHost]: [
                 {
                   auth: {
-                    getToken: async () => {
-                      const token = process.env.VERCEL_OIDC_TOKEN;
-                      if (token === undefined || token.length === 0) {
-                        throw new Error("credential-probe: VERCEL_OIDC_TOKEN is unavailable");
-                      }
-                      return { token };
-                    },
+                    getToken: async () => ({ token: await getVercelOidcToken() }),
                   },
                   match: { path: { exact: CREDENTIAL_PROBE_PATH } },
                   transform: ({ token }) => [

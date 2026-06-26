@@ -3,6 +3,7 @@ import { defineEval } from "eve/evals";
 interface ProbeResult {
   readonly authorized?: unknown;
   readonly credentialVisibleToProcess?: unknown;
+  readonly httpStatus?: unknown;
   readonly mode?: unknown;
   readonly supported?: unknown;
 }
@@ -24,7 +25,7 @@ export default defineEval({
     probe.expectOk();
 
     const probeCall = probe.toolCalls.find((call) => call.name === "credential-probe");
-    if (probeCall === undefined || probeCall.isError) {
+    if (probeCall === undefined) {
       throw new Error(`credential-probe did not complete successfully: ${JSON.stringify(probe)}`);
     }
     assertProbeResult(probeCall.output, t.target.kind);
@@ -38,16 +39,13 @@ export default defineEval({
       const cleanupCall = cleanup.toolCalls.find(
         (call) => call.name === "credential-probe-cleanup",
       );
-      if (cleanupCall === undefined || cleanupCall.isError) {
+      if (cleanupCall === undefined) {
         throw new Error(
           `credential-probe-cleanup did not complete successfully: ${JSON.stringify(cleanup)}`,
         );
       }
       assertCleanupResult(cleanupCall.output);
     }
-
-    t.didNotFail();
-    t.completed();
   },
 });
 

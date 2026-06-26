@@ -1,4 +1,5 @@
 import { defineTool } from "eve/tools";
+import { getVercelOidcToken } from "@vercel/oidc";
 import { z } from "zod";
 
 import {
@@ -26,16 +27,18 @@ export default defineTool({
       command: "env; if [ -r /proc/self/environ ]; then tr '\\0' '\\n' < /proc/self/environ; fi",
     });
     const processOutput = `${environment.stdout}\n${environment.stderr}`;
-    const oidcToken = process.env.VERCEL_OIDC_TOKEN;
+    const oidcToken = await getVercelOidcToken();
     const credentialVisibleToProcess =
-      processOutput.includes(CREDENTIAL_PROBE_TOKEN) ||
-      (oidcToken !== undefined && oidcToken.length > 0 && processOutput.includes(oidcToken));
+      processOutput.includes(CREDENTIAL_PROBE_TOKEN) || processOutput.includes(oidcToken);
 
     const authorizedUrl = `https://${deploymentHost}${CREDENTIAL_PROBE_PATH}`;
     const authorized = await sandbox.run({
-      command: `curl -sS --max-time 15 ${shellQuote(authorizedUrl)}`,
+      command: `curl -sS --max-time 15 -w '\\n%{http_code}' ${shellQuote(authorizedUrl)}`,
     });
-    const authorizedResponse = parseProbeResponse(authorized.stdout);
+    const responseBoundary = authorized.stdout.lastIndexOf("\n");
+    const responseBody = authorized.stdout.slice(0, responseBoundary);
+    const httpStatus = Number(authorized.stdout.slice(responseBoundary + 1));
+    const authorizedResponse = parseProbeResponse(responseBody);
 
     await sandbox.removePath({ force: true, path: CREDENTIAL_PROBE_CLEANUP_PATH });
     await sandbox.spawn({
@@ -48,6 +51,7 @@ export default defineTool({
     return {
       authorized: authorized.exitCode === 0 && authorizedResponse.authorized === true,
       credentialVisibleToProcess,
+      httpStatus,
       mode: "vercel",
       supported: true,
     } as const;
