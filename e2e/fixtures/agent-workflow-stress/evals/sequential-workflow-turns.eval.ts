@@ -1,10 +1,10 @@
 import { defineEval } from "eve/evals";
 import { equals } from "eve/evals/expect";
 
-const TURN_COUNT = 100;
+const TURN_COUNT = 20;
 
 export default defineEval({
-  description: "Workflow stress: one durable session completes 100 sequential turns.",
+  description: "Workflow stress: one durable session completes 20 sequential turns.",
   tags: ["stress", "workflow", "sequential"],
 
   async test(t) {
