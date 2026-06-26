@@ -1456,12 +1456,10 @@ async function handleStepResult(input: {
     );
 
   if (pendingRuntimeActions.length > 0) {
-    // Stamp the live emission state onto the parked session so the
-    // resume turn is classified as a continuation (turnId set), not a
-    // fresh turn. Every other park path does this; without it the
-    // parked session carries the default emission state (turnId ""),
-    // because the post-preamble `setHarnessEmissionState` is dropped by
-    // the later `session = pending.session` / `maybeCompact` rebinds.
+    // The runtime action belongs to the completed model step, while the
+    // resumed model call is the next step in the same turn. Advancing here
+    // gives that call a distinct event identity even though it runs in a
+    // separate Workflow step.
     return {
       next: null,
       session: setHarnessEmissionState(
@@ -1475,7 +1473,7 @@ async function handleStepResult(input: {
           responseMessages,
           session: { ...baseSession, history: [...promptMessages] },
         }),
-        emissionState,
+        advanceStep(emissionState),
       ),
     };
   }

@@ -34,6 +34,7 @@ import {
   requestAuthorization,
 } from "#harness/authorization.js";
 import { setPendingInputBatch } from "#harness/input-requests.js";
+import { getPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
 import { stashToolInterrupt } from "#harness/tool-interrupts.js";
 import { createToolLoopHarness } from "#harness/tool-loop.js";
 import type { HarnessEmitFn, HarnessSession, ToolLoopHarnessConfig } from "#harness/types.js";
@@ -1900,7 +1901,7 @@ describe("createToolLoopHarness", () => {
     expect(events.some((event) => event.type === "turn.failed")).toBe(false);
   });
 
-  it("stamps the live emission state onto a parked runtime-action batch so resume is a continuation", async () => {
+  it("advances the emission step when parking on a runtime action", async () => {
     setupMockAgent({
       finishReason: "tool-calls",
       response: {
@@ -1953,14 +1954,16 @@ describe("createToolLoopHarness", () => {
     expect(result.next).toBeNull();
     expect(result.session.state?.["eve.runtime.pendingActionBatch"]).toBeDefined();
 
-    // The parked session must carry the live turn's emission identity so
-    // the resume turn is classified as a continuation, not a fresh turn.
-    // Regression: the runtime-action park previously dropped the
-    // post-preamble emission update, persisting the default `turnId: ""`,
-    // which mis-routed the resume through the fresh-turn lifecycle path.
+    // The action result remains attributed to the completed model step, while
+    // the resumed model call gets a fresh step index. This prevents its
+    // step.started event from sharing the completed call's event identity.
+    const pending = getPendingRuntimeActionBatch(result.session.state);
+    expect(pending?.event.stepIndex).toBe(0);
+
     const emission = getHarnessEmissionState(result.session.state);
     expect(emission.turnId).toBe("turn_0");
     expect(emission.sessionStarted).toBe(true);
+    expect(emission.stepIndex).toBe(1);
     expect(isHarnessBetweenTurns(result.session)).toBe(false);
   });
 

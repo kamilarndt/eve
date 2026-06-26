@@ -795,11 +795,10 @@ describe("EveTUIRunner failure rendering", () => {
 });
 
 describe("EveTUIRunner reused step indexes", () => {
-  it("renders the post-subagent message that the harness emits under a reused stepIndex", async () => {
-    // Mirrors the real parent stream around a subagent dispatch: the second
-    // model call arrives under a fresh `step.started` but the SAME
-    // `turnId:stepIndex` key as the already-completed first message. It must
-    // render as its own assistant block, not be dropped as a replay.
+  it("renders a fresh model call from an older stream under a reused stepIndex", async () => {
+    // Older runtimes could emit a fresh `step.started` under the same
+    // `turnId:stepIndex` key as an already-completed message. Keep rendering
+    // that call as its own assistant block rather than dropping it as replay.
     const prompts: Array<string | undefined> = ["delegate to the subagent", undefined];
     const emitted: AgentTUIStreamEvent[] = [];
     const session = sessionYielding([

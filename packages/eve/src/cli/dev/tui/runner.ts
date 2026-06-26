@@ -1733,11 +1733,9 @@ async function* eveEventsToTUIStream(
   } = input;
   const textParts = new Map<string, StreamPartState>();
   const reasoningParts = new Map<string, StreamPartState>();
-  // Counts `step.started` events. The harness reuses `stepIndex` across the
-  // model calls of one turn (e.g. the post-subagent call restarts at the same
-  // index), so a part key alone cannot distinguish "new message under a
-  // reused key" from "replayed events of the finished message". A fresh
-  // `step.started` since the part completed is the discriminator.
+  // Counts `step.started` events so streams produced by older runtimes that
+  // reused a step index can still distinguish a new model call from replayed
+  // events of the finished message.
   let stepEpoch = 0;
   const knownToolCalls = new Set<string>();
   const seenInputRequestIds = new Set<string>();
@@ -1787,9 +1785,8 @@ async function* eveEventsToTUIStream(
           // Divergent text without an intervening `step.started` is a retry
           // of the same model call — drop it rather than mixing attempts.
           if (stepEpoch <= state.completedEpoch) break;
-          // A fresh model call reusing this part key (the harness restarts
-          // `stepIndex` after a park/resume, e.g. post-subagent): open a new
-          // message generation so it renders as its own block.
+          // A fresh model call reusing this part key opens a new message
+          // generation so it renders as its own block.
           state.generation += 1;
           state.text = "";
           state.completed = false;
@@ -2150,10 +2147,9 @@ function reasoningPartId(turnId: string, stepIndex: number): string {
 /**
  * Per-part-key accumulation state for one assistant text or reasoning trace.
  *
- * eve names parts by `turnId:stepIndex`, but the harness reuses `stepIndex`
- * across the model calls of one turn (the post-park call restarts at the same
- * index). `generation` disambiguates: each fresh model call that reuses a
- * completed key opens generation N+1, which renders as its own block.
+ * eve names parts by `turnId:stepIndex`. `generation` keeps the TUI compatible
+ * with older streams that reused an index: each fresh model call under a
+ * completed key opens generation N+1 and renders as its own block.
  */
 type StreamPartState = {
   generation: number;
