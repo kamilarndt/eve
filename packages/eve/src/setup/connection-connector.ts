@@ -39,14 +39,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseTerminalJsonObject(source: string): unknown {
+function parseTerminalJson(source: string): unknown {
   const clean = stripVTControlCharacters(source).trim();
-  let start = clean.lastIndexOf("{");
-  while (start >= 0) {
+  let objectStart = clean.lastIndexOf("{");
+  let arrayStart = clean.lastIndexOf("[");
+  while (objectStart >= 0 || arrayStart >= 0) {
+    const useObject = objectStart > arrayStart;
+    const start = useObject ? objectStart : arrayStart;
+    if (useObject) {
+      objectStart = clean.lastIndexOf("{", objectStart - 1);
+    } else {
+      arrayStart = clean.lastIndexOf("[", arrayStart - 1);
+    }
     try {
       return JSON.parse(clean.slice(start));
     } catch {
-      start = clean.lastIndexOf("{", start - 1);
+      // A nested object/array cannot consume the trailing enclosing JSON;
+      // keep walking toward the enclosing terminal payload.
     }
   }
   return undefined;
@@ -61,9 +70,28 @@ function parseConnectorRef(value: unknown): ConnectConnectorRef | undefined {
   return connector;
 }
 
+function connectorCandidates(value: unknown): readonly unknown[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (!isRecord(value)) return undefined;
+  const candidates = value["connectors"] ?? value["clients"] ?? value["data"];
+  return Array.isArray(candidates) ? candidates : undefined;
+}
+
+function connectorListCursor(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value["cursor"] === "string") return value["cursor"];
+  if (typeof value["next"] === "string") return value["next"];
+  const pagination = value["pagination"];
+  if (!isRecord(pagination)) return undefined;
+  if (typeof pagination["cursor"] === "string") return pagination["cursor"];
+  if (typeof pagination["next"] === "string") return pagination["next"];
+  if (typeof pagination["nextCursor"] === "string") return pagination["nextCursor"];
+  return undefined;
+}
+
 /** Parses a created connector that can issue user credentials. */
 export function parseCreatedConnector(stdout: string): ConnectConnectorRef | undefined {
-  const value = parseTerminalJsonObject(stdout);
+  const value = parseTerminalJson(stdout);
   const connector = parseConnectorRef(value);
   if (!isRecord(value) || connector === undefined) return undefined;
   const subjects = value["supportedSubjectTypes"];
@@ -72,9 +100,8 @@ export function parseCreatedConnector(stdout: string): ConnectConnectorRef | und
 
 /** Parses the service-scoped connector inventory returned by the Vercel CLI. */
 export function parseConnectors(value: unknown, service: string): ConnectConnectorRef[] {
-  if (!isRecord(value)) return [];
-  const candidates = value["connectors"] ?? value["clients"];
-  if (!Array.isArray(candidates)) return [];
+  const candidates = connectorCandidates(value);
+  if (candidates === undefined) return [];
 
   const connectors: ConnectConnectorRef[] = [];
   for (const candidate of candidates) {
@@ -84,6 +111,17 @@ export function parseConnectors(value: unknown, service: string): ConnectConnect
     if (connector !== undefined) connectors.push(connector);
   }
   return connectors;
+}
+
+function parseConnectorListPage(
+  value: unknown,
+  service: string,
+): { connectors: ConnectConnectorRef[]; cursor?: string } | undefined {
+  if (connectorCandidates(value) === undefined) return undefined;
+  const cursor = connectorListCursor(value);
+  return cursor === undefined
+    ? { connectors: parseConnectors(value, service) }
+    : { connectors: parseConnectors(value, service), cursor };
 }
 
 async function ensureLinkedProject(
@@ -99,13 +137,24 @@ async function ensureLinkedProject(
 
 async function listConnectors(
   options: SetupConnectionConnectorOptions,
+  project: VercelProjectReference,
   onOutput: ProcessOutputHandler,
 ): Promise<ConnectConnectorRef[]> {
   const connectors: ConnectConnectorRef[] = [];
   const seenCursors = new Set<string>();
   let cursor: string | undefined;
   do {
-    const args = ["connect", "list", "-F", "json", "--all-projects", "--service", options.service];
+    const args = [
+      "connect",
+      "list",
+      "-F",
+      "json",
+      "--all-projects",
+      "--service",
+      options.service,
+      "--scope",
+      project.orgId,
+    ];
     if (cursor !== undefined) args.push("--next", cursor);
     const result = await captureVercel(args, {
       cwd: options.projectRoot,
@@ -113,12 +162,13 @@ async function listConnectors(
       signal: options.signal,
     });
     if (!result.ok) throw new Error(result.failure.message);
-    const page = parseTerminalJsonObject(result.stdout);
-    if (!isRecord(page) || !Array.isArray(page["connectors"] ?? page["clients"])) {
+    const page = parseTerminalJson(result.stdout);
+    const parsed = parseConnectorListPage(page, options.service);
+    if (parsed === undefined) {
       throw new Error(`Vercel returned an invalid connector list for ${options.service}.`);
     }
-    connectors.push(...parseConnectors(page, options.service));
-    const next = typeof page["cursor"] === "string" ? page["cursor"] : undefined;
+    connectors.push(...parsed.connectors);
+    const next = parsed.cursor;
     if (next !== undefined && seenCursors.has(next)) {
       throw new Error(`The connector list repeated cursor ${next}.`);
     }
@@ -141,7 +191,7 @@ async function supportsUserAuthorization(
     signal: options.signal,
   });
   if (!result.ok) throw new Error(`Could not verify connector ${connector.uid}.`);
-  const value = parseTerminalJsonObject(result.stdout);
+  const value = parseTerminalJson(result.stdout);
   if (
     !isRecord(value) ||
     value["id"] !== connector.id ||
@@ -176,11 +226,16 @@ export async function cleanupCreatedConnectionConnector(input: {
   log: ChannelSetupLog;
   projectRoot: string;
   connectorId: string;
+  /** The linked Vercel owner; inferred from the project link when omitted. */
+  orgId?: string;
 }): Promise<void> {
-  const removed = await runVercel(
-    ["connect", "remove", input.connectorId, "--disconnect-all", "--yes"],
-    { cwd: input.projectRoot, onOutput: createPromptCommandOutput(input.log) },
-  );
+  const orgId = input.orgId ?? (await readProjectLink(input.projectRoot))?.orgId;
+  const args = ["connect", "remove", input.connectorId, "--disconnect-all", "--yes"];
+  if (orgId !== undefined) args.push("--scope", orgId);
+  const removed = await runVercel(args, {
+    cwd: input.projectRoot,
+    onOutput: createPromptCommandOutput(input.log),
+  });
   if (!removed) {
     throw new Error(
       `Could not remove connector ${input.connectorId}; run \`vercel connect remove ${input.connectorId} --disconnect-all --yes\`.`,
@@ -190,6 +245,7 @@ export async function cleanupCreatedConnectionConnector(input: {
 
 async function cleanupThenThrow(
   options: SetupConnectionConnectorOptions,
+  project: VercelProjectReference,
   connectorId: string,
   message: string,
 ): Promise<never> {
@@ -198,6 +254,7 @@ async function cleanupThenThrow(
       log: options.log,
       projectRoot: options.projectRoot,
       connectorId,
+      orgId: project.orgId,
     });
   } catch (error) {
     const cleanup = error instanceof Error ? error.message : String(error);
@@ -209,10 +266,11 @@ async function cleanupThenThrow(
 
 async function attach(
   options: SetupConnectionConnectorOptions,
+  project: VercelProjectReference,
   connectorUid: string,
   onOutput: ProcessOutputHandler,
 ): Promise<boolean> {
-  return runVercel(["connect", "attach", connectorUid, "--yes"], {
+  return runVercel(["connect", "attach", connectorUid, "--yes", "--scope", project.orgId], {
     cwd: options.projectRoot,
     onOutput,
     signal: options.signal,
@@ -236,7 +294,7 @@ async function resolveFallbackConnector(
         { value: "create", label: "Create a new one", hint: "Register another connector" },
       ],
     });
-    const connectors = await listConnectors(options, onOutput);
+    const connectors = await listConnectors(options, project, onOutput);
 
     if (choice === "find") {
       const supported: ConnectConnectorRef[] = [];
@@ -252,6 +310,7 @@ async function resolveFallbackConnector(
       const byUid = new Map(supported.map((connector) => [connector.uid, connector]));
       const uid = await options.prompter.select<string>({
         message: `Select a connector for ${options.slug}`,
+        hintLayout: "inline",
         search: true,
         placeholder: "type to search connectors",
         options: supported.map((connector) => ({
@@ -287,19 +346,29 @@ async function resolveFallbackConnector(
       "Waiting for you to complete setup in the browser…",
       () =>
         runVercelCaptureStdout(
-          ["connect", "create", options.service, "--name", name, "-F", "json"],
+          [
+            "connect",
+            "create",
+            options.service,
+            "--name",
+            name,
+            "-F",
+            "json",
+            "--scope",
+            project.orgId,
+          ],
           { cwd: options.projectRoot, onOutput: createOutput, signal: options.signal },
         ),
       { kind: "external-action", emphasis: "browser" },
     );
-    const raw = parseConnectorRef(parseTerminalJsonObject(created.stdout));
+    const raw = parseConnectorRef(parseTerminalJson(created.stdout));
     const ownedId = raw?.id ?? CREATED_CONNECTOR.exec(transcript.join("\n"))?.[1];
     const connector = created.ok ? parseCreatedConnector(created.stdout) : undefined;
     if (connector !== undefined) return { kind: "created", connector };
     const message = created.ok
       ? `The ${options.service} connector does not support user authorization.`
       : `Could not create the ${options.service} connector.`;
-    if (ownedId !== undefined) return cleanupThenThrow(options, ownedId, message);
+    if (ownedId !== undefined) return cleanupThenThrow(options, project, ownedId, message);
     throw new Error(message);
   }
 }
@@ -311,7 +380,7 @@ export async function setupConnectionConnector(
   const onOutput = createPromptCommandOutput(options.log);
   const project = await ensureLinkedProject(options);
 
-  if (await attach(options, options.canonicalConnectorUid, onOutput)) {
+  if (await attach(options, project, options.canonicalConnectorUid, onOutput)) {
     options.log.success(`Attached ${options.canonicalConnectorUid} connector`);
     return { kind: "existing", connectorUid: options.canonicalConnectorUid };
   }
@@ -323,10 +392,11 @@ export async function setupConnectionConnector(
     onOutput,
     `Could not attach ${options.canonicalConnectorUid}.`,
   );
-  if (!(await attach(options, resolution.connector.uid, onOutput))) {
+  if (!(await attach(options, project, resolution.connector.uid, onOutput))) {
     if (resolution.kind === "created") {
       return cleanupThenThrow(
         options,
+        project,
         resolution.connector.id,
         `Could not attach ${resolution.connector.uid} to the linked project.`,
       );

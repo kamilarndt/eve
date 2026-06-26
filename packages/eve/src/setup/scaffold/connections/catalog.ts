@@ -42,8 +42,9 @@ export type ConnectionAuthSpec =
    * It starts as a placeholder and is rewritten to the real connector UID once
    * the connector is provisioned (see {@link service}). `service` is the
    * managed-connector identifier passed to `vercel connect create <service>`
-   * (e.g. the MCP host `mcp.linear.app`); when omitted, the connector must be
-   * created out of band and its UID set by hand.
+   * (e.g. `mcp.linear.app/mcp`); when omitted, eve falls back to the MCP
+   * endpoint host. It is distinct from the connector UID namespace, which is
+   * only the endpoint host (e.g. `mcp.linear.app`).
    */
   | { kind: "connect"; connector: string; service?: string }
   /** Static bearer token read from a single environment variable. */
@@ -102,11 +103,13 @@ export const CUSTOM_CONNECTION_SLUG = "custom";
  * when the scaffolder emits its template. Every connection in the catalog must
  * have an entry here — {@link buildCatalogEntry} throws otherwise.
  */
+// Vercel's managed service key can include an endpoint path, while connector
+// UIDs use only the endpoint host. Keep the provider-owned keys explicit.
 const CONNECTION_AUTH: Readonly<Record<string, ConnectionAuthSpec>> = {
-  linear: { kind: "connect", connector: "linear", service: "mcp.linear.app" },
-  notion: { kind: "connect", connector: "notion", service: "mcp.notion.com" },
-  datadog: { kind: "connect", connector: "datadog", service: "mcp.datadoghq.com" },
-  honeycomb: { kind: "connect", connector: "honeycomb", service: "mcp.honeycomb.io" },
+  linear: { kind: "connect", connector: "linear", service: "mcp.linear.app/mcp" },
+  notion: { kind: "connect", connector: "notion", service: "mcp.notion.com/mcp" },
+  datadog: { kind: "connect", connector: "datadog", service: "mcp.datadoghq.com/api/mcp" },
+  honeycomb: { kind: "connect", connector: "honeycomb", service: "mcp.honeycomb.io/mcp" },
 };
 
 function buildCatalogEntry(
@@ -182,9 +185,9 @@ export function isValidConnectionSlug(slug: string): boolean {
 
 /**
  * The `vercel connect create <service>` identifier for a Connect-backed
- * connection: the explicit `auth.service` when set, otherwise the host of the
- * MCP endpoint (e.g. `mcp.linear.app`). Returns `undefined` when neither is
- * available, in which case the connector must be provisioned out of band.
+ * connection: the explicit `auth.service` when set, otherwise the MCP host.
+ * Returns `undefined` when neither is available, in which case the connector
+ * must be provisioned out of band.
  */
 export function connectorServiceForEntry(
   entry: Pick<ConnectionCatalogEntry, "mcp" | "auth">,
@@ -201,8 +204,14 @@ export function canonicalConnectorUidForEntry(entry: {
 }): string | undefined {
   if (entry.auth?.kind !== "connect") return undefined;
   if (entry.auth.connector.includes("/")) return entry.auth.connector;
-  const service = entry.auth.service ?? mcpServiceHost(entry.mcp?.url);
-  return service === undefined ? undefined : `${service}/${entry.auth.connector}`;
+  const namespace = mcpServiceHost(entry.mcp?.url) ?? serviceHost(entry.auth.service);
+  return namespace === undefined ? undefined : `${namespace}/${entry.auth.connector}`;
+}
+
+function serviceHost(service: string | undefined): string | undefined {
+  if (!service) return undefined;
+  const host = service.split("/", 1)[0]?.trim();
+  return host || undefined;
 }
 
 /** Extracts the bare host from an MCP URL, or `undefined` when unparseable. */

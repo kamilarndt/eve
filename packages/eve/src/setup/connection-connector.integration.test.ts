@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createFakePrompter } from "#internal/testing/fake-prompter.js";
 import { captureVercel, runVercel, runVercelCaptureStdout } from "#setup/primitives/run-vercel.js";
+import type { PrompterValue, SingleSelectOptions } from "#setup/prompter.js";
 
 import {
   parseConnectors,
@@ -22,7 +23,7 @@ vi.mock("#setup/primitives/run-vercel.js", () => ({
 const capture = vi.mocked(captureVercel);
 const run = vi.mocked(runVercel);
 const create = vi.mocked(runVercelCaptureStdout);
-const SERVICE = "mcp.linear.app";
+const SERVICE = "mcp.linear.app/mcp";
 const CANONICAL_UID = "mcp.linear.app/linear";
 
 function jsonResult(value: unknown) {
@@ -50,7 +51,7 @@ describe("connector response parsing", () => {
         {
           connectors: [
             { uid: "linear/acme", id: "scl_1", name: "acme", service: SERVICE },
-            { uid: "notion/acme", id: "scl_2", service: "mcp.notion.com" },
+            { uid: "notion/acme", id: "scl_2", service: "mcp.notion.com/mcp" },
           ],
         },
         SERVICE,
@@ -97,6 +98,10 @@ describe("setupConnectionConnector", () => {
     });
     expect(capture).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledWith(
+      ["connect", "attach", CANONICAL_UID, "--yes", "--scope", "org_1"],
+      expect.any(Object),
+    );
   });
 
   it("paginates and offers only existing connectors that support user authorization", async () => {
@@ -112,7 +117,13 @@ describe("setupConnectionConnector", () => {
       .mockResolvedValueOnce(connectorResult("linear/app", "scl_app", "app"))
       .mockResolvedValueOnce(connectorResult("linear/user", "scl_user", "user"));
     const answers = ["find", "linear/user"];
-    const fake = createFakePrompter({ single: () => answers.shift()! });
+    const selectOptions: SingleSelectOptions<PrompterValue>[] = [];
+    const fake = createFakePrompter({
+      single: (input) => {
+        selectOptions.push(input);
+        return answers.shift()!;
+      },
+    });
 
     await expect(setupConnectionConnector(options(fake.prompter))).resolves.toEqual({
       kind: "existing",
@@ -122,10 +133,37 @@ describe("setupConnectionConnector", () => {
       expect.arrayContaining(["--next", "next_page"]),
       expect.any(Object),
     );
+    expect(capture).toHaveBeenCalledWith(
+      expect.arrayContaining(["--scope", "org_1"]),
+      expect.any(Object),
+    );
     expect(fake.selectMessages).toEqual([
       "Which connector should linear use?",
       "Select a connector for linear",
     ]);
+    expect(selectOptions[0]).toMatchObject({
+      hintLayout: "inline",
+      notices: [{ tone: "warning", text: `Could not attach ${CANONICAL_UID}.` }],
+    });
+    expect(selectOptions[1]).toMatchObject({
+      hintLayout: "inline",
+      placeholder: "type to search connectors",
+      search: true,
+    });
+  });
+
+  it("accepts an array connector inventory from the CLI", async () => {
+    run.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    capture
+      .mockResolvedValueOnce(jsonResult([{ uid: "linear/user", id: "scl_user" }]))
+      .mockResolvedValueOnce(connectorResult("linear/user", "scl_user", "user"));
+    const answers = ["find", "linear/user"];
+    const fake = createFakePrompter({ single: () => answers.shift()! });
+
+    await expect(setupConnectionConnector(options(fake.prompter))).resolves.toEqual({
+      kind: "existing",
+      connectorUid: "linear/user",
+    });
   });
 
   it("removes a created connector when attach fails", async () => {
@@ -143,11 +181,11 @@ describe("setupConnectionConnector", () => {
       "Could not attach linear/linear-2",
     );
     expect(create).toHaveBeenCalledWith(
-      ["connect", "create", SERVICE, "--name", "linear-2", "-F", "json"],
+      ["connect", "create", SERVICE, "--name", "linear-2", "-F", "json", "--scope", "org_1"],
       expect.any(Object),
     );
     expect(run).toHaveBeenLastCalledWith(
-      ["connect", "remove", "scl_created", "--disconnect-all", "--yes"],
+      ["connect", "remove", "scl_created", "--disconnect-all", "--yes", "--scope", "org_1"],
       expect.any(Object),
     );
   });
@@ -165,7 +203,7 @@ describe("setupConnectionConnector", () => {
       `Could not create the ${SERVICE} connector`,
     );
     expect(run).toHaveBeenLastCalledWith(
-      ["connect", "remove", "scl_partial", "--disconnect-all", "--yes"],
+      ["connect", "remove", "scl_partial", "--disconnect-all", "--yes", "--scope", "org_1"],
       expect.any(Object),
     );
   });

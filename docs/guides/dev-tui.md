@@ -63,7 +63,7 @@ The provider row demands attention (a bold yellow "Configure model access" with 
 
 `/connect` shows a searchable list of MCP servers available through Vercel Connect. Already-authored connections remain checked. Logged-out users are directed to `/vc:login`. When the directory is not linked, selecting a server opens the same team and project flow used by `/model`, including creating a project or linking an existing one.
 
-For a selected server, eve first tries to attach the provider's canonical connector. If that fails, choose an existing connector from a searchable list or create one with a specific name. A connector created by the current attempt is removed if attachment or connection-file patching fails. Successful setup writes `agent/connections/<name>.ts`, records the attached connector UID, and installs the new dependency so the dev server can load it.
+For a selected server, eve first tries to attach the provider's canonical connector. If that fails, choose an existing connector from a searchable list or create one with a specific name. The fallback stays scoped to the team selected by the linked project. A connector created by the current attempt is removed if attachment or connection-file patching fails. Successful setup writes `agent/connections/<name>.ts`, records the attached connector UID, installs the new dependency so the dev server can load it, then returns to the main prompt.
 
 ## Keyboard shortcuts
 
@@ -90,7 +90,7 @@ When the agent needs something from you, the TUI asks inline.
 
 - Tool approvals are a `y` or `n`.
 - Option questions let you pick with `↑` / `↓` and `Enter`, or you can compose a multi-line freeform answer.
-- If a tool needs an authorized [connection](../connections), the URL shows up right in the transcript, and the turn picks back up once you finish the flow.
+- If a tool needs an authorized [connection](../connections), the URL shows up right in the transcript, and the turn picks back up once you finish the flow. The same local `eve dev` server owns the callback route, so keep that command running until the browser returns. `eve dev --url` connects to an already-running server and does not start a local callback host.
 
 ## Control what logs show
 

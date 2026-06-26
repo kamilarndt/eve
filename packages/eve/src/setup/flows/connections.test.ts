@@ -75,12 +75,12 @@ function runConnectionFlow(
 }
 
 describe("runConnectionsFlow", () => {
-  it("adds a catalog connection and repaints the searchable list", async () => {
+  it("returns a terminal success after adding a catalog connection", async () => {
     const listAuthoredConnections = vi
       .fn(async () => [] as string[])
       .mockResolvedValueOnce([])
       .mockResolvedValue(["linear"]);
-    const list = scriptConnectionList(["linear", "done"]);
+    const list = scriptConnectionList(["linear"]);
 
     await expect(runConnectionFlow(list, { listAuthoredConnections })).resolves.toEqual({
       kind: "done",
@@ -93,9 +93,7 @@ describe("runConnectionsFlow", () => {
       placeholder: "type to search MCP servers",
     });
     expect(list.requests[0]?.options.map((row) => row.value)).toEqual(["linear", "notion", "done"]);
-    expect(list.requests[1]?.options.find((row) => row.value === "linear")).toMatchObject({
-      completed: true,
-    });
+    expect(list.requests).toHaveLength(1);
   });
 
   it("defaults to Done when every catalog connection is already authored", async () => {
@@ -131,7 +129,7 @@ describe("runConnectionsFlow", () => {
       .fn(async () => [] as string[])
       .mockResolvedValueOnce([])
       .mockResolvedValue(["linear"]);
-    const list = scriptConnectionList(["linear", "done"]);
+    const list = scriptConnectionList(["linear"]);
     await expect(
       runConnectionFlow(list, {
         detectDeployment,
@@ -147,16 +145,32 @@ describe("runConnectionsFlow", () => {
     );
   });
 
-  it("returns to the connection list when project linking is cancelled", async () => {
+  it("returns a terminal cancellation when project linking is cancelled", async () => {
     const runLinkFlow = vi.fn(async () => Object.freeze({ kind: "cancelled" }));
-    const list = scriptConnectionList(["linear", "done"]);
+    const list = scriptConnectionList(["linear"]);
 
     await expect(
       runConnectionFlow(list, {
         detectDeployment: vi.fn(() => Promise.resolve<DeploymentInfo>({ state: "unlinked" })),
         runLinkFlow,
       }),
-    ).resolves.toEqual({ kind: "done", addedConnections: [] });
+    ).resolves.toEqual({ kind: "cancelled" });
+    expect(list.requests).toHaveLength(1);
+  });
+
+  it("returns a terminal failure when connector setup fails", async () => {
+    const list = scriptConnectionList(["linear"]);
+    const addConnections = addConnectionDeps();
+    vi.mocked(addConnections.setupConnectionConnector).mockRejectedValueOnce(
+      new Error("Could not create the mcp.linear.app connector."),
+    );
+
+    await expect(runConnectionFlow(list, { addConnections })).resolves.toEqual({
+      kind: "failed",
+      addedConnections: [],
+      message: "Could not create the mcp.linear.app connector.",
+    });
+    expect(list.requests).toHaveLength(1);
   });
 
   it("does not mutate dependencies when connector selection is cancelled", async () => {

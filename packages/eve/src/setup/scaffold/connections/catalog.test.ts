@@ -48,7 +48,7 @@ describe("catalog integrity", () => {
 });
 
 describe("connectorServiceForEntry", () => {
-  test("prefers the explicit service over the MCP host", () => {
+  test("prefers the explicit service over the MCP endpoint", () => {
     expect(
       connectorServiceForEntry({
         mcp: { url: "https://mcp.example.com/sse" },
@@ -74,14 +74,23 @@ describe("connectorServiceForEntry", () => {
 });
 
 describe("canonicalConnectorUidForEntry", () => {
-  test("keeps catalog UIDs and derives custom UIDs", () => {
+  test("uses the endpoint host for a UID even when the service includes a path", () => {
     expect(canonicalConnectorUidForEntry(getCatalogEntry("notion")!)).toBe("mcp.notion.com/notion");
     expect(
       canonicalConnectorUidForEntry({
         mcp: { url: "https://mcp.example.com/mcp" },
-        auth: { kind: "connect", connector: "custom" },
+        auth: { kind: "connect", connector: "custom", service: "mcp.example.com/mcp" },
       }),
     ).toBe("mcp.example.com/custom");
+  });
+});
+
+describe("curated Connect services", () => {
+  test("uses the provider's managed service identifier", () => {
+    expect(connectorServiceForEntry(getCatalogEntry("linear")!)).toBe("mcp.linear.app/mcp");
+    expect(connectorServiceForEntry(getCatalogEntry("notion")!)).toBe("mcp.notion.com/mcp");
+    expect(connectorServiceForEntry(getCatalogEntry("datadog")!)).toBe("mcp.datadoghq.com/api/mcp");
+    expect(connectorServiceForEntry(getCatalogEntry("honeycomb")!)).toBe("mcp.honeycomb.io/mcp");
   });
 });
 

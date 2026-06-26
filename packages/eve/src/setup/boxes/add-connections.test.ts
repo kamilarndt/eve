@@ -130,7 +130,7 @@ describe("selectConnections + addConnections boxes", () => {
     // since `vercel connect create` opens a browser.
     expect(deps.setupConnectionConnector).not.toHaveBeenCalled();
     expect(prompter.log.info).toHaveBeenCalledWith(
-      "Run `vercel connect create mcp.linear.app --name linear`, then set the connector UID in agent/connections/linear.ts.",
+      "Run `vercel connect create mcp.linear.app/mcp --name linear`, then set the connector UID in agent/connections/linear.ts.",
     );
   });
 
@@ -147,7 +147,7 @@ describe("selectConnections + addConnections boxes", () => {
     expect(deps.setupConnectionConnector).toHaveBeenCalledWith(
       expect.objectContaining({
         slug: "linear",
-        service: "mcp.linear.app",
+        service: "mcp.linear.app/mcp",
         projectRoot: "/tmp/project",
       }),
     );
@@ -177,7 +177,7 @@ describe("selectConnections + addConnections boxes", () => {
       expect.objectContaining({ slug: "notion", protocol: "mcp" }),
     );
     expect(deps.setupConnectionConnector).toHaveBeenCalledWith(
-      expect.objectContaining({ slug: "notion", service: "mcp.notion.com" }),
+      expect.objectContaining({ slug: "notion", service: "mcp.notion.com/mcp" }),
     );
     // The interactive picker offers only curated catalog entries.
     expect(presented.length).toBeGreaterThan(0);
@@ -226,7 +226,8 @@ describe("selectConnections + addConnections boxes", () => {
         }),
       }),
     );
-    // The custom MCP host becomes the Connect service.
+    // Custom MCP URLs retain the host fallback because only curated providers
+    // declare a verified Vercel Connect service identifier.
     expect(deps.setupConnectionConnector).toHaveBeenCalledWith(
       expect.objectContaining({ slug: "mycorp", service: "mcp.mycorp.dev" }),
     );
@@ -278,7 +279,7 @@ describe("selectConnections + addConnections boxes", () => {
         slug: "linear",
         protocol: "mcp",
         entry: expect.objectContaining({ slug: "linear" }),
-        provision: { kind: "command-hint", service: "mcp.linear.app" },
+        provision: { kind: "command-hint", service: "mcp.linear.app/mcp" },
       },
     ]);
     expect(deps.ensureConnection).not.toHaveBeenCalled();

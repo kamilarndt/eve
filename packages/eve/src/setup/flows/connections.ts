@@ -136,19 +136,14 @@ export async function runConnectionsFlow(input: {
   signal?.throwIfAborted();
 
   let state = inProjectSetupState(appRoot, projectResolutionFromDeployment(deployment));
-  let authored = new Set(initialAuthored);
-  const added: string[] = [];
-  let dependenciesReady = false;
+  const authored = new Set(initialAuthored);
+  const selected = await pickConnection(prompter, authored, authStatus);
+  if (selected === undefined) return { kind: "cancelled" };
+  if (selected === "done" || authored.has(selected)) {
+    return { kind: "done", addedConnections: [] };
+  }
 
-  while (true) {
-    const selected = await pickConnection(prompter, authored, authStatus);
-    if (selected === undefined || selected === "done") {
-      return added.length === 0 && selected === undefined
-        ? { kind: "cancelled" }
-        : { kind: "done", addedConnections: added };
-    }
-    if (authored.has(selected)) continue;
-
+  try {
     if (!isProjectResolved(state.project)) {
       const link = await deps.runLinkFlow({
         appRoot,
@@ -158,10 +153,7 @@ export async function runConnectionsFlow(input: {
         teamSelectMessage: () =>
           "You need to link to a project to use Vercel Connect.\n\nSelect your team",
       });
-      if (link.kind === "cancelled") {
-        if (signal?.aborted) return { kind: "cancelled" };
-        continue;
-      }
+      if (link.kind === "cancelled") return { kind: "cancelled" };
 
       const deploymentAfterLink = await withSpinner(prompter, "Checking the project…", () =>
         deps.detectDeployment(appRoot, { signal }),
@@ -178,7 +170,6 @@ export async function runConnectionsFlow(input: {
         signal,
         deps: deps.addConnections,
         beforeScaffold: async () => {
-          if (dependenciesReady) return;
           const packageManager = await deps.detectPackageManager(appRoot);
           await deps.ensureConnectionDependencies({ projectRoot: appRoot });
           const installed = await withPhase(
@@ -195,29 +186,28 @@ export async function runConnectionsFlow(input: {
               `Dependency installation failed. Run \`${packageManager.kind} install\`.`,
             );
           }
-          dependenciesReady = true;
         },
       }),
     ];
-    try {
-      const result = await runInteractive(boxes, state, prompterSink(prompter), {
-        snapshot: snapshotSetupState,
-        signal,
-      });
-      if (result.kind !== "done") {
-        return added.length === 0
-          ? { kind: "cancelled" }
-          : { kind: "done", addedConnections: added };
-      }
-      state = result.state;
-      authored = new Set(await deps.listAuthoredConnections(appRoot));
-      if (!authored.has(selected)) continue;
-      added.push(selected);
-    } catch (error) {
-      authored = new Set(await deps.listAuthoredConnections(appRoot));
-      if (!authored.has(selected)) throw error;
-      if (!added.includes(selected)) added.push(selected);
-      return { kind: "failed", addedConnections: added, message: toErrorMessage(error) };
+
+    const result = await runInteractive(boxes, state, prompterSink(prompter), {
+      snapshot: snapshotSetupState,
+      signal,
+    });
+    if (result.kind !== "done") return { kind: "cancelled" };
+
+    const updatedAuthored = new Set(await deps.listAuthoredConnections(appRoot));
+    if (!updatedAuthored.has(selected)) {
+      throw new Error(`Connection "${selected}" was not added.`);
     }
+    return { kind: "done", addedConnections: [selected] };
+  } catch (error) {
+    if (error instanceof WizardCancelledError) return { kind: "cancelled" };
+    const updatedAuthored = new Set(await deps.listAuthoredConnections(appRoot));
+    return {
+      kind: "failed",
+      addedConnections: updatedAuthored.has(selected) ? [selected] : [],
+      message: toErrorMessage(error),
+    };
   }
 }

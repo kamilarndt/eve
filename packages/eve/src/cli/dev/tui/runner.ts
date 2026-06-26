@@ -715,76 +715,88 @@ export class EveTUIRunner {
         hasRunTurn = true;
       }
 
-      const result = await this.#streamTurn({
+      let result = await this.#streamTurn({
         prompt: streamWithoutPrompt ? undefined : prompt,
         inputResponses: pendingInputResponses,
       });
+      let submittedPrompt = prompt;
+      let respondedToInputRequest = false;
 
       try {
-        await this.#renderer.renderStream(result, {
-          title,
-          submittedPrompt: prompt,
-          continueSession: Boolean(this.#renderer.readPrompt),
-          tools: this.#tools,
-          reasoning: this.#reasoning,
-          subagents: this.#subagents,
-          connectionAuth: this.#connectionAuth,
-          assistantResponseStats: this.#assistantResponseStats,
-          contextSize: this.#contextSize,
-        });
+        while (true) {
+          await this.#renderer.renderStream(result, {
+            title,
+            submittedPrompt,
+            continueSession: Boolean(this.#renderer.readPrompt),
+            tools: this.#tools,
+            reasoning: this.#reasoning,
+            subagents: this.#subagents,
+            connectionAuth: this.#connectionAuth,
+            assistantResponseStats: this.#assistantResponseStats,
+            contextSize: this.#contextSize,
+          });
 
-        const approvalRequests = result.turnState?.pendingApprovals ?? [];
-        const questionRequests = result.turnState?.pendingQuestions ?? [];
+          const approvalRequests = result.turnState?.pendingApprovals ?? [];
+          const questionRequests = result.turnState?.pendingQuestions ?? [];
 
-        if (approvalRequests.length > 0 || questionRequests.length > 0) {
-          const responses: InputResponse[] = [];
+          if (approvalRequests.length > 0 || questionRequests.length > 0) {
+            const responses: InputResponse[] = [];
 
-          if (approvalRequests.length > 0) {
-            if (!this.#renderer.readToolApproval) {
-              throw new Error(
-                "Tool approval was requested, but the renderer does not support tool approval input.",
-              );
-            }
-
-            for (const request of approvalRequests) {
-              const response = await this.#renderer.readToolApproval(request, { title });
-              responses.push({
-                requestId: request.approvalId,
-                optionId: response.approved ? "approve" : "deny",
-              });
-              this.#pendingInputRequests.delete(request.approvalId);
-            }
-          }
-
-          if (questionRequests.length > 0) {
-            if (!this.#renderer.readInputQuestion) {
-              throw new Error(
-                "An interactive question was requested, but the renderer does not support input questions.",
-              );
-            }
-
-            for (const inputRequest of questionRequests) {
-              const question = toAgentTUIInputQuestion(inputRequest);
-              const response = await this.#renderer.readInputQuestion(question, { title });
-              if (response === undefined) {
-                continue;
+            if (approvalRequests.length > 0) {
+              if (!this.#renderer.readToolApproval) {
+                throw new Error(
+                  "Tool approval was requested, but the renderer does not support tool approval input.",
+                );
               }
-              const inputResponse: InputResponse = { requestId: inputRequest.requestId };
-              if (response.optionId !== undefined) inputResponse.optionId = response.optionId;
-              if (response.text !== undefined) inputResponse.text = response.text;
-              responses.push(inputResponse);
-              this.#pendingInputRequests.delete(inputRequest.requestId);
+
+              for (const request of approvalRequests) {
+                const response = await this.#renderer.readToolApproval(request, { title });
+                responses.push({
+                  requestId: request.approvalId,
+                  optionId: response.approved ? "approve" : "deny",
+                });
+                this.#pendingInputRequests.delete(request.approvalId);
+              }
             }
+
+            if (questionRequests.length > 0) {
+              if (!this.#renderer.readInputQuestion) {
+                throw new Error(
+                  "An interactive question was requested, but the renderer does not support input questions.",
+                );
+              }
+
+              for (const inputRequest of questionRequests) {
+                const question = toAgentTUIInputQuestion(inputRequest);
+                const response = await this.#renderer.readInputQuestion(question, { title });
+                if (response === undefined) {
+                  continue;
+                }
+                const inputResponse: InputResponse = { requestId: inputRequest.requestId };
+                if (response.optionId !== undefined) inputResponse.optionId = response.optionId;
+                if (response.text !== undefined) inputResponse.text = response.text;
+                responses.push(inputResponse);
+                this.#pendingInputRequests.delete(inputRequest.requestId);
+              }
+            }
+
+            streamWithoutPrompt = true;
+            pendingInputResponses = responses;
+            prompt = undefined;
+            respondedToInputRequest = true;
+            break;
           }
 
-          streamWithoutPrompt = true;
-          pendingInputResponses = responses;
-          prompt = undefined;
-          continue;
-        }
+          if (this.#enterPendingConnectionAuthorization(result)) {
+            result = this.#streamConnectionAuthorization();
+            submittedPrompt = undefined;
+            continue;
+          }
 
-        if (result.turnState && result.turnState.boundaryEvent === undefined) {
-          this.#sessionFailed = true;
+          if (result.turnState && result.turnState.boundaryEvent === undefined) {
+            this.#sessionFailed = true;
+          }
+          break;
         }
       } catch (error) {
         if (isInterruptedError(error)) {
@@ -792,6 +804,10 @@ export class EveTUIRunner {
         }
 
         throw error;
+      }
+
+      if (respondedToInputRequest) {
+        continue;
       }
 
       streamWithoutPrompt = false;
@@ -827,6 +843,7 @@ export class EveTUIRunner {
     this.#pendingInputRequests.clear();
     this.#connectionAuthRuns.clear();
     this.#pendingConnectionAuths.clear();
+    this.#renderer.setConnectionAuthPendingCount?.(0);
 
     if (this.#client) {
       this.#session = this.#client.session();
@@ -947,12 +964,31 @@ export class EveTUIRunner {
       };
     }
 
-    const turnState = createTurnState();
+    return this.#createTUIStreamResult(response, () => abortController.abort());
+  }
 
+  /**
+   * Follows the same session after an interactive authorization callback.
+   * `send()` stops at the parked `session.waiting` boundary; the callback's
+   * completion events arrive in the next durable turn on `session.stream()`.
+   */
+  #streamConnectionAuthorization(): AgentTUIStreamResult {
+    const abortController = new AbortController();
+    return this.#createTUIStreamResult(
+      this.#session.stream({ signal: abortController.signal }),
+      () => abortController.abort(),
+    );
+  }
+
+  #createTUIStreamResult(
+    events: AsyncIterable<HandleMessageStreamEvent>,
+    abort: () => void,
+  ): AgentTUIStreamResult {
+    const turnState = createTurnState();
     return {
-      abort: () => abortController.abort(),
+      abort,
       events: eveEventsToTUIStream({
-        events: response,
+        events,
         pendingInputRequests: this.#pendingInputRequests,
         subagentRuns: this.#subagentRuns,
         turnState,
@@ -1209,6 +1245,31 @@ export class EveTUIRunner {
     }
     this.#connectionAuthRuns.set(event.data.name, run);
     this.#emitConnectionAuthUpdate(run);
+  }
+
+  /**
+   * Marks framework-owned OAuth challenges as parked only after the current
+   * turn has reached its `session.waiting` boundary. A `webhookUrl` is the
+   * runtime's proof that a later callback turn can complete the challenge.
+   */
+  #enterPendingConnectionAuthorization(result: AgentTUIStreamResult): boolean {
+    if (result.turnState?.boundaryEvent !== "session.waiting") {
+      return false;
+    }
+
+    let added = false;
+    for (const run of this.#connectionAuthRuns.values()) {
+      if (run.state !== "required" || run.webhookUrl === undefined) continue;
+      run.state = "pending";
+      this.#pendingConnectionAuths.add(run.name);
+      this.#emitConnectionAuthUpdate(run);
+      added = true;
+    }
+
+    if (added) {
+      this.#renderer.setConnectionAuthPendingCount?.(this.#pendingConnectionAuths.size);
+    }
+    return this.#pendingConnectionAuths.size > 0;
   }
 
   #handleConnectionAuthCompleted(event: AuthorizationCompletedStreamEvent): void {

@@ -647,7 +647,7 @@ export class TerminalRenderer implements AgentTUIRenderer {
     if (this.#turnIndicator.kind !== "waiting") {
       this.#turnIndicator = { kind: "waiting", startedAtMs: Date.now() };
     }
-    this.#status = STATUS.processing;
+    this.#status = this.#connectionAuthPendingCount > 0 ? STATUS.connectionAuth : STATUS.processing;
     this.#addSubmittedPrompt(options?.submittedPrompt);
     this.#interrupted = false;
     this.#totalTokens = undefined;
@@ -2275,10 +2275,16 @@ export class TerminalRenderer implements AgentTUIRenderer {
 
   #finalizeAllBlocks() {
     for (const block of this.#blocks) {
-      // Blocks awaiting an approval decision or action.result stay live past
-      // the end of the stream. Committing them here would freeze the pending
-      // glyph into scrollback before the later decision/result can settle it.
-      if (block.status === "approval" || block.status === "running") continue;
+      // Blocks awaiting an approval decision, action.result, or OAuth callback
+      // stay live past this stream boundary so their later terminal update can
+      // replace the same transcript block.
+      if (
+        block.status === "approval" ||
+        block.status === "running" ||
+        (block.kind === "connection-auth" && block.live)
+      ) {
+        continue;
+      }
       block.live = false;
     }
   }

@@ -661,6 +661,57 @@ describe("EveTUIRunner native continuation state", () => {
   });
 });
 
+describe("EveTUIRunner connection authorization", () => {
+  it("continues a parked interactive authorization session until the callback completes", async () => {
+    const prompts: Array<string | undefined> = ["connect linear", undefined];
+    const updates: Array<{ name: string; state: string }> = [];
+    const pendingCounts: number[] = [];
+    const session = sessionYielding([
+      {
+        type: "authorization.required",
+        data: {
+          authorization: { url: "https://connect.vercel.com/authorize/linear" },
+          description: "Authorization required for linear",
+          name: "linear",
+          webhookUrl: "https://eve.test/connections/linear/callback",
+        },
+      },
+      { type: "session.waiting", data: { wait: "connection-authorization" } },
+    ]);
+    vi.spyOn(session, "stream").mockImplementation(async function* () {
+      yield {
+        type: "authorization.completed",
+        data: { name: "linear", outcome: "authorized" },
+      } as HandleMessageStreamEvent;
+      yield {
+        type: "session.waiting",
+        data: { wait: "next-user-message" },
+      } as HandleMessageStreamEvent;
+    });
+    const renderer: AgentTUIRenderer = {
+      readPrompt: vi.fn(async () => prompts.shift()),
+      upsertConnectionAuth: (update) => updates.push({ name: update.name, state: update.state }),
+      setConnectionAuthPendingCount: (count) => pendingCounts.push(count),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<AgentTUIStreamEvent>) {
+          void event;
+        }
+      }),
+    };
+
+    const runner = new EveTUIRunner({ session, renderer, name: "Weather Agent" });
+    await runner.run();
+
+    expect(session.stream).toHaveBeenCalledTimes(1);
+    expect(updates).toEqual([
+      { name: "linear", state: "required" },
+      { name: "linear", state: "pending" },
+      { name: "linear", state: "authorized" },
+    ]);
+    expect(pendingCounts).toEqual([1, 0]);
+  });
+});
+
 describe("EveTUIRunner failure rendering", () => {
   it("renders one error block for a step/turn/session failure cascade", async () => {
     const prompts: Array<string | undefined> = ["hello", undefined];

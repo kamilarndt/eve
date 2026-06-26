@@ -202,6 +202,29 @@ describe("TerminalRenderer (inline scrollback)", () => {
     renderer.shutdown();
   });
 
+  it("keeps the authorization wait status while consuming a callback stream", async () => {
+    const { screen, renderer } = makeRenderer();
+    renderer.setConnectionAuthPendingCount(1);
+    let streamController: ReadableStreamDefaultController<AgentTUIStreamEvent> | undefined;
+    const rendering = renderer.renderStream(
+      {
+        events: new ReadableStream<AgentTUIStreamEvent>({
+          start(controller) {
+            streamController = controller;
+          },
+        }),
+      },
+      { continueSession: true },
+    );
+
+    await Promise.resolve();
+    expect(screen.snapshot()).toContain("Waiting for connection authorization…");
+
+    streamController?.close();
+    await rendering;
+    renderer.shutdown();
+  });
+
   it("uses the turn pulse while waiting for the first stream event", async () => {
     vi.useFakeTimers();
     try {
@@ -515,6 +538,41 @@ describe("TerminalRenderer (inline scrollback)", () => {
 
     const snapshot = screen.snapshot();
     expect(snapshot).toContain("✓ bash");
+  });
+
+  it("settles an authorization block when its callback arrives in a later stream pass", async () => {
+    const { screen, renderer } = makeRenderer();
+    renderer.renderAgentHeader({ name: "Weather Agent", serverUrl: "http://localhost:3000" });
+    renderer.upsertConnectionAuth({
+      name: "linear",
+      description: "Authorization required for linear",
+      state: "required",
+      challenge: { url: "https://connect.vercel.com/authorize/linear" },
+    });
+
+    await renderer.renderStream(streamOf([{ type: "finish" }]), { continueSession: true });
+
+    renderer.upsertConnectionAuth({
+      name: "linear",
+      description: "Authorization required for linear",
+      state: "pending",
+      challenge: { url: "https://connect.vercel.com/authorize/linear" },
+    });
+    expect(screen.snapshot()).toContain("linear · authorization · pending");
+
+    await renderer.renderStream(streamOf([{ type: "finish" }]), { continueSession: true });
+
+    renderer.upsertConnectionAuth({
+      name: "linear",
+      description: "Authorization required for linear",
+      state: "authorized",
+    });
+    renderer.shutdown();
+
+    const snapshot = screen.snapshot();
+    expect(snapshot).toContain("linear · authorization · authorized");
+    expect(snapshot).not.toContain("linear · authorization · required");
+    expect(snapshot).not.toContain("linear · authorization · pending");
   });
 
   it("does not commit partial live assistant rows while streaming over the viewport", async () => {
