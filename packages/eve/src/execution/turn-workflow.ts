@@ -60,6 +60,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
   const nextDeliveryRequestId = (): string =>
     `${inbox.token}:delivery:${String(deliveryRequestSeq++)}`;
   const bufferedDeliveries: DeliverHookPayload[] = [];
+  const bufferedInboxPayloads: TurnInboxPayload[] = [];
   let nextStepInput = input.stepInput.input;
   let ownsInbox = false;
 
@@ -78,6 +79,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
         // Claim replies are also at-least-once. The child run id prevents a late
         // acceptance for the original run from authorizing a replayed child.
         claimId: getWorkflowMetadata().workflowRunId,
+        bufferedInboxPayloads,
         cursor,
         inboxToken: inbox.token,
         iterator,
@@ -123,6 +125,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
 
         const results = await waitForRuntimeActionResults({
           bufferedDeliveries,
+          bufferedInboxPayloads,
           cursor,
           inboxToken: inbox.token,
           initialResults: dispatchResult.results,
@@ -166,6 +169,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
 }
 
 async function claimTurnExecution(input: {
+  readonly bufferedInboxPayloads: TurnInboxPayload[];
   readonly claimId: string;
   readonly cursor: TurnExecutionCursor;
   readonly inboxToken: string;
@@ -188,11 +192,13 @@ async function claimTurnExecution(input: {
     if (next.value.kind === "turn-execution-claim-result" && next.value.claimId === input.claimId) {
       return next.value.accepted;
     }
+    input.bufferedInboxPayloads.push(next.value);
   }
 }
 
 async function waitForRuntimeActionResults(input: {
   readonly bufferedDeliveries: DeliverHookPayload[];
+  readonly bufferedInboxPayloads: TurnInboxPayload[];
   readonly cursor: TurnExecutionCursor;
   readonly inboxToken: string;
   readonly initialResults: readonly RuntimeActionResult[];
@@ -230,10 +236,13 @@ async function waitForRuntimeActionResults(input: {
       });
     }
 
-    const next = await input.iterator.next();
-    if (next.done) throw new Error("Turn inbox closed before runtime actions completed.");
+    const buffered = input.bufferedInboxPayloads.shift();
+    const next = buffered === undefined ? await input.iterator.next() : undefined;
+    if (next?.done) throw new Error("Turn inbox closed before runtime actions completed.");
 
-    const value = next.value;
+    const value = buffered ?? next?.value;
+    if (value === undefined)
+      throw new Error("Turn inbox returned an empty runtime action payload.");
     if (value.kind === "runtime-action-result") {
       results.push(...value.results);
       continue;

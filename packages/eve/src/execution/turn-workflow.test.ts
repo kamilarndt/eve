@@ -393,6 +393,7 @@ describe("turnWorkflow", () => {
           },
         ],
       },
+      { accepted: true, claimId: "turn-run", kind: "turn-execution-claim-result" },
     ]);
     vi.mocked(dispatchRuntimeActionsStep).mockResolvedValue({
       results: [],
@@ -415,7 +416,7 @@ describe("turnWorkflow", () => {
       });
 
     const { input, parentWritable } = createInput({
-      driverCapabilities: { turnInbox: true },
+      driverCapabilities: { turnClaim: true, turnInbox: true },
       mode: "task",
       sessionState: initialState,
     });
