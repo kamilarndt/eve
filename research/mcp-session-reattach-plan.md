@@ -7,13 +7,13 @@ status: proposed
 
 ## Summary
 
-Some Streamable HTTP MCP servers keep working state in the MCP session. Render's MCP server is the
-motivating example: `select_workspace` stores the chosen workspace by MCP session id, and later
-tools read that workspace from the session.
+Some Streamable HTTP MCP servers keep working state in the MCP session. A common pattern is a setup
+tool that selects or configures a working context, followed by later tools that read that context
+from the MCP session.
 
 eve currently rebuilds connection clients at workflow/model step boundaries. That is correct for
 durable execution because live MCP clients, HTTP streams, timers, and sockets are not serializable.
-However, rebuilding the `@ai-sdk/mcp` client starts a fresh MCP session, so servers such as Render
+However, rebuilding the `@ai-sdk/mcp` client starts a fresh MCP session, so stateful servers can
 lose session-local setup between steps.
 
 The implementation shape should keep the live connection registry virtual, but persist small
@@ -37,22 +37,14 @@ body, or user-visible messages.
 
 ## Verified upstream behavior
 
-Render MCP server is cloned locally at `/Users/allenzhou/Desktop/code/eve/render-mcp-server`. It:
+Representative Streamable HTTP MCP server implementations:
 
-- serves `/mcp` with `server.NewStreamableHTTPServer`;
-- uses `server.ClientSessionFromContext(ctx).SessionID()` to look up the active MCP session;
-- stores selected workspace in `pkg/session` under that session id;
-- uses Redis when `REDIS_URL` exists, otherwise an in-memory session store.
+- create a new `Mcp-Session-Id` for `initialize`;
+- require subsequent non-initialize requests to carry that session id;
+- return 404 when a request references a terminated session;
+- treat DELETE as session termination rather than local client detachment.
 
-The underlying `mcp-go` v0.32.0 implementation is cloned at
-`/Users/allenzhou/Desktop/code/eve/mcp-go-v0.32.0`. It:
-
-- creates a new `Mcp-Session-Id` for `initialize`;
-- requires subsequent non-initialize requests to carry that session id;
-- returns 404 when a request references a terminated session;
-- sends DELETE on close in its own client implementation.
-
-This means eve cannot preserve Render workspace selection by sending an old session id on a fresh
+This means eve cannot preserve session-scoped setup by sending an old session id on a fresh
 `initialize`. eve needs to reattach to the existing MCP session without running a new initialize,
 and it must not DELETE the remote session when it only wants to detach locally between workflow
 steps.
@@ -217,8 +209,8 @@ Not safe to retry automatically:
 
 - model-requested tool calls with possible side effects
 
-For Render, session expiry means workspace selection may need to happen again. The normal
-non-expired case should preserve selection without Render-specific replay code.
+For session-scoped setup, expiry means the setup may need to happen again. The normal non-expired
+case should preserve setup without server-specific replay code.
 
 ## Optional replay layer
 
@@ -226,10 +218,10 @@ The first implementation should focus on preserving valid MCP sessions.
 
 A later generic replay layer can help when an MCP server expires state or after a deployment loses
 in-memory upstream sessions. That layer should be connection-authored and JSON-serializable, for
-example "when `select_workspace` succeeds, remember the selected workspace and replay it after a
-fresh MCP session initializes."
+example "when a setup tool succeeds, remember the selected state and replay it after a fresh MCP
+session initializes."
 
-Do not bake Render-specific replay into the generic MCP client.
+Do not bake server-specific replay into the generic MCP client.
 
 ## Files likely to change
 
@@ -263,9 +255,9 @@ Add unit tests for:
 
 Optional integration test:
 
-- fake Streamable HTTP MCP server stores `selectedWorkspace` by `MCP-Session-Id`;
-- first step calls `select_workspace`;
-- next durable continuation step calls `get_selected_workspace`;
+- fake Streamable HTTP MCP server stores `selectedState` by `MCP-Session-Id`;
+- first step calls `set_selected_state`;
+- next durable continuation step calls `get_selected_state`;
 - test passes only if eve reattaches to the same MCP session.
 
 ## Rollout notes
