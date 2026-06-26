@@ -34,8 +34,8 @@ import {
   createSessionFailedEvent,
   encodeMessageStreamEvent,
   type HandleMessageStreamEvent,
-  timestampHandleMessageStreamEvent,
 } from "#protocol/message.js";
+import { createStepEventStamper } from "#execution/step-event-stamper.js";
 import {
   CallbackBaseUrlKey,
   clearPendingAuthorization,
@@ -240,6 +240,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
   }
 
   const writer = input.parentWritable.getWriter();
+  const stampEvent = createStepEventStamper();
   const hookRegistry = bundle.hookRegistry;
   const dynamicInstructionsResolvers = bundle.resolvedAgent.dynamicInstructionsResolvers ?? [];
   const dynamicSkillResolvers = bundle.resolvedAgent.dynamicSkillResolvers ?? [];
@@ -248,7 +249,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
   const emit = async (event: HandleMessageStreamEvent): Promise<HandleMessageStreamEvent> => {
     const toEmit = await callAdapterEventHandler(adapter, event, adapterCtx);
     setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
-    await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(toEmit)));
+    await writer.write(encodeMessageStreamEvent(stampEvent(toEmit)));
     return toEmit;
   };
 
@@ -472,6 +473,7 @@ export async function emitTerminalSessionFailureStep(input: {
 }): Promise<void> {
   "use step";
 
+  const stampEvent = createStepEventStamper();
   const details = formatError(input.error);
   const code = typeof details.name === "string" ? details.name : "WORKFLOW_EXECUTION_FAILED";
   const message = typeof details.message === "string" ? details.message : String(input.error);
@@ -511,7 +513,7 @@ export async function emitTerminalSessionFailureStep(input: {
   try {
     const writer = input.parentWritable.getWriter();
     try {
-      await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(event)));
+      await writer.write(encodeMessageStreamEvent(stampEvent(event)));
     } finally {
       writer.releaseLock();
     }
@@ -541,6 +543,7 @@ export async function runProxyInputRequestStep(input: {
 }): Promise<ProxyInputRequestResult> {
   "use step";
 
+  const stampEvent = createStepEventStamper();
   const durableSession = await readDurableSession(input.sessionState);
   const ctx = await deserializeContext(input.serializedContext);
   const adapter = ctx.require(ChannelKey);
@@ -563,7 +566,7 @@ export async function runProxyInputRequestStep(input: {
   try {
     const emit = async (event: HandleMessageStreamEvent): Promise<void> => {
       const transformed = await callAdapterEventHandler(adapter, event, adapterCtx);
-      await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(transformed)));
+      await writer.write(encodeMessageStreamEvent(stampEvent(transformed)));
     };
 
     scopeResult = await withContextScope(ctx, session, async (enrichedSession) => {

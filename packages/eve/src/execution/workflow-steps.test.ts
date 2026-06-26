@@ -111,6 +111,15 @@ vi.mock("#compiled/@workflow/core/runtime.js", () => ({
   start: (...args: unknown[]) => startMock(...args),
 }));
 
+vi.mock("#compiled/@workflow/core/index.js", () => ({
+  getStepMetadata: vi.fn(() => ({
+    attempt: 1,
+    stepId: "step_test",
+    stepName: "test",
+    stepStartedAt: new Date(0),
+  })),
+}));
+
 const ThreadKey = new ContextKey<string>("test.workflow.thread");
 const TestTurnAgent = {
   id: "test-agent",

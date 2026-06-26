@@ -10,7 +10,7 @@ export const EVE_STREAM_FORMAT_HEADER = "x-eve-stream-format";
 export const EVE_STREAM_VERSION_HEADER = "x-eve-stream-version";
 export const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
 export const EVE_MESSAGE_STREAM_FORMAT = "ndjson";
-export const EVE_MESSAGE_STREAM_VERSION = "16";
+export const EVE_MESSAGE_STREAM_VERSION = "17";
 
 /**
  * eve-owned finish reason for one completed assistant step.
@@ -35,6 +35,13 @@ export type AssistantStepFinishReason =
  */
 export interface HandleMessageStreamEventMeta {
   readonly at: string;
+  /**
+   * Stable identity for this logical event across workflow step retries.
+   *
+   * TypeScript clients use this value to suppress replayed events while still
+   * advancing the durable stream cursor past every physical record.
+   */
+  readonly id: string;
 }
 
 /**
@@ -1168,12 +1175,14 @@ export function createSessionCompletedEvent(): SessionCompletedStreamEvent {
  */
 export function timestampHandleMessageStreamEvent(
   event: HandleMessageStreamEvent,
+  id: string,
   at = new Date().toISOString(),
 ): TimedHandleMessageStreamEvent {
   return {
     ...event,
     meta: {
       at,
+      id,
     },
   };
 }

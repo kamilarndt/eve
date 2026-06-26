@@ -265,4 +265,67 @@ describe("ClientSession", () => {
 
     expect(result.inputRequests.map((request) => request.requestId)).toEqual(["approval_1"]);
   });
+
+  it("suppresses replayed event IDs across turns and advances past their records", async () => {
+    let streamCount = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_request, init) => {
+      if ((init?.method ?? "GET") === "POST") {
+        return createAcceptedResponse();
+      }
+
+      const firstMessage = {
+        data: {
+          finishReason: "stop",
+          message: "First",
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+        meta: { at: "2026-06-26T12:00:00.000Z", id: "evt_message_1" },
+        type: "message.completed",
+      };
+      const firstWaiting = {
+        data: { wait: "next-user-message" },
+        meta: { at: "2026-06-26T12:00:01.000Z", id: "evt_waiting_1" },
+        type: "session.waiting",
+      };
+
+      streamCount += 1;
+      if (streamCount === 1) {
+        return createStreamResponse([firstMessage, firstWaiting]);
+      }
+
+      return createStreamResponse([
+        firstMessage,
+        firstWaiting,
+        {
+          data: {
+            finishReason: "stop",
+            message: "Second",
+            sequence: 1,
+            stepIndex: 0,
+            turnId: "turn_1",
+          },
+          meta: { at: "2026-06-26T12:00:02.000Z", id: "evt_message_2" },
+          type: "message.completed",
+        },
+        {
+          data: { wait: "next-user-message" },
+          meta: { at: "2026-06-26T12:00:03.000Z", id: "evt_waiting_2" },
+          type: "session.waiting",
+        },
+      ]);
+    });
+    const session = createSession();
+
+    await (await session.send("first")).result();
+    const result = await (await session.send("second")).result();
+
+    expect(result.events.map((event) => event.type)).toEqual([
+      "message.completed",
+      "session.waiting",
+    ]);
+    expect(result.message).toBe("Second");
+    expect(session.state.streamIndex).toBe(6);
+  });
 });

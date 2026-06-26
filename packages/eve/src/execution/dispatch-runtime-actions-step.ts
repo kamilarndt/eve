@@ -21,11 +21,8 @@ import {
   getPendingRuntimeActionBatch,
   recordPendingSubagentChildToken,
 } from "#harness/runtime-actions.js";
-import {
-  createSubagentCalledEvent,
-  encodeMessageStreamEvent,
-  timestampHandleMessageStreamEvent,
-} from "#protocol/message.js";
+import { createSubagentCalledEvent, encodeMessageStreamEvent } from "#protocol/message.js";
+import { createStepEventStamper } from "#execution/step-event-stamper.js";
 import type {
   RuntimeRemoteAgentCallActionRequest,
   RuntimeSubagentResultActionResult,
@@ -84,6 +81,7 @@ export async function dispatchRuntimeActionsStep(input: {
   const writer = input.parentWritable.getWriter();
 
   const adapterCtx = buildAdapterContext(adapter, ctx);
+  const stampEvent = createStepEventStamper();
 
   let nextSession = session;
   const results: RuntimeSubagentResultActionResult[] = [];
@@ -171,7 +169,7 @@ export async function dispatchRuntimeActionsStep(input: {
         }),
         adapterCtx,
       );
-      await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(parentEvent)));
+      await writer.write(encodeMessageStreamEvent(stampEvent(parentEvent)));
     }
   } finally {
     writer.releaseLock();

@@ -18,6 +18,7 @@ export function createInitialSessionState(): SessionState {
  * resets so the next call starts a new conversation.
  */
 export function advanceSession(input: {
+  readonly consumedEventCount: number;
   readonly continuationToken?: string;
   readonly events: readonly HandleMessageStreamEvent[];
   readonly preserveCompletedSessions?: boolean;
@@ -25,7 +26,7 @@ export function advanceSession(input: {
   readonly session: SessionState;
 }): SessionState {
   const boundaryEvent = findBoundaryEvent(input.events);
-  const streamIndex = input.session.streamIndex + input.events.length;
+  const streamIndex = input.session.streamIndex + input.consumedEventCount;
 
   if (
     boundaryEvent?.type === "session.waiting" ||

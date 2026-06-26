@@ -5,6 +5,8 @@ description: "Consume eve client stream events live, reconnect by event index, a
 
 Every `ClientSession.send()` call posts the turn, then reads the session's NDJSON (newline-delimited JSON) event stream. `MessageResponse` gives you two ways to consume that stream, aggregating it with `result()` or iterating it live.
 
+Workflow steps may be delivered more than once. eve stamps each durable event with a stable `meta.id`, and `ClientSession` suppresses repeated IDs before they reach your iterator, reducer, or `MessageResult.events`. The session's `streamIndex` still advances over those physical records, so reconnects resume at the correct position.
+
 ## Aggregate a turn
 
 Use `result()` when you only need the final turn summary:

@@ -43,6 +43,7 @@ interface SessionContext {
  */
 export class ClientSession {
   readonly #context: SessionContext;
+  readonly #seenEventIds = new Set<string>();
   #state: SessionState;
 
   /** @internal */
@@ -71,6 +72,10 @@ export class ClientSession {
     const state = this.#state;
     const postResult = await this.#postTurn(payload, state);
     const { continuationToken, sessionId } = postResult;
+
+    if (state.sessionId !== sessionId) {
+      this.#seenEventIds.clear();
+    }
 
     return new MessageResponse<TOutput>({
       continuationToken,
@@ -161,6 +166,7 @@ export class ClientSession {
     input: SendTurnPayload,
   ): AsyncGenerator<HandleMessageStreamEvent> {
     const events: HandleMessageStreamEvent[] = [];
+    let consumedEventCount = 0;
 
     try {
       let currentStreamIndex = initialState.sessionId === sessionId ? initialState.streamIndex : 0;
@@ -178,8 +184,14 @@ export class ClientSession {
 
         try {
           for await (const event of readNdjsonStream(body)) {
-            events.push(event);
             currentStreamIndex += 1;
+            consumedEventCount += 1;
+
+            if (this.#isDuplicateEvent(event)) {
+              continue;
+            }
+
+            events.push(event);
             yield event;
 
             if (isCurrentTurnBoundaryEvent(event)) {
@@ -211,6 +223,7 @@ export class ClientSession {
       }
     } finally {
       this.#state = advanceSession({
+        consumedEventCount,
         continuationToken,
         events,
         preserveCompletedSessions: this.#context.preserveCompletedSessions,
@@ -243,6 +256,7 @@ export class ClientSession {
     const initialState = this.#state;
     const streamIndex = options?.startIndex ?? initialState.streamIndex;
     const events: HandleMessageStreamEvent[] = [];
+    let consumedEventCount = 0;
 
     try {
       for await (const event of openStreamIterable({
@@ -254,11 +268,18 @@ export class ClientSession {
         signal: options?.signal,
         startIndex: streamIndex,
       })) {
+        consumedEventCount += 1;
+
+        if (this.#isDuplicateEvent(event)) {
+          continue;
+        }
+
         events.push(event);
         yield event;
       }
     } finally {
       this.#state = advanceSession({
+        consumedEventCount,
         continuationToken: initialState.continuationToken,
         events,
         preserveCompletedSessions: this.#context.preserveCompletedSessions,
@@ -266,6 +287,21 @@ export class ClientSession {
         sessionId,
       });
     }
+  }
+
+  #isDuplicateEvent(event: HandleMessageStreamEvent): boolean {
+    const eventId = event.meta?.id;
+
+    if (eventId === undefined) {
+      return false;
+    }
+
+    if (this.#seenEventIds.has(eventId)) {
+      return true;
+    }
+
+    this.#seenEventIds.add(eventId);
+    return false;
   }
 }
 

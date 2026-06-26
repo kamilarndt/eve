@@ -14,7 +14,7 @@ import { createEveConnectionCallbackRoutePath } from "#protocol/routes.js";
 
 describe("message stream protocol", () => {
   it("pins the stream version for timed session events", () => {
-    expect(EVE_MESSAGE_STREAM_VERSION).toBe("16");
+    expect(EVE_MESSAGE_STREAM_VERSION).toBe("17");
   });
 
   it("creates result.completed events", () => {
@@ -43,11 +43,13 @@ describe("message stream protocol", () => {
         stepIndex: 1,
         turnId: "turn_0",
       }),
+      "evt_test",
       "2026-04-17T10:14:22.123Z",
     );
 
     expect(timed.meta).toEqual({
       at: "2026-04-17T10:14:22.123Z",
+      id: "evt_test",
     });
 
     const encoded = encodeMessageStreamEvent(timed);
