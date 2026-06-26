@@ -68,20 +68,29 @@ const client = new Client({
 });
 ```
 
-For a Vercel OIDC-protected deployment, use `vercelOidc`. The client resolves the token once per request and sends it as both the bearer credential and Vercel's trusted-OIDC header:
+For an OpenID Connect (OIDC) protected deployment, pass `auth: { oidc: token }` or use `oidc(token)`. The client resolves the token once per request and sends it as both the bearer credential and Vercel's trusted-OIDC header:
 
 ```ts
-import { getVercelOidcToken } from "@vercel/oidc";
+import { Client, oidc } from "eve/client";
 
 const client = new Client({
   host: "https://agent.example.com",
-  auth: {
-    vercelOidc: {
-      token: async () => await getVercelOidcToken(),
-    },
-  },
+  auth: oidc(async () => await getOidcToken()),
 });
 ```
+
+For Vercel OIDC, use `vercelOidcAuth()` so the client resolves the token through `@vercel/oidc` before each request:
+
+```ts
+import { Client, vercelOidcAuth } from "eve/client";
+
+const client = new Client({
+  host: "https://agent.example.com",
+  auth: vercelOidcAuth(),
+});
+```
+
+`vercelOidcAuth()` accepts `{ team, project, expirationBufferMs }` and forwards those options to `@vercel/oidc`.
 
 Use `headers` for route-specific credentials such as bypass tokens or tenant hints. Like `auth`, it can be static or dynamic:
 

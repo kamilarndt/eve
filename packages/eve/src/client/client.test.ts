@@ -70,13 +70,13 @@ describe("Client request policy", () => {
     }
   });
 
-  it("expands vercelOidc auth into the bearer and trusted-oidc headers", async () => {
+  it("expands oidc auth into the bearer and trusted-oidc headers", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(Response.json(AGENT_INFO));
     const client = new Client({
       host: "https://eve.test",
-      auth: { vercelOidc: { token: () => Promise.resolve("oidc-tok") } },
+      auth: { oidc: () => Promise.resolve("oidc-tok") },
     });
 
     await client.info();

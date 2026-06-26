@@ -101,6 +101,7 @@ Pass a bare URL as the only argument and the UI connects to that server instead 
 | `--no-ui`                           | flag   | UI on              | Start the server without an interactive UI                                                |
 | `--name <name>`                     | string | app folder name    | Title shown in the terminal UI                                                            |
 | `--input <text>`                    | string | none               | Pre-fill the prompt input after launching the UI (editable, not auto-submitted)           |
+| `--header <name:value>`             | string | none               | Header sent with remote TUI requests. Repeat for multiple headers                         |
 | `--tools <mode>`                    | enum   | `auto-collapsed`   | Tool-call rendering: `full` \| `collapsed` \| `auto-collapsed` \| `hidden`                |
 | `--reasoning <mode>`                | enum   | `full`             | Reasoning rendering: `full` \| `collapsed` \| `auto-collapsed` \| `hidden`                |
 | `--subagents <mode>`                | enum   | `auto-collapsed`   | Subagent-section rendering: `full` \| `collapsed` \| `auto-collapsed` \| `hidden`         |
@@ -108,6 +109,8 @@ Pass a bare URL as the only argument and the UI connects to that server instead 
 | `--assistant-response-stats <mode>` | enum   | `tokensPerSecond`  | Assistant header statistic: `tokens` \| `tokensPerSecond`                                 |
 | `--context-size <tokens>`           | number | none               | Model context window size, shown as a usage percentage                                    |
 | `--logs <mode>`                     | enum   | `stderr`           | Server/agent logs to show: `all` \| `stderr` \| `sandbox` \| `none`                       |
+
+For remote URLs, `EVE_DEV_OIDC_TOKEN` supplies an OpenID Connect token for route auth. eve sends it through the generic client OIDC path and skips Vercel origin resolution for startup auth. Use `--url <url> --header "Name: value"` for static headers required by a self-hosted route or reverse proxy. Repeat the header flag for multiple headers.
 
 Local dev records the last ready URL per resolved app root in `.eve/dev-server-state.v1.json`. A second interactive `eve dev` reconnects only when that URL is loopback and healthy; each terminal UI creates a fresh client session while sharing the server process. A stale or malformed record is replaced when eve starts a new server. Passing `--host`, `--port`, or a `PORT` environment value skips reconnection and reports a healthy recorded server instead.
 

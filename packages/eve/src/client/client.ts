@@ -178,23 +178,16 @@ export class Client {
     const auth = this.#auth;
     if (!auth) return {};
 
-    if ("vercelOidc" in auth) {
-      // One credential, two headers: the bearer the route reads and the
-      // trusted-OIDC header Vercel Deployment Protection accepts. Resolved
-      // once; the client-side mirror of the server `vercelOidc()` channel.
-      const token = (await resolveTokenValue(auth.vercelOidc.token)).trim();
-      if (token.length === 0) return {};
-      return {
-        authorization: `Bearer ${token}`,
-        [VERCEL_TRUSTED_OIDC_IDP_TOKEN_HEADER]: token,
-      };
+    if ("oidc" in auth) {
+      return await resolveOidcAuthHeaders(auth.oidc);
     }
 
     if ("bearer" in auth) {
       // Skip the header entirely on an empty token rather than emitting a
       // malformed `Bearer ` value the server has to reject. The dev client's
       // OIDC resolver returns "" when no token is available locally; the
-      // request then follows the framework channel's local-dev fallback.
+      // request then goes out unauthenticated and the framework's
+      // `vercelOidc()` channel handler returns a clean 401.
       const token = (await resolveTokenValue(auth.bearer)).trim();
       return token.length === 0 ? {} : { authorization: `Bearer ${token}` };
     }
@@ -213,6 +206,19 @@ export class Client {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+async function resolveOidcAuthHeaders(
+  value: TokenValue,
+): Promise<Readonly<Record<string, string>>> {
+  // One OpenID Connect credential, two headers: the bearer the route reads and
+  // the trusted-OIDC header Vercel Deployment Protection accepts.
+  const token = (await resolveTokenValue(value)).trim();
+  if (token.length === 0) return {};
+  return {
+    authorization: `Bearer ${token}`,
+    [VERCEL_TRUSTED_OIDC_IDP_TOKEN_HEADER]: token,
+  };
+}
 
 async function resolveTokenValue(value: TokenValue): Promise<string> {
   return typeof value === "function" ? value() : value;

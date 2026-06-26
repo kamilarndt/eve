@@ -30,13 +30,12 @@ Errors render compactly with docs links highlighted. A code bug escaping your ag
 
 ## Slash commands
 
-Each command echoes as an invocation line, asks through a bordered panel that takes the input area's place (one question at a time, separate from the chat transcript), and finishes with a one-line `⎿` result. Loading states stay on the ephemeral status line instead of piling into the transcript; model, channel, connection, and the Vercel CLI commands (`/vc:install`, `/vc:login`) use the same green square pulse as the build phase, while `/deploy` keeps a spinner. A connection setup waiting for browser action changes that pulse and the word "browser" to yellow. Setup menus render the selected option with a filled arrow and an inverse label padded by one space on each side. Text prompts use a blinking block cursor over the character at the caret. The selected label is blue normally and yellow for warning rows.
+Each command echoes as an invocation line, asks through a bordered panel that takes the input area's place (one question at a time, separate from the chat transcript), and finishes with a one-line `⎿` result. Loading states stay on the ephemeral status line instead of piling into the transcript; model, channel, and the Vercel CLI commands (`/vc:install`, `/vc:login`) use the same green square pulse as the build phase, while `/deploy` keeps a spinner. Setup menus render the selected option with a filled arrow and an inverse label padded by one space on each side. Text prompts use a blinking block cursor over the character at the caret. The selected label is blue normally and yellow for warning rows.
 
 | Command       | Does                                                                                                                                                         |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `/model`      | Opens a configure menu that loops until Done (or Esc). See [Configure the model and provider](#configure-the-model-and-provider).                            |
 | `/channels`   | Shows the agent's channel list and adds the one you pick. See [Add a channel](#add-a-channel).                                                               |
-| `/connect`    | Shows the Vercel Connect MCP catalog and configures the server you pick. See [Add a connection](#add-a-connection).                                          |
 | `/deploy`     | Ships the agent to Vercel production, linking the directory first when it is unlinked.                                                                       |
 | `/vc:install` | Installs the Vercel CLI. Available locally and on a remote session.                                                                                          |
 | `/vc:login`   | Logs in to Vercel locally. On a remote session, resolves the deployment's project, refreshes its OIDC token, and confirms any required Trusted Sources rule. |
@@ -45,7 +44,7 @@ Each command echoes as an invocation line, asks through a bordered panel that ta
 | `/exit`       | Quits the TUI.                                                                                                                                               |
 | `/help`       | Lists the commands available for the current local or remote session.                                                                                        |
 
-`/model`, `/channels`, `/connect`, and `/deploy` manage the local agent or its linked project. They are available only when `eve dev` runs the server locally, not when connected to a remote server with `--url`.
+`/model`, `/channels`, and `/deploy` manage the project and are available only when `eve dev` runs the server locally, not when connected to a remote server with `--url`.
 
 ### Configure the model and provider
 
@@ -58,12 +57,6 @@ The provider row demands attention (a bold yellow "Configure model access" with 
 ### Add a channel
 
 `/channels` shows the agent's channel list. Already-registered channels render as checked, focusable rows with an "Already installed" hint. Picking one adds it (including the Slack Connect provisioning), then installs the dependencies the scaffold added so the dev server can load the new channels right away. After each addition the list repaints with the channel checked, until Done (or Esc) leaves the flow.
-
-### Add a connection
-
-`/connect` shows a searchable list of MCP servers available through Vercel Connect. Already-authored connections remain checked. Logged-out users are directed to `/vc:login`. When the directory is not linked, selecting a server opens the same team and project flow used by `/model`, including creating a project or linking an existing one.
-
-For a selected server, eve first tries to attach the provider's canonical connector. If that fails, choose an existing connector from a searchable list or create one with a specific name. The fallback stays scoped to the team selected by the linked project. A connector created by the current attempt is removed if attachment or connection-file patching fails. Successful setup writes `agent/connections/<name>.ts`, records the attached connector UID, installs the new dependency so the dev server can load it, then returns to the main prompt.
 
 ## Keyboard shortcuts
 
@@ -90,7 +83,7 @@ When the agent needs something from you, the TUI asks inline.
 
 - Tool approvals are a `y` or `n`.
 - Option questions let you pick with `↑` / `↓` and `Enter`, or you can compose a multi-line freeform answer.
-- If a tool needs an authorized [connection](../connections), the URL shows up right in the transcript, and the turn picks back up once you finish the flow. The same local `eve dev` server owns the callback route, so keep that command running until the browser returns. `eve dev --url` connects to an already-running server and does not start a local callback host.
+- If a tool needs an authorized [connection](../connections), the URL shows up right in the transcript, and the turn picks back up once you finish the flow.
 
 ## Control what logs show
 
@@ -130,11 +123,29 @@ eve dev https://<your-app>
 
 The bare URL is shorthand for `--url`; it cannot be combined with `--host`, `--port`, or `--no-ui`.
 
-At startup the TUI asks Vercel to resolve the remote origin under the active scope. A resolved response is the authority for a project-scoped OIDC token—refreshing an expired development token when refresh credentials exist—or an automation-bypass secret. An unresolved host is probed anonymously. The TUI then requests `/eve/v1/info`, with a ten-second timeout. A successful response marks the remote ready. An eve OIDC challenge, Vercel Deployment Protection challenge, or `TRUSTED_SOURCES_ENVIRONMENT_MISMATCH` opens `/vc:login` automatically; ordinary network failures and server errors remain remote-availability errors and do not start an authentication flow. Esc or Ctrl-C cancels the authentication flow.
+For self-hosted routes that verify generic OpenID Connect (OIDC), set `EVE_DEV_OIDC_TOKEN` before launching:
+
+```bash
+EVE_DEV_OIDC_TOKEN="$(fetch_oidc_token)" eve dev https://agent.example.com
+```
+
+When this variable is set, the remote TUI sends the token through the generic client OIDC path for `/eve/v1/info`, session creation, and session streaming. Each request includes the bearer `Authorization` header and `x-vercel-trusted-oidc-idp-token`. Startup auth skips the automatic Vercel deployment lookup, so the TUI does not replace the supplied token with a Vercel token. `/vc:login` remains available if you need Vercel OIDC later.
+
+Use `--header "Name: value"` for self-hosted routes that need static headers before eve handles the request. Repeat the flag for multiple headers:
+
+```bash
+eve dev --url https://agent.example.com \
+  --header "Authorization: Bearer route-token" \
+  --header "X-Route-Key: abc123"
+```
+
+The TUI sends those headers with remote client requests. If OIDC auth also writes the same header, the OIDC value wins for that header.
+
+At startup, when `EVE_DEV_OIDC_TOKEN` is unset, the TUI asks Vercel to resolve the remote origin under the active scope. A resolved response authorizes a project-scoped OIDC token. It refreshes an expired development token when refresh credentials exist, or authorizes an automation-bypass secret. An unresolved host is probed anonymously. The TUI then requests `/eve/v1/info`, with a ten-second timeout. A successful response marks the remote ready. An eve OIDC challenge, Vercel Deployment Protection challenge, or `TRUSTED_SOURCES_ENVIRONMENT_MISMATCH` opens `/vc:login` automatically; ordinary network failures and server errors remain remote-availability errors and do not start an authentication flow. Esc or Ctrl-C cancels the authentication flow.
 
 In a remote session, `/vc:login` first resolves the deployment's Vercel project from its URL. If the active Vercel scope cannot resolve it, the flow asks for another team and reruns the lookup in that team's scope. If the CLI is logged out, the same panel runs the browser login first. The flow asks before adding any required Trusted Sources rule and requests a project-scoped token through `@vercel/oidc`. It does not relink the directory or modify `.env.local`. Finally, it retries `/eve/v1/info` to prove the credential works. A failure reports any login or Trusted Sources update that completed before it stopped.
 
-The project-scoped token represents the resolved project's Development environment. Vercel already allows a project's Development environment to call its own Preview deployments by default. For a Production or custom-environment target, `/vc:login` shows the exact Development-to-target rule before changing that project's Trusted Sources. Eve preserves existing entries. When it creates an explicit rule, it also carries Vercel's default self-access rows forward because saved rules replace those defaults. See Vercel's [Trusted Sources guide](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/trusted-sources), [error reference](https://vercel.com/docs/errors/trusted_sources_environment_mismatch), and [OIDC token anatomy](https://vercel.com/docs/oidc/reference#oidc-token-anatomy).
+The project-scoped token represents the resolved project's Development environment. Vercel already allows a project's Development environment to call its own Preview deployments by default. For a Production or custom-environment target, `/vc:login` shows the exact Development-to-target rule before changing that project's Trusted Sources. eve preserves existing entries. When it creates an explicit rule, it also carries Vercel's default self-access rows forward because saved rules replace those defaults. See Vercel's [Trusted Sources guide](https://vercel.com/docs/deployment-protection/methods-to-bypass-deployment-protection/trusted-sources), [error reference](https://vercel.com/docs/errors/trusted_sources_environment_mismatch), and [OIDC token anatomy](https://vercel.com/docs/oidc/reference#oidc-token-anatomy).
 
 `VERCEL_AUTOMATION_BYPASS_SECRET` remains available for a Protection Bypass for Automation token. See [Deployment](./deployment) for the smoke-test flow.
 

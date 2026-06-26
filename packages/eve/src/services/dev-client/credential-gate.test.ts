@@ -36,6 +36,21 @@ function deferred<T>() {
 }
 
 describe("createDevelopmentCredentialGate", () => {
+  it("uses an explicit generic OIDC token without Vercel bypass headers", async () => {
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "ambient-bypass");
+    let token = " first-token ";
+    const gate = createDevelopmentCredentialGate("https://self-hosted.example.com/path", {
+      oidcToken: () => token,
+    });
+
+    await expect(gate.resolveToken()).resolves.toBe("first-token");
+    await expect(gate.resolveBypassHeaders()).resolves.toEqual({});
+    expect(gate.lastTokenFailure()).toBeUndefined();
+
+    token = "second-token";
+    await expect(gate.resolveToken()).resolves.toBe("second-token");
+  });
+
   it("stays anonymous until an authoritative target is installed", async () => {
     vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "ambient-bypass");
     const gate = createDevelopmentCredentialGate("https://verified.example.com/path");

@@ -52,7 +52,7 @@ export default defineTool({
 | `mockModel`                                           | `eve/evals`                                   | Deterministic fixture agent models   | [Evals](../evals/overview)                             |
 | `useEveAgent`                                         | `eve/react`, `eve/vue`, `eve/svelte`          | frontend                             | [Frontend](../guides/frontend/overview)                |
 
-A few non-`define*` helpers round out the set: `disableTool` and `ExperimentalWorkflow` from `eve/tools` (see [Default harness](../concepts/default-harness)), the route verbs `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`WS` from `eve/channels`, the approval policies `always`/`once`/`never` from `eve/tools/approval`, and the channel auth helpers `localDev`/`vercelOidc`/`placeholderAuth` from `eve/channels/auth`. To wrap a built-in tool, import its default value from `eve/tools/defaults` (`bash`, `readFile`, `writeFile`, `glob`, `grep`, `webFetch`, `webSearch`, `todo`, `loadSkill`). `AgentReasoningDefinition` is exported from `eve` for the top-level `defineAgent({ reasoning })` setting. `AgentWorkflowDefinition` and `AgentWorkflowWorldDefinition` are exported from `eve` for the `defineAgent({ experimental: { workflow } })` config shape.
+A few non-`define*` helpers round out the set: `disableTool` and `ExperimentalWorkflow` from `eve/tools` (see [Default harness](../concepts/default-harness)), the route verbs `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`WS` from `eve/channels`, the approval policies `always`/`once`/`never` from `eve/tools/approval`, the channel auth helpers `localDev`/`vercelOidc`/`placeholderAuth` from `eve/channels/auth`, and the client auth helpers `oidc`/`vercelOidcAuth` from `eve/client`. To wrap a built-in tool, import its default value from `eve/tools/defaults` (`bash`, `readFile`, `writeFile`, `glob`, `grep`, `webFetch`, `webSearch`, `todo`, `loadSkill`). `AgentReasoningDefinition` is exported from `eve` for the top-level `defineAgent({ reasoning })` setting. `AgentWorkflowDefinition` and `AgentWorkflowWorldDefinition` are exported from `eve` for the `defineAgent({ experimental: { workflow } })` config shape.
 
 ## Runtime context (`ctx`)
 
@@ -92,7 +92,7 @@ A few non-`define*` helpers round out the set: `disableTool` and `ExperimentalWo
 | `eve/evals/loaders`                                         | `loadJson`, `loadYaml`                                               |
 | `eve/react`, `eve/vue`, `eve/svelte`                        | `useEveAgent`                                                        |
 | `eve/next`, `eve/nuxt`, `eve/sveltekit`                     | framework bundler plugins                                            |
-| [`eve/client`](../guides/client/overview)                   | `Client`, `ClientSession`                                            |
+| [`eve/client`](../guides/client/overview)                   | `Client`, `ClientSession`, `oidc`, `vercelOidcAuth`                  |
 
 Exported types ship from the same entrypoint as the helper they describe (for example `ToolDefinition` and `ToolContext` from `eve/tools`). For the exhaustive list, read `packages/eve/src/public/index.ts`.
 

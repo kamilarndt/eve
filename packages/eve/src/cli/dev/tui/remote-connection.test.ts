@@ -99,7 +99,7 @@ function eveUnauthorized(error = "Authorization is required for this route."): C
 
 type HarnessOptions = Pick<
   RemoteConnectionControllerOptions,
-  "resolveDeployment" | "resolveOidcToken"
+  "resolveDeployment" | "resolveOidcToken" | "skipStartupDeploymentResolution"
 > & {
   readonly info?: (credentials: DevelopmentCredentialGate) => Promise<AgentInfoResult>;
 };
@@ -275,6 +275,23 @@ describe("createRemoteConnectionController", () => {
     await expect(check).resolves.toEqual({ state: "ready", info: INFO });
     expect(harness.controller.current().deployment).toEqual(VERIFIED_TARGET.deployment);
     expect(resolveOidcToken).toHaveBeenCalledWith(VERIFIED_TARGET.deployment);
+  });
+
+  it("skips startup Vercel resolution when requested", async () => {
+    const resolveDeployment = vi.fn(async () => RESOLVED_DEPLOYMENT);
+    const tokens: string[] = [];
+    const harness = createHarness({
+      resolveDeployment,
+      skipStartupDeploymentResolution: true,
+      info: async (credentials) => {
+        tokens.push(await credentials.resolveToken());
+        return INFO;
+      },
+    });
+
+    await expect(harness.controller.check()).resolves.toEqual({ state: "ready", info: INFO });
+    expect(resolveDeployment).not.toHaveBeenCalled();
+    expect(tokens).toEqual([""]);
   });
 
   it.each(["not-found", "forbidden"] as const)(

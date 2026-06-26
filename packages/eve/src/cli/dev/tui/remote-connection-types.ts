@@ -84,5 +84,7 @@ export interface RemoteConnectionControllerOptions {
     deployment: Pick<ResolvedVercelDeployment, "ownerId" | "projectId">,
   ) => Promise<DevelopmentOidcTokenResolution>;
   readonly resolveDeployment?: (signal: AbortSignal) => Promise<VercelDeploymentResolution>;
+  /** Skips ambient Vercel authorization during the initial connection probe. */
+  readonly skipStartupDeploymentResolution?: boolean;
   readonly onChange: (snapshot: RemoteConnectionSnapshot) => void;
 }

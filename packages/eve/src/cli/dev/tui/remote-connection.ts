@@ -107,15 +107,17 @@ export function createRemoteConnectionController(
       restoreActiveCredentials = undefined;
       deployment = undefined;
       update({ state: "checking" });
-      const restoreCredentials = await authorizeResolvedTarget(
-        operation.signal,
-        operation.generation,
-      );
-      if (!isCurrent(operation.generation)) {
-        restoreCredentials?.();
-        return connection;
+      if (!options.skipStartupDeploymentResolution) {
+        const restoreCredentials = await authorizeResolvedTarget(
+          operation.signal,
+          operation.generation,
+        );
+        if (!isCurrent(operation.generation)) {
+          restoreCredentials?.();
+          return connection;
+        }
+        restoreActiveCredentials = restoreCredentials;
       }
-      restoreActiveCredentials = restoreCredentials;
       const probe = await probeRemoteInfo({
         client: options.client,
         phase: "connection-check",

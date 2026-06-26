@@ -1,3 +1,4 @@
+import type { TokenValue } from "#client/types.js";
 import type { VerifiedVercelTarget } from "#setup/vercel-deployment.js";
 
 import {
@@ -11,7 +12,12 @@ export interface DevelopmentCredentialGrant {
   readonly resolveToken: () => Promise<DevelopmentOidcTokenResolution | string>;
 }
 
-/** Per-client authority for resolving and emitting remote Vercel credentials. */
+export interface DevelopmentCredentialGateOptions {
+  /** Explicit generic OIDC token for non-Vercel remote dev targets. */
+  readonly oidcToken?: TokenValue;
+}
+
+/** Per-client authority for resolving and emitting remote development credentials. */
 export interface DevelopmentCredentialGate {
   /** The origin this gate is permanently bound to. */
   readonly serverOrigin: string;
@@ -20,9 +26,9 @@ export interface DevelopmentCredentialGate {
    * Returns a rollback that restores the prior grant if this grant is still current.
    */
   authorize(grant: DevelopmentCredentialGrant): () => void;
-  /** The verified target's OIDC token for one request, or "" when unavailable. */
+  /** The active OIDC token for one request, or "" when unavailable. */
   resolveToken(): Promise<string>;
-  /** Non-credential Vercel headers (protection bypass), or {} when anonymous. */
+  /** Vercel protection-bypass headers for a Vercel-authenticated target, or {}. */
   resolveBypassHeaders(): Promise<Readonly<Record<string, string>>>;
   /** Token failure from the most recent {@link resolveToken}, or `undefined` if it resolved one. */
   lastTokenFailure(): DevelopmentOidcTokenFailure | undefined;
@@ -30,15 +36,22 @@ export interface DevelopmentCredentialGate {
 
 type DevelopmentCredentialGateState =
   | { readonly kind: "anonymous" }
+  | { readonly kind: "oidc"; readonly token: TokenValue }
   | {
       readonly kind: "vercel";
       readonly resolveToken: () => Promise<DevelopmentOidcTokenResolution | string>;
     };
 
-/** Creates an anonymous credential gate bound to one client origin. */
-export function createDevelopmentCredentialGate(serverUrl: string): DevelopmentCredentialGate {
+/** Creates a credential gate bound to one client origin. */
+export function createDevelopmentCredentialGate(
+  serverUrl: string,
+  options: DevelopmentCredentialGateOptions = {},
+): DevelopmentCredentialGate {
   const serverOrigin = new URL(serverUrl).origin;
-  let state: DevelopmentCredentialGateState = { kind: "anonymous" };
+  let state: DevelopmentCredentialGateState =
+    options.oidcToken === undefined
+      ? { kind: "anonymous" }
+      : { kind: "oidc", token: options.oidcToken };
   let tokenFailure: DevelopmentOidcTokenFailure | undefined;
 
   const authorize = (grant: DevelopmentCredentialGrant): (() => void) => {
@@ -66,6 +79,7 @@ export function createDevelopmentCredentialGate(serverUrl: string): DevelopmentC
   const resolveToken = async (): Promise<string> => {
     const authorized = state;
     if (authorized.kind === "anonymous") return "";
+    if (authorized.kind === "oidc") return (await resolveTokenValue(authorized.token)).trim();
 
     const resolution = await authorized.resolveToken();
     const failure =
@@ -80,7 +94,7 @@ export function createDevelopmentCredentialGate(serverUrl: string): DevelopmentC
 
   const resolveBypassHeaders = async (): Promise<Readonly<Record<string, string>>> => {
     const authorized = state;
-    if (authorized.kind === "anonymous") return {};
+    if (authorized.kind !== "vercel") return {};
     const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
     return bypassSecret ? { [VERCEL_PROTECTION_BYPASS_HEADER]: bypassSecret } : {};
   };
@@ -92,4 +106,8 @@ export function createDevelopmentCredentialGate(serverUrl: string): DevelopmentC
     resolveToken,
     serverOrigin,
   };
+}
+
+async function resolveTokenValue(value: TokenValue): Promise<string> {
+  return typeof value === "function" ? await value() : value;
 }

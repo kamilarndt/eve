@@ -25,12 +25,12 @@ describe("resolveVerifiedRemoteDevelopmentClient", () => {
     });
 
     expect(options.redirect).toBe("manual");
-    // The OIDC token rides the higher-level vercelOidc auth; the client expands
-    // it into the Authorization + trusted-OIDC headers (covered in client.test.ts).
-    if (options.auth === undefined || !("vercelOidc" in options.auth)) {
-      throw new Error("Expected vercelOidc auth.");
+    // The OIDC token rides generic OIDC auth; the client expands it into the
+    // Authorization and trusted-OIDC headers (covered in client.test.ts).
+    if (options.auth === undefined || !("oidc" in options.auth)) {
+      throw new Error("Expected oidc auth.");
     }
-    const { token } = options.auth.vercelOidc;
+    const token = options.auth.oidc;
     expect(typeof token === "function" ? await token() : token).toBe("fresh-token");
     expect(resolveDevelopmentOidcToken).toHaveBeenCalledWith({
       ownerId: "team_test",
@@ -52,10 +52,10 @@ describe("resolveVerifiedRemoteDevelopmentClient", () => {
       },
     });
 
-    if (options.auth === undefined || !("vercelOidc" in options.auth)) {
-      throw new Error("Expected vercelOidc auth.");
+    if (options.auth === undefined || !("oidc" in options.auth)) {
+      throw new Error("Expected oidc auth.");
     }
-    const { token } = options.auth.vercelOidc;
+    const token = options.auth.oidc;
     expect(typeof token === "function" ? await token() : token).toBe("");
     expect(lastOidcTokenFailure()).toEqual(failure);
   });

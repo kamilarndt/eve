@@ -1,4 +1,4 @@
-import type { ClientOptions } from "#client/index.js";
+import { oidc as oidcAuth, type ClientOptions, type HeadersValue } from "#client/index.js";
 
 import type { DevelopmentCredentialGate } from "./credential-gate.js";
 
@@ -7,25 +7,19 @@ import type { DevelopmentCredentialGate } from "./credential-gate.js";
  * not an authorization decision, so remote URLs receive no ambient Vercel
  * credentials through this default path.
  */
-export function resolveDevelopmentClientOptions(serverUrl: string): ClientOptions {
-  return { host: serverUrl };
-}
-
-/** Builds a non-redirecting local client with an explicit per-request bearer source. */
-export function resolveLocalDevelopmentClientOptions(input: {
-  readonly serverUrl: string;
-  readonly token: () => Promise<string>;
-}): ClientOptions {
-  return {
-    auth: { bearer: input.token },
-    host: input.serverUrl,
-    redirect: "manual",
-  };
+export function resolveDevelopmentClientOptions(
+  serverUrl: string,
+  input: { readonly headers?: HeadersValue } = {},
+): ClientOptions {
+  return input.headers === undefined
+    ? { host: serverUrl }
+    : { headers: input.headers, host: serverUrl };
 }
 
 /** Builds non-redirecting client options backed by one verified credential gate. */
 export function resolveRemoteDevelopmentClientOptions(input: {
   readonly credentials: DevelopmentCredentialGate;
+  readonly headers?: HeadersValue;
   readonly serverUrl: string;
 }): ClientOptions {
   const serverOrigin = new URL(input.serverUrl).origin;
@@ -35,9 +29,28 @@ export function resolveRemoteDevelopmentClientOptions(input: {
     );
   }
   return {
-    auth: { vercelOidc: { token: () => input.credentials.resolveToken() } },
-    headers: input.credentials.resolveBypassHeaders,
+    auth: oidcAuth(() => input.credentials.resolveToken()),
+    headers: mergeRemoteDevelopmentHeaders(input.headers, input.credentials.resolveBypassHeaders),
     host: input.serverUrl,
     redirect: "manual",
   };
+}
+
+function mergeRemoteDevelopmentHeaders(
+  headers: HeadersValue | undefined,
+  resolveBypassHeaders: () => Promise<Readonly<Record<string, string>>>,
+): HeadersValue {
+  if (headers === undefined) return resolveBypassHeaders;
+
+  return async () => {
+    const [baseHeaders, bypassHeaders] = await Promise.all([
+      resolveHeadersValue(headers),
+      resolveBypassHeaders(),
+    ]);
+    return { ...baseHeaders, ...bypassHeaders };
+  };
+}
+
+async function resolveHeadersValue(value: HeadersValue): Promise<Readonly<Record<string, string>>> {
+  return typeof value === "function" ? await value() : value;
 }

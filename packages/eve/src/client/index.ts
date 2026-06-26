@@ -10,10 +10,13 @@ export { defaultMessageReducer } from "#client/message-reducer.js";
 export { createDataUrlFilePart, createTextWithFileContent } from "#client/file-parts.js";
 export { MessageResponse } from "#client/message-response.js";
 export { ClientSession } from "#client/session.js";
+export { oidc, vercelOidcAuth } from "#client/auth.js";
 
 // ---------------------------------------------------------------------------
 // Client types
 // ---------------------------------------------------------------------------
+
+export type { VercelOidcAuthOptions } from "#client/auth.js";
 
 export type {
   EveAgentStoreCallbacks,
@@ -64,9 +67,6 @@ export type {
 } from "#client/reducer.js";
 
 export type {
-  EveAuthorizationChallenge,
-  EveAuthorizationOutcome,
-  EveAuthorizationPart,
   EveMessageData,
   EveDynamicToolPart,
   EveMessageInputRequest,
@@ -85,7 +85,6 @@ export type {
   ActionResultStreamEvent,
   ActionsRequestedStreamEvent,
   AssistantStepFinishReason,
-  AuthorizationOutcome,
   CompactionCompletedStreamEvent,
   CompactionRequestedStreamEvent,
   AuthorizationCompletedStreamEvent,
