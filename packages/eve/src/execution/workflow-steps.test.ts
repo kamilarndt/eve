@@ -378,6 +378,94 @@ describe("dispatchRuntimeActionsStep", () => {
     );
   });
 
+  it("retains the remote child session identity on the pending action", async () => {
+    const remote = {
+      definition: {
+        description: "Research remote",
+        kind: "remote",
+        name: "research",
+        path: "/eve/v1/session",
+        url: "https://remote.example.com",
+      },
+    };
+    const compiledBundle = {
+      adapterRegistry: {
+        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
+      },
+      compiledArtifactsSource: {},
+      graph: {
+        nodesByNodeId: new Map(),
+        root: {
+          sandboxRegistry: { sandbox: null },
+          turnAgent: TestTurnAgent,
+        },
+      },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: {
+        subagentsByNodeId: new Map([["remote/research", remote]]),
+      },
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never;
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            continuationToken: "eve:remote-turn",
+            sessionId: "remote-session",
+          }),
+          { status: 202 },
+        ),
+      ),
+    );
+
+    const session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId: "call-1",
+          description: "Delegate the work.",
+          input: { message: "investigate latest routing" },
+          kind: "remote-agent-call",
+          name: "research",
+          nodeId: "remote/research",
+          remoteAgentName: "research",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+      responseMessages: [],
+      session: createStubSession({
+        continuationToken: "http:parent",
+        sessionId: "parent-session",
+      }),
+    });
+    installSessionStoreMocks([session]);
+
+    const result = await dispatchRuntimeActionsStep({
+      callbackBaseUrl: "https://caller.example.com",
+      parentContinuationToken: "turn-inbox",
+      parentWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
+      sessionState: createStubSessionState({
+        continuationToken: "http:parent",
+        sessionId: "parent-session",
+      }),
+    });
+
+    expect(result.sessionState.snapshot?.session.state).toMatchObject({
+      "eve.runtime.pendingActionBatch": {
+        remoteAgentSessions: {
+          "call-1": {
+            continuationToken: "eve:remote-turn",
+            sessionId: "remote-session",
+          },
+        },
+      },
+    });
+  });
+
   it("returns a failed subagent result when remote session creation fails", async () => {
     const remote = {
       definition: {

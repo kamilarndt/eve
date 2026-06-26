@@ -41,6 +41,9 @@ interface PendingRuntimeActionBatch {
   readonly actions: readonly RuntimeActionRequest[];
   readonly childContinuationTokens?: Readonly<Record<string, string>>;
   readonly event: PendingRuntimeActionEventMetadata;
+  readonly remoteAgentSessions?: Readonly<
+    Record<string, { readonly continuationToken: string; readonly sessionId: string }>
+  >;
   readonly responseMessages: readonly ModelMessage[];
 }
 
@@ -134,6 +137,34 @@ export function recordPendingSubagentChildToken(input: {
     childContinuationTokens: {
       ...batch.childContinuationTokens,
       [input.callId]: input.childContinuationToken,
+    },
+  } satisfies PendingRuntimeActionBatch;
+
+  return { ...input.session, state };
+}
+
+/** Records the identity required to address a dispatched remote-agent turn. */
+export function recordPendingRemoteAgentSession(input: {
+  readonly callId: string;
+  readonly continuationToken: string;
+  readonly session: HarnessSession;
+  readonly sessionId: string;
+}): HarnessSession {
+  const batch = getPendingRuntimeActionBatch(input.session.state);
+
+  if (batch === undefined) {
+    return input.session;
+  }
+
+  const state = { ...input.session.state };
+  state[PENDING_RUNTIME_ACTION_BATCH_KEY] = {
+    ...batch,
+    remoteAgentSessions: {
+      ...batch.remoteAgentSessions,
+      [input.callId]: {
+        continuationToken: input.continuationToken,
+        sessionId: input.sessionId,
+      },
     },
   } satisfies PendingRuntimeActionBatch;
 

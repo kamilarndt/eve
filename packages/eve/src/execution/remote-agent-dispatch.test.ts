@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { startRemoteAgentSession } from "#execution/remote-agent-dispatch.js";
+import {
+  cancelRemoteAgentTurn,
+  startRemoteAgentSession,
+} from "#execution/remote-agent-dispatch.js";
 import type { RuntimeRemoteAgentCallActionRequest } from "#runtime/actions/types.js";
 import type { ResolvedRuntimeRemoteAgentNode } from "#runtime/types.js";
 
@@ -12,14 +15,21 @@ describe("startRemoteAgentSession", () => {
 
   it("posts the formatted subagent message and callback metadata", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, sessionId: "remote-session" }), {
-        headers: { "x-eve-session-id": "remote-session-header" },
-        status: 202,
-      }),
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-turn",
+          ok: true,
+          sessionId: "remote-session",
+        }),
+        {
+          headers: { "x-eve-session-id": "remote-session-header" },
+          status: 202,
+        },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const childSessionId = await startRemoteAgentSession({
+    const childSession = await startRemoteAgentSession({
       action: createAction(),
       callbackBaseUrl: "https://caller.example.com",
       remote: createRemoteAgent(),
@@ -40,7 +50,10 @@ describe("startRemoteAgentSession", () => {
       },
     });
 
-    expect(childSessionId).toBe("remote-session-header");
+    expect(childSession).toEqual({
+      continuationToken: "eve:remote-turn",
+      sessionId: "remote-session-header",
+    });
     expect(fetchMock).toHaveBeenCalledWith("https://remote.example.com/eve/v1/session", {
       body: expect.any(String),
       headers: {
@@ -72,10 +85,17 @@ describe("startRemoteAgentSession", () => {
 
   it("sends a declared outputSchema on the remote create-session request", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, sessionId: "remote-session" }), {
-        headers: { "x-eve-session-id": "remote-session-header" },
-        status: 202,
-      }),
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-turn",
+          ok: true,
+          sessionId: "remote-session",
+        }),
+        {
+          headers: { "x-eve-session-id": "remote-session-header" },
+          status: 202,
+        },
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -105,11 +125,15 @@ describe("startRemoteAgentSession", () => {
   });
 
   it("targets an active turn inbox when a callback token is supplied", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ sessionId: "remote-session" }), { status: 202 }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-turn",
+          sessionId: "remote-session",
+        }),
+        { status: 202 },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await startRemoteAgentSession({
@@ -136,11 +160,16 @@ describe("startRemoteAgentSession", () => {
 
   it("adds the Vercel automation bypass secret to callback URLs", async () => {
     vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "remote callback secret");
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ ok: true, sessionId: "remote-session" }), { status: 202 }),
-      );
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          continuationToken: "eve:remote-turn",
+          ok: true,
+          sessionId: "remote-session",
+        }),
+        { status: 202 },
+      ),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await startRemoteAgentSession({
@@ -171,6 +200,83 @@ describe("startRemoteAgentSession", () => {
         }),
       }),
     );
+  });
+
+  it("rejects a create-session response without a continuation token", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ sessionId: "remote-session" }), {
+          headers: { "x-eve-session-id": "remote-session-header" },
+          status: 202,
+        }),
+      ),
+    );
+
+    await expect(
+      startRemoteAgentSession({
+        action: createAction(),
+        callbackBaseUrl: "https://caller.example.com",
+        remote: createRemoteAgent(),
+        session: {
+          agent: { modelReference: { id: "mock/test" }, system: "", tools: [] },
+          compaction: { recentWindowSize: 10, threshold: 100000 },
+          continuationToken: "eve:parent-token",
+          history: [],
+          sessionId: "parent-session",
+        },
+      }),
+    ).rejects.toThrow(
+      'Remote agent "research" create-session response did not include a continuation token.',
+    );
+  });
+});
+
+describe("cancelRemoteAgentTurn", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts the retained turn identity with the remote agent headers", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ok: true }, { status: 202 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await cancelRemoteAgentTurn({
+      continuationToken: "eve:remote-turn",
+      remote: createRemoteAgent(),
+      sessionId: "remote/session",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://remote.example.com/eve/v1/session/remote%2Fsession/cancel",
+      {
+        body: JSON.stringify({
+          continuationToken: "eve:remote-turn",
+          scope: "turn",
+        }),
+        headers: {
+          authorization: "Bearer remote-token",
+          "content-type": "application/json",
+          "x-static": "yes",
+        },
+        method: "POST",
+      },
+    );
+  });
+
+  it("surfaces a rejected remote cancellation request", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(Response.json({ ok: false }, { status: 409 })),
+    );
+
+    await expect(
+      cancelRemoteAgentTurn({
+        continuationToken: "eve:remote-turn",
+        remote: createRemoteAgent(),
+        sessionId: "remote-session",
+      }),
+    ).rejects.toThrow('Remote agent "research" cancel-turn request failed with HTTP 409.');
   });
 });
 
