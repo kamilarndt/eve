@@ -14,10 +14,11 @@ from the MCP session.
 eve currently rebuilds connection clients at workflow/model step boundaries. That is correct for
 durable execution because live MCP clients, HTTP streams, timers, and sockets are not serializable.
 However, rebuilding the `@ai-sdk/mcp` client starts a fresh MCP session, so stateful servers can
-lose session-local setup between steps.
+lose session-local setup between steps when an app intentionally relies on MCP-session state.
 
-The implementation shape should keep the live connection registry virtual, but persist small
-reconnect metadata in eve's durable context:
+This should be opt-in per MCP connection. The implementation shape should keep the live connection
+registry virtual for every connection, but persist small reconnect metadata in eve's durable context
+only when the connection asks for durable MCP session continuity:
 
 ```ts
 export const McpSessionStateKey = new ContextKey<Record<string, DurableMcpSessionState>>(
@@ -31,7 +32,7 @@ interface DurableMcpSessionState {
 }
 ```
 
-This state is serialized by eve's existing `serializeContext(ctx)` path as
+When present, this state is serialized by eve's existing `serializeContext(ctx)` path as
 `serializedContext["eve.mcpSessionState"]`. It is not part of the model transcript, channel request
 body, or user-visible messages.
 
@@ -67,9 +68,17 @@ If that PR changes shape, adapt this plan to the final AI SDK API before impleme
 
 ## Developer-facing behavior
 
-The first version should be automatic for existing Streamable HTTP MCP connections. App authors keep
-defining MCP connections with `defineMcpClientConnection`; they do not pass, persist, or inspect MCP
-session ids.
+The first version should be disabled by default. Existing Streamable HTTP MCP connections should
+keep today's behavior: each rebuilt client starts a fresh upstream MCP session, and closing the
+client may terminate that upstream session according to the MCP client's normal close behavior.
+
+Default-off avoids silently extending upstream session lifetimes, retaining server-side resources,
+or preserving state on servers that treat client close as a cleanup boundary. It also keeps existing
+apps on the same behavior they already rely on.
+
+App authors opt in only for MCP servers whose tool semantics require session-scoped setup to survive
+eve workflow/model step boundaries. They still should not pass, persist, or inspect raw MCP session
+ids; the option only asks eve to manage spec-native reattach metadata internally.
 
 ```ts title="agent/connections/workspace.ts"
 import { connect } from "@vercel/connect/eve";
@@ -80,10 +89,15 @@ export default defineMcpClientConnection({
   description:
     "Workspace service. Use its setup tools before follow-up tools that depend on selected state.",
   auth: connect({ connector: "workspace/my-agent", principalType: "user" }),
+  session: {
+    continuity: "durable",
+  },
 });
 ```
 
-During one eve session, the expected behavior is:
+`session.continuity: "durable"` is the proposed public shape; the exact field name can change during
+implementation review. The important contract is opt-in behavior. When enabled, the expected
+behavior during one eve session is:
 
 1. The model discovers remote tools through `connection_search`.
 2. A remote setup tool stores working context in the upstream MCP session.
@@ -105,12 +119,13 @@ upstream MCP session. This is session continuity, not a new durable app-state AP
 state still belongs to the MCP server, and eve only stores the protocol metadata required to
 reattach.
 
-For legacy SSE MCP servers, app behavior is unchanged because there is no `MCP-Session-Id` reattach
-mechanism. For expired upstream sessions, the first implementation should clear the stale protocol
-metadata and surface the failure or retry only safe metadata operations; the MCP server should expose
-enough setup tools and descriptions for the model to establish state again. A future replay layer can
-add an authored hook or connection option for re-establishing setup after expiry, but valid-session
-reattach should not require new app code.
+For connections that do not opt in, legacy SSE MCP servers, or servers that do not support
+`MCP-Session-Id` reattach, app behavior is unchanged. For expired upstream sessions, the first
+implementation should clear the stale protocol metadata and surface the failure or retry only safe
+metadata operations; the MCP server should expose enough setup tools and descriptions for the model
+to establish state again. A future replay layer can add an authored hook or connection option for
+re-establishing setup after expiry, but valid-session reattach should not require app code beyond the
+connection-level opt-in.
 
 ## Where state is saved
 
@@ -123,8 +138,9 @@ Current eve flow:
 3. runtime code mutates durable context values with `ctx.set(...)`.
 4. `turnStep()` returns `serializeContext(ctx)` for the next durable step or turn.
 
-`McpSessionStateKey` should follow that same pattern. The workflow payload carries it because the
-payload carries all serialized context, but the data is framework-owned context metadata.
+For opted-in connections, `McpSessionStateKey` should follow that same pattern. The workflow payload
+carries it because the payload carries all serialized context, but the data is framework-owned
+context metadata.
 
 Why this location:
 
@@ -150,15 +166,17 @@ id in the external key:
 eveSessionId + connectionName + principalKey
 ```
 
-Keep app-scoped MCP sessions per eve session. Even if the bearer token is shared, state such as a
-selected workspace is conversational working context and must not leak across sessions.
+Keep app-scoped MCP sessions per eve session. Even if the bearer token is shared, session-scoped MCP
+state is conversational working context and must not leak across sessions.
 
 ## Runtime integration
 
 `ConnectionRegistryKey` remains virtual and step-local.
 
-`ConnectionRegistryImpl` continues constructing `McpConnectionClient`, but the client reads and
-writes `McpSessionStateKey` from the active context when creating an HTTP MCP client.
+`ConnectionRegistryImpl` continues constructing `McpConnectionClient`. For the default path, client
+creation should keep today's behavior and not touch `McpSessionStateKey`. For opted-in Streamable
+HTTP connections, the client reads and writes `McpSessionStateKey` from the active context when
+creating an HTTP MCP client.
 
 Sketch:
 
@@ -166,8 +184,9 @@ Sketch:
 const ctx = loadContext();
 const principal = resolveConnectionPrincipal(connection.connectionName, authorization, ctx);
 const cacheKey = `${connection.connectionName}:${principalKey(principal)}`;
-const state = ctx.get(McpSessionStateKey) ?? {};
-const saved = state[cacheKey];
+const shouldReattach = connection.session?.continuity === "durable";
+const state = shouldReattach ? (ctx.get(McpSessionStateKey) ?? {}) : {};
+const saved = shouldReattach ? state[cacheKey] : undefined;
 
 let currentSessionId = saved?.sessionId;
 
@@ -176,25 +195,29 @@ const client = await createMCPClient({
     type: "http",
     url,
     headers,
-    initialSessionId: saved?.sessionId,
-    initialProtocolVersion: saved?.initializeResult.protocolVersion,
-    terminateSessionOnClose: false,
-    onSessionIdChange(sessionId) {
-      currentSessionId = sessionId;
-    },
-    onSessionExpired(sessionId) {
-      ctx.set(McpSessionStateKey, (prev = {}) => {
-        if (prev[cacheKey]?.sessionId !== sessionId) return prev;
-        const { [cacheKey]: _expired, ...rest } = prev;
-        return rest;
-      });
-      currentSessionId = undefined;
-    },
+    ...(shouldReattach
+      ? {
+          initialSessionId: saved?.sessionId,
+          initialProtocolVersion: saved?.initializeResult.protocolVersion,
+          terminateSessionOnClose: false,
+          onSessionIdChange(sessionId) {
+            currentSessionId = sessionId;
+          },
+          onSessionExpired(sessionId) {
+            ctx.set(McpSessionStateKey, (prev = {}) => {
+              if (prev[cacheKey]?.sessionId !== sessionId) return prev;
+              const { [cacheKey]: _expired, ...rest } = prev;
+              return rest;
+            });
+            currentSessionId = undefined;
+          },
+        }
+      : {}),
   },
-  initialInitializeResult: saved?.initializeResult,
+  ...(shouldReattach ? { initialInitializeResult: saved?.initializeResult } : {}),
 });
 
-if (currentSessionId) {
+if (shouldReattach && currentSessionId) {
   ctx.set(McpSessionStateKey, (prev = {}) => ({
     ...prev,
     [cacheKey]: {
@@ -214,8 +237,8 @@ generation.
 
 Keep the current Streamable HTTP first, SSE fallback behavior.
 
-Only Streamable HTTP uses `McpSessionStateKey`. Legacy SSE does not have an equivalent
-`MCP-Session-Id` reattach mechanism, so it should ignore and not update this state.
+Only opted-in Streamable HTTP connections use `McpSessionStateKey`. Legacy SSE does not have an
+equivalent `MCP-Session-Id` reattach mechanism, so it should ignore and not update this state.
 
 If HTTP creation fails with a fallback-eligible compatibility error before a session is established,
 fall back to SSE as today. If HTTP fails because a stored session expired, clear the stored state and
@@ -223,9 +246,12 @@ retry HTTP fresh once before considering SSE fallback.
 
 ## Close behavior
 
-When the runtime disposes the virtual `ConnectionRegistryImpl` at a step boundary, `client.close()`
-must only detach the local client. It must not terminate the remote MCP session that eve intends to
-reuse next step.
+For default MCP connections, keep today's close behavior. If the MCP client terminates the upstream
+session on close, that is fine because the connection did not opt into session continuity.
+
+For opted-in connections, when the runtime disposes the virtual `ConnectionRegistryImpl` at a step
+boundary, `client.close()` must only detach the local client. It must not terminate the remote MCP
+session that eve intends to reuse next step.
 
 Use:
 
@@ -272,13 +298,17 @@ Do not bake server-specific replay into the generic MCP client.
 
 ## Files likely to change
 
+- `packages/eve/src/public/definitions/connections/mcp.ts`
+  - add the opt-in MCP session continuity option.
+- `packages/eve/src/compiler/manifest.ts` and `packages/eve/src/runtime/types.ts`
+  - carry the option through compiled and resolved connection definitions.
 - `packages/eve/src/context/keys.ts`
   - add `McpSessionStateKey` and durable state types.
 - `packages/eve/src/runtime/connections/mcp-client.ts`
-  - read/write durable MCP session state;
-  - pass AI SDK reattach options;
+  - read/write durable MCP session state only for opted-in connections;
+  - pass AI SDK reattach options only for opted-in connections;
   - clear state on session expiry;
-  - use `terminateSessionOnClose: false`.
+  - use `terminateSessionOnClose: false` only for opted-in connections.
 - `packages/eve/src/runtime/connections/mcp-client.test.ts`
   - unit coverage for create, persist, reattach, expiry, and fallback.
 - Possibly `packages/eve/src/runtime/connections/types.ts`
@@ -288,11 +318,13 @@ Do not bake server-specific replay into the generic MCP client.
 
 Add unit tests for:
 
-- captures `MCPClient.initializeResult` and `sessionId` after first HTTP client creation;
-- serializes MCP session state through `serializeContext(ctx)`;
+- leaves default MCP connections on fresh-session close behavior and does not write
+  `McpSessionStateKey`;
+- captures `MCPClient.initializeResult` and `sessionId` after first opted-in HTTP client creation;
+- serializes opted-in MCP session state through `serializeContext(ctx)`;
 - rehydrates from `serializedContext` and passes `initialSessionId`, `initialProtocolVersion`, and
-  `initialInitializeResult` on the next client creation;
-- sets `terminateSessionOnClose: false` for HTTP transports;
+  `initialInitializeResult` on the next opted-in client creation;
+- sets `terminateSessionOnClose: false` only for opted-in HTTP transports;
 - scopes state by connection name and resolved principal key;
 - does not share app-scoped MCP session state across eve sessions;
 - clears only the matching stored session id on `onSessionExpired`;
