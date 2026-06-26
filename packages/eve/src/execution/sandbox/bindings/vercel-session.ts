@@ -1,4 +1,4 @@
-import type { VercelCredentialBrokering } from "#execution/sandbox/bindings/vercel-credentials.js";
+import type { VercelEgressAuth } from "#execution/sandbox/bindings/vercel-egress-auth.js";
 import { normalizeVercelReadStream } from "#execution/sandbox/bindings/vercel-read-stream.js";
 import type { VercelSandbox } from "#execution/sandbox/bindings/vercel-sdk-types.js";
 import { adaptMultiplexedCommandToSandboxProcess } from "#execution/sandbox/multiplexed-command.js";
@@ -20,7 +20,7 @@ import { WORKSPACE_ROOT } from "#runtime/workspace/types.js";
 export function createVercelSandboxHandle(
   sandbox: VercelSandbox,
   sessionKey: string,
-  brokering: VercelCredentialBrokering | undefined,
+  egressAuth: VercelEgressAuth | undefined,
   brokeredPolicy: SandboxNetworkPolicy | undefined,
 ): SandboxBackendHandle<VercelSandboxSessionUseOptions> {
   return {
@@ -30,7 +30,7 @@ export function createVercelSandboxHandle(
     ),
     useSessionFn: async (options?: VercelSandboxSessionUseOptions) => {
       if (options !== undefined) {
-        if (brokering !== undefined && options.networkPolicy !== undefined) {
+        if (egressAuth !== undefined && options.networkPolicy !== undefined) {
           throw new Error(
             "vercel(): `onSession` cannot replace `networkPolicy` when managed `auth` rules exist.",
           );
@@ -53,8 +53,8 @@ export function createVercelSandboxHandle(
       };
     },
     async dispose() {
-      if (brokering !== undefined) {
-        await sandbox.update({ networkPolicy: brokering.clearedPolicy });
+      if (egressAuth !== undefined) {
+        await sandbox.update({ networkPolicy: egressAuth.clearedPolicy });
       }
     },
   };

@@ -132,11 +132,23 @@ export async function ensureSandboxAccess(input: EnsureSandboxAccessInput): Prom
     );
     markDevelopmentSandboxBackendInitialized(backend.name);
 
-    if (!initialized) {
-      await runOnSession(async () => {
-        await definition.onSession?.({ ctx: buildCallbackContext(), use: handle.useSessionFn });
-      });
-      initialized = true;
+    try {
+      if (!initialized) {
+        await runOnSession(async () => {
+          await definition.onSession?.({ ctx: buildCallbackContext(), use: handle.useSessionFn });
+        });
+        initialized = true;
+      }
+    } catch (error) {
+      try {
+        await handle.dispose();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Sandbox session setup failed and cleanup also failed.",
+        );
+      }
+      throw error;
     }
 
     return handle;

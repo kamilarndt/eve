@@ -43,9 +43,13 @@ export default defineTool({
     await sandbox.removePath({ force: true, path: CREDENTIAL_PROBE_CLEANUP_PATH });
     await sandbox.spawn({
       command:
-        `sleep 3; response=$(curl -sS --max-time 5 ${shellQuote(authorizedUrl)} || true); ` +
-        `if [ "$response" = '{"authorized":true}' ]; then printf allowed; ` +
-        `else printf blocked; fi > ${shellQuote(CREDENTIAL_PROBE_CLEANUP_PATH)}`,
+        `blocked=0; for attempt in $(seq 1 120); do ` +
+        `response=$(curl -sS --max-time 2 ${shellQuote(authorizedUrl)} || true); ` +
+        `if [ "$response" = '{"authorized":true}' ]; then blocked=0; ` +
+        `else blocked=$((blocked + 1)); fi; ` +
+        `if [ "$blocked" -ge 3 ]; then ` +
+        `printf blocked > ${shellQuote(CREDENTIAL_PROBE_CLEANUP_PATH)}; exit 0; fi; ` +
+        `sleep 0.25; done; printf timeout > ${shellQuote(CREDENTIAL_PROBE_CLEANUP_PATH)}`,
     });
 
     return {

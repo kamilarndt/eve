@@ -134,8 +134,8 @@ export interface SandboxSession extends Pick<
    * the just-bash backend rejects this call entirely (its network policy
    * is fixed at sandbox creation and it runs no binaries to govern).
    *
-   * On a Vercel sandbox with Eve-managed authenticated rules, this replaces
-   * the complete active policy, including Eve's credential transforms, for
+   * On a Vercel sandbox with eve-managed authenticated rules, this replaces
+   * the complete active policy, including eve's credential transforms, for
    * the rest of the current step. A later step resolves and installs the
    * managed policy again.
    */

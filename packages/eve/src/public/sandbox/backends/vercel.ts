@@ -30,7 +30,7 @@ import type {
  * `sandbox.update(...)`; those settings persist into the snapshot.
  * `onSession({ use })` applies its options to the live session via the SDK's
  * `update` under the hood. `onSession` network-policy replacement is rejected
- * when the factory policy contains Eve-managed authenticated rules.
+ * when the factory policy contains eve-managed authenticated rules.
  *
  * Route-level `auth` rules resolve credentials for the active principal and
  * inject them through the Vercel Sandbox firewall before the sandbox is

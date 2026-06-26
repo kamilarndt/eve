@@ -60,7 +60,7 @@ function createTestRegistry(
   };
 }
 
-function createBackend(onCreate?: () => void): SandboxBackend {
+function createBackend(onCreate?: () => void, onDispose?: () => void): SandboxBackend {
   const sandbox = mockSandbox({ id: "sbx_session_auth" });
   const create = vi.fn(async (input: SandboxBackendCreateInput) => {
     onCreate?.();
@@ -71,7 +71,9 @@ function createBackend(onCreate?: () => void): SandboxBackend {
         sessionKey: input.sessionKey,
       }),
       useSessionFn: async () => sandbox.session,
-      dispose: async () => {},
+      dispose: async () => {
+        onDispose?.();
+      },
       session: sandbox.session,
     };
   });
@@ -269,6 +271,29 @@ describe("ensureSandboxAccess", () => {
       }),
       use: expect.any(Function),
     });
+  });
+
+  it("disposes the backend handle when onSession fails", async () => {
+    const ctx = new ContextContainer();
+    ctx.set(SessionKey, createSession());
+    const dispose = vi.fn();
+    const backend = createBackend(undefined, dispose);
+    const registry = createTestRegistry(
+      {
+        onSession: async () => {
+          throw new Error("onSession failed");
+        },
+      },
+      backend,
+    );
+
+    const access = await ensure({
+      registry,
+      runOnSession: async (callback) => await contextStorage.run(ctx, callback),
+    });
+
+    await expect(access.get()).rejects.toThrow("onSession failed");
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("does not pass bootstrap or seed files to runtime create", async () => {

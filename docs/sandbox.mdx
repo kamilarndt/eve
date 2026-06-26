@@ -211,8 +211,8 @@ Credential brokering is an optional backend capability, not part of the portable
 
 The two supported backends expose different levels of integration:
 
-- `vercel()` supports Eve-managed authorization rules and direct transforms.
-- `microsandbox()` supports direct transforms, but not Eve-managed authorization rules.
+- `vercel()` supports eve-managed authorization rules and direct transforms.
+- `microsandbox()` supports direct transforms, but not eve-managed authorization rules.
 
 ### Managed authorization on Vercel Sandbox
 
@@ -243,13 +243,13 @@ export default defineSandbox({
 });
 ```
 
-`auth` uses the same authorization contract as connections and authored tools: a static `getToken`, a per-user strategy, or an interactive strategy such as Vercel Connect. Eve resolves every authenticated rule before returning the sandbox to authored code. Interactive credentials park and resume through Eve's normal callback lifecycle. Native Vercel `match` filters remain available on both authenticated and unauthenticated rules. This managed `auth` form is specific to the Vercel backend.
+`auth` accepts a static authorization provider using the same `getToken` and interactive strategy shapes as connections and authored tools. Dynamic resolver functions are not supported on sandbox rules; provide the provider object directly. eve resolves every authenticated rule before returning the sandbox to authored code. When the sandbox is first opened from an authored tool's `execute`, interactive credentials park and resume through eve's normal callback lifecycle. Hooks and channel events may use an already-authorized provider, but cannot initiate interactive sandbox authorization. Native Vercel `match` filters remain available on both authenticated and unauthenticated rules. This managed `auth` form is specific to the Vercel backend.
 
 On Vercel, firewall transformations require Pro or Enterprise and are unavailable on Hobby.
 
-Eve removes resolved tokens after every step. Rules whose credentials are unavailable receive no credential transform. If another rule allows the same domain, Vercel still permits unmatched traffic to that domain without the credential.
+eve removes resolved tokens after every step. Rules whose credentials are unavailable receive no credential transform. If another rule allows the same domain, Vercel still permits unmatched traffic to that domain without the credential.
 
-Managed policies reject replacement through `onSession({ use })`, where Eve owns the startup policy. `sandbox.setNetworkPolicy()` remains available mid-step, but replaces the complete active policy, including Eve's credential transforms. Eve clears the replacement after the step; a later step resolves and installs the managed policy again. Brokered credentials are unavailable during template bootstrap.
+Managed policies reject replacement through `onSession({ use })`, where eve owns the startup policy. `sandbox.setNetworkPolicy()` remains available mid-step, but replaces the complete active policy, including eve's credential transforms. eve clears the replacement after the step; a later step resolves and installs the managed policy again. Brokered credentials are unavailable during template bootstrap.
 
 ### Direct transforms
 
