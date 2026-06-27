@@ -346,7 +346,7 @@ describe("renderSelectQuestion", () => {
     expect(clipped?.endsWith("\x1b[0m")).toBe(true);
   });
 
-  it("renders a warning-toned disabled row with a dim label and yellow reason", () => {
+  it("renders a warning-toned disabled row with a dim label and yellow alert annotation", () => {
     const colored = createTheme({ color: true, unicode: true });
     const options = [
       { value: "web", label: "Web Chat" },
@@ -369,9 +369,9 @@ describe("renderSelectQuestion", () => {
       80,
     ).join("\n");
 
-    // Dim label (SGR 2), un-struck, followed by the reason in yellow (SGR 33).
+    // Dim label (SGR 2), un-struck, followed by the alert annotation in yellow (SGR 33).
     expect(text).toContain(
-      "\x1b[2mSlack\x1b[22m\x1b[33m (Requires Vercel account, see /model)\x1b[39m",
+      "\x1b[2mSlack\x1b[22m\x1b[33m ⚠ Requires Vercel account, see /model\x1b[39m",
     );
   });
 

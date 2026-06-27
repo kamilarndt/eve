@@ -16,6 +16,7 @@ import { toErrorMessage } from "#shared/errors.js";
 import { createPromptCommandHandler } from "./prompt-command-handler.js";
 import { promptCommandsFor } from "./prompt-commands.js";
 import { formatRemoteAuthChallengeMessage } from "./remote-auth-result.js";
+import { probeMcpConnection } from "./mcp-connection-status.js";
 import { EveTUIRunner, type EveTUIRunnerOptions } from "./runner.js";
 import { remoteHost, type DevelopmentTuiTarget, type RemoteDevelopmentTarget } from "./target.js";
 import type { TuiDisplayOptions } from "./types.js";
@@ -106,6 +107,7 @@ export async function runDevelopmentTui(input: RunDevelopmentTuiInput): Promise<
   };
   if (prepared.kind === "local") {
     options.appRoot = prepared.target.workspaceRoot;
+    options.probeMcpConnection = probeMcpConnection;
   } else {
     options.remote = prepared.remote;
   }

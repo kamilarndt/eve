@@ -330,6 +330,7 @@ function optionRow(input: {
       success: theme.glyph.success,
       placeholder: theme.glyph.option,
       dot: theme.glyph.dot,
+      warning: theme.glyph.warning,
     },
     label: option.label,
     hint: option.hint,

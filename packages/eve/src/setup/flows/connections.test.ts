@@ -57,6 +57,7 @@ function addConnectionDeps(): AddConnectionsDeps {
 function runConnectionFlow(
   list: ReturnType<typeof scriptConnectionList>,
   deps: Partial<ConnectionsFlowDeps> = {},
+  disabledConnectionReasons: Readonly<Record<string, string>> = {},
 ) {
   const defaults: ConnectionsFlowDeps = {
     detectDeployment: vi.fn(async () => LINKED),
@@ -71,6 +72,7 @@ function runConnectionFlow(
   return runConnectionsFlow({
     appRoot: APP_ROOT,
     prompter: createFakePrompter({ single: list.single }).prompter,
+    disabledConnectionReasons,
     deps: { ...defaults, ...deps },
   });
 }
@@ -123,6 +125,25 @@ describe("runConnectionsFlow", () => {
     expect(loggedOutList.requests[0]?.options.find((row) => row.value === "linear")).toMatchObject({
       disabled: true,
       disabledReason: "Log in to Vercel first, see /vc:login",
+    });
+  });
+
+  it("disables a connection whose MCP endpoint is unreachable", async () => {
+    const list = scriptConnectionList(["cancel"]);
+    await expect(
+      runConnectionFlow(
+        list,
+        {},
+        {
+          notion: "https://mcp.notion.com/mcp is not reachable (HTTP 404).",
+        },
+      ),
+    ).resolves.toEqual({ kind: "cancelled" });
+
+    expect(list.requests[0]?.options.find((row) => row.value === "notion")).toMatchObject({
+      disabled: true,
+      disabledReasonTone: "warning",
+      disabledReason: "https://mcp.notion.com/mcp is not reachable (HTTP 404).",
     });
   });
 

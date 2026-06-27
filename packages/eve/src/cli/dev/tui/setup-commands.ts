@@ -49,6 +49,7 @@ export interface TuiSetupCommandInput {
   renderer: TuiSetupCommandRenderer;
   /** Initial model-flow step authorized by the runner's boot evidence. */
   initialModelStep?: "provider";
+  disabledConnectionReasons?: Readonly<Record<string, string>>;
   /** Test seam; defaults to the real TUI-native prompter over `renderer`. */
   createPrompter?: (renderer: TuiPrompterRenderer) => Prompter;
   /** Test seam; defaults to the real setup flows. */
@@ -240,7 +241,12 @@ async function executeSetupCommand(
         }
       }
       case "connect": {
-        const result = await flows.runConnectionsFlow({ appRoot, prompter, signal });
+        const result = await flows.runConnectionsFlow({
+          appRoot,
+          prompter,
+          signal,
+          disabledConnectionReasons: input.disabledConnectionReasons,
+        });
         switch (result.kind) {
           case "cancelled":
             return {

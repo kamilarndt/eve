@@ -54,12 +54,22 @@ export type ConnectionsFlowResult =
 function connectionRows(
   authored: ReadonlySet<string>,
   authStatus: VercelAuthStatus,
+  disabledConnectionReasons: Readonly<Record<string, string>>,
 ): SelectOption<string>[] {
   const blocker = vercelAuthBlockerReason(authStatus);
   const rows: SelectOption<string>[] = CONNECT_CONNECTIONS.map((entry) => {
     const row = { value: entry.slug, label: entry.label };
     if (authored.has(entry.slug)) {
       return { ...row, completed: true, focusHint: "Already added" };
+    }
+    const disabledConnectionReason = disabledConnectionReasons[entry.slug];
+    if (disabledConnectionReason !== undefined) {
+      return {
+        ...row,
+        disabled: true,
+        disabledReason: disabledConnectionReason,
+        disabledReasonTone: "warning",
+      };
     }
     if (blocker !== undefined) {
       return {
@@ -79,8 +89,9 @@ async function pickConnection(
   prompter: Prompter,
   authored: ReadonlySet<string>,
   authStatus: VercelAuthStatus,
+  disabledConnectionReasons: Readonly<Record<string, string>>,
 ): Promise<string | undefined> {
-  const options = connectionRows(authored, authStatus);
+  const options = connectionRows(authored, authStatus, disabledConnectionReasons);
   const request: SingleSelectOptions<string> = {
     message: CONNECTIONS_PROMPT_MESSAGE,
     options,
@@ -108,6 +119,7 @@ export async function runConnectionsFlow(input: {
   appRoot: string;
   prompter: Prompter;
   signal?: AbortSignal;
+  disabledConnectionReasons?: Readonly<Record<string, string>>;
   deps?: Partial<ConnectionsFlowDeps>;
 }): Promise<ConnectionsFlowResult> {
   const { appRoot, prompter, signal } = input;
@@ -135,7 +147,12 @@ export async function runConnectionsFlow(input: {
 
   let state = inProjectSetupState(appRoot, projectResolutionFromDeployment(deployment));
   const authored = new Set(initialAuthored);
-  const selected = await pickConnection(prompter, authored, authStatus);
+  const selected = await pickConnection(
+    prompter,
+    authored,
+    authStatus,
+    input.disabledConnectionReasons ?? {},
+  );
   if (selected === undefined) return { kind: "cancelled" };
   if (selected === "done" || authored.has(selected)) {
     return { kind: "done", addedConnections: [] };

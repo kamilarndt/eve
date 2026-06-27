@@ -85,6 +85,11 @@ import {
   type VercelStatusTracker,
   type VercelStatusTrackerOptions,
 } from "./vercel-status.js";
+import {
+  createMcpConnectionStatusTracker,
+  type McpConnectionProbe,
+  type McpConnectionStatusTracker,
+} from "./mcp-connection-status.js";
 import type { detectProjectIdentity } from "#setup/project-resolution.js";
 import { getVercelAuthStatus, type VercelAuthStatus } from "#setup/vercel-project.js";
 
@@ -303,6 +308,7 @@ export interface PromptCommandHandlerContext {
    */
   readonly keepSetupFlowOpen?: true;
   readonly remoteConnection?: RemoteConnectionController;
+  readonly disabledConnectionReasons?: Readonly<Record<string, string>>;
 }
 
 /** What one handled slash command leaves behind for the runner to apply. */
@@ -322,6 +328,8 @@ export interface PromptCommandHandler {
 
 export type EveTUIRunnerOptions = TuiDisplayOptions & {
   session: ClientSession;
+  /** Production TUI probe injected by the launcher; omitted in hermetic runners. */
+  probeMcpConnection?: McpConnectionProbe;
   /**
    * Optional client used to attach to child sessions for live subagent
    * stream observation. When omitted, the TUI still shows the subagent
@@ -429,6 +437,7 @@ export class EveTUIRunner {
    * session has no workspace to be linked.
    */
   readonly #vercelStatus?: VercelStatusTracker;
+  readonly #mcpConnectionStatus?: McpConnectionStatusTracker;
   /**
    * The header's message-of-the-day, picked once so dev HMR header
    * refreshes don't re-roll it mid-session. Local sessions only — every
@@ -504,6 +513,12 @@ export class EveTUIRunner {
         trackerOptions.detectIdentity = options.detectProjectIdentity;
       }
       this.#vercelStatus = createVercelStatusTracker(trackerOptions);
+      if (options.probeMcpConnection !== undefined) {
+        this.#mcpConnectionStatus = createMcpConnectionStatusTracker({
+          onChange: () => {},
+          probe: options.probeMcpConnection,
+        });
+      }
     }
     if (options.promptCommandHandler !== undefined) {
       this.#promptCommandHandler = options.promptCommandHandler;
@@ -607,6 +622,7 @@ export class EveTUIRunner {
       // Drops any in-flight link probe so a late resolution cannot paint
       // into a torn-down terminal.
       this.#vercelStatus?.dispose();
+      this.#mcpConnectionStatus?.dispose();
       this.#remoteConnection?.dispose();
     }
   }
@@ -633,6 +649,7 @@ export class EveTUIRunner {
     // Fire-and-forget: the link identity is network-bound to resolve, and the
     // first prompt must not wait on it. The segment appears when it lands.
     this.#vercelStatus?.refreshIdentity();
+    this.#mcpConnectionStatus?.refresh();
 
     const initialCommand =
       this.#initialInput === undefined ? undefined : parsePromptCommand(this.#initialInput);
@@ -1128,12 +1145,17 @@ export class EveTUIRunner {
     if (handler === undefined)
       return { message: `/${command.name} is not available in this session.` };
 
-    const context: PromptCommandHandlerContext = {
+    const baseContext: PromptCommandHandlerContext = {
       renderer: this.#renderer,
       title: input.title,
       initialModelStep: input.initialModelStep,
       remoteConnection: this.#remoteConnection,
     };
+    const disabledConnectionReasons = this.#mcpConnectionStatus?.current();
+    const context: PromptCommandHandlerContext =
+      disabledConnectionReasons !== undefined && Object.keys(disabledConnectionReasons).length > 0
+        ? { ...baseContext, disabledConnectionReasons }
+        : baseContext;
     if (input.keepSetupFlowOpen === true) {
       return await handler.handle(command, { ...context, keepSetupFlowOpen: true });
     }
