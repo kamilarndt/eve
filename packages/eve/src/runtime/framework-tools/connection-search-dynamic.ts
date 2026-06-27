@@ -29,7 +29,7 @@ import { createLogger } from "#internal/logging.js";
 import type { DynamicToolEvents, DynamicToolEntry } from "#shared/dynamic-tool-definition.js";
 import type { ModelMessage } from "ai";
 
-import { ConnectionRegistryKey } from "#context/providers/connection.js";
+import { ConnectionRegistryKey } from "#context/providers/connection-key.js";
 
 const logger = createLogger("framework.connection-search-dynamic");
 
