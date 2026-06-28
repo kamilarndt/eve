@@ -22,6 +22,8 @@ These routes are protected by the channel's auth policy. eve fails closed by def
 
 `GET /eve/v1/health` is always public and skips the walk entirely, so load balancers and uptime monitors can probe it without credentials.
 
+`GET /eve/v1/info` is a separate framework inspection route. It does not use your `agent/channels/eve.ts` policy; it runs the framework default `[vercelOidc(), localDev()]` chain in dev and production. Include it when you enumerate protected endpoints for a proxy, firewall, or deployment review.
+
 ```ts title="agent/channels/eve.ts"
 import { eveChannel } from "eve/channels/eve";
 import { localDev, vercelOidc } from "eve/channels/auth";
@@ -106,7 +108,7 @@ Authenticates a synthetic `local-dev` principal, but only when the inbound reque
 
 ### `vercelOidc()`
 
-Verifies a bearer JWT against the [Vercel OIDC issuer](https://vercel.com/docs/oidc). Tokens minted for the current `VERCEL_PROJECT_ID` are always accepted, which is why internal subagent and runtime callers authenticate with zero configuration. Tokens carrying an `external_sub` authenticate as user callers, but only when their `project_id` matches `VERCEL_PROJECT_ID` and their environment matches `VERCEL_TARGET_ENV` / `VERCEL_ENV`. In that case `external_sub` becomes the session subject, and the profile claims (`name`, `picture`, `email`) show up in `ctx.session.auth.current.attributes`. To admit tokens minted by other Vercel projects, pass `subjects: [...]` (AWS IAM-style `*` wildcards).
+Verifies a bearer JWT against the [Vercel OIDC issuer](https://vercel.com/docs/oidc). Tokens minted for the current `VERCEL_PROJECT_ID` are accepted when they also carry a Vercel audience such as `https://vercel.com/acme`, which is why internal subagent and runtime callers authenticate with zero configuration. A same-project token minted for a foreign federation audience, for example AWS STS, is rejected. Tokens carrying an `external_sub` authenticate as user callers, but only when their `project_id` matches `VERCEL_PROJECT_ID` and their environment matches `VERCEL_TARGET_ENV` / `VERCEL_ENV`. In that case `external_sub` becomes the session subject, and the profile claims (`name`, `picture`, `email`) show up in `ctx.session.auth.current.attributes`. To admit tokens minted by other Vercel projects, pass `subjects: [...]` (AWS IAM-style `*` wildcards).
 
 Auth fails closed: routes reject unauthenticated traffic by default, and the OIDC user branch verifies `external_sub` against `VERCEL_PROJECT_ID` and the deployment environment, returning `false` when either is unset. An external-subject token cannot authenticate on a deployment that hasn't pinned its project.
 
@@ -186,7 +188,7 @@ export default defineChannel({
 
 ## Network policy
 
-`eve/channels/auth` exports `createIpAllowList(...)` and `isIpAllowed(...)` for cutting off requests before any model work starts. A request that fails the network policy is dropped ahead of both auth and runtime execution.
+`eve/channels/auth` exports `createIpAllowList(...)` and `isIpAllowed(...)` for custom route-level IP checks. Build the allow list at module load, then call `isIpAllowed(requestIp, allowList)` at the top of a custom `defineChannel` handler before `routeAuth(...)` or runtime dispatch. The helpers parse exact IP and CIDR entries and return `false` for `null`; `eveChannel` does not apply an IP allow list automatically.
 
 ## Replace `placeholderAuth` before production
 
@@ -209,12 +211,12 @@ Keep secret values (`ROUTE_AUTH_BASIC_PASSWORD`, signing keys) in environment va
 
 ## What reaches `ctx.session.auth`
 
-Inside runtime code, `ctx.session.auth` carries the result of the channel's route auth (the walk above) forward as the caller snapshot:
+Inside runtime code, `ctx.session.auth` carries the caller snapshot that the channel sends into the runtime. The default eve channel forwards the route-auth result, while a custom `onMessage` can return a different `auth` value or `null` before dispatch:
 
 - `auth.current`: the caller on the active inbound turn.
 - `auth.initiator`: the caller that started the durable session.
 - A follow-up message updates `auth.current` but leaves `auth.initiator` alone. When a different caller follows up on the same session, `auth.current` tracks the new caller for that turn while `auth.initiator` stays pinned to whoever started it.
-- Both are `null` only on internal runtime paths (subagents, for instance) that never went through an authored route. HTTP traffic always populates `auth.current`, since the walk either accepts with a `SessionAuthContext` or returns `401`.
+- `auth.current` can be `null` on internal runtime paths (subagents, for instance) or when channel code intentionally dispatches with `auth: null`. `auth.initiator` can also be `null` when the session starts that way. With the default eve channel behavior, accepted HTTP traffic populates `auth.current` because the walk either accepts with a `SessionAuthContext` or returns `401`.
 
 Use the principal on `auth.current` (or `auth.initiator`) to scope tools, resolve [dynamic capabilities](./dynamic-capabilities) per principal, or enforce tenant boundaries. There's no second per-session ownership ACL stacked on top of route auth. Access is decided at the HTTP boundary, and the durable session carries the caller snapshot forward into your runtime code.
 
@@ -363,7 +365,7 @@ The tool's `ctx` exposes provider-scoped auth accessors:
 - `ctx.getToken(provider, options?)` resolves an inline provider such as `connect("github/myagent")`. It uses the same cache, callback, and sign-in machinery as connection auth, scoped to that provider's tool-qualified auth key.
 - `ctx.requireAuth(provider, options?)` evicts the cached token for that inline provider and starts a fresh authorization challenge. Use it after a downstream `401` rejects a token returned by `ctx.getToken(provider)`.
 
-Throw `ConnectionAuthorizationRequiredError` from an inline provider's `getToken` to trigger the consent flow for that provider. If a downstream request later rejects an already-resolved token, call `ctx.requireAuth(provider)` to evict and re-authorize it.
+For interactive providers, throw `ConnectionAuthorizationRequiredError` from the provider's `getToken` to trigger the consent flow. A `getToken`-only provider can also throw it, but there is no consent callback to run; eve surfaces the requirement instead of re-running the tool. If a downstream request later rejects an already-resolved token, call `ctx.requireAuth(provider)` to evict and re-authorize it.
 
 Vercel Connect providers usually supply their own display name in the authorization challenge. Set `displayName` in the inline options only when you need to override what users see, for example `ctx.getToken(customAuth, { displayName: "Salesforce" })`. It is presentation-only.
 
