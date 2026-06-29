@@ -40,4 +40,28 @@ describe("compiledAgentManifestSchema", () => {
     expect(parsed.success).toBe(true);
     expect(manifest.config.experimental?.workflow).toEqual({ world: "@acme/eve-world" });
   });
+
+  it("preserves subagent limit configuration", () => {
+    const manifest = createCompiledAgentManifest({
+      agentRoot: "/app/agent",
+      appRoot: "/app",
+      config: {
+        limits: {
+          subagents: {
+            maxCallsPerStep: 8,
+            maxDepth: 6,
+          },
+        },
+        model: { id: "openai/gpt-5.5", routing: classifyModelRouting("openai/gpt-5.5") },
+        name: "app",
+      },
+    });
+
+    const parsed = compiledAgentManifestSchema.parse(manifest);
+
+    expect(parsed.config.limits?.subagents).toEqual({
+      maxCallsPerStep: 8,
+      maxDepth: 6,
+    });
+  });
 });

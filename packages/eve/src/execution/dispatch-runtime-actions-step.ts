@@ -42,6 +42,7 @@ import {
 import { hydrateDurableSession } from "#execution/session.js";
 import { buildSubagentRunInput, type SubagentInputSource } from "#execution/subagent-tool.js";
 import { createWorkflowRuntime, workflowEntryReference } from "#execution/workflow-runtime.js";
+import { applySubagentLimits } from "#harness/subagent-limits.js";
 import { createLogger, logError } from "#internal/logging.js";
 import { toErrorMessage } from "#shared/errors.js";
 
@@ -87,9 +88,11 @@ export async function dispatchRuntimeActionsStep(input: {
 
   let nextSession = session;
   const results: RuntimeSubagentResultActionResult[] = [];
+  const limitedBatch = applySubagentLimits({ actions: batch.actions, session });
+  results.push(...limitedBatch.rejectedResults);
 
   try {
-    for (const action of batch.actions) {
+    for (const action of limitedBatch.actions) {
       let childSessionId: string;
       let name: string;
       let remote: { readonly url: string } | undefined;

@@ -23,6 +23,7 @@ import type {
   InternalAgentModelDefinition,
   InternalAgentCompactionDefinition,
   AgentBuildDefinition,
+  AgentLimitsDefinition,
   ModelRouting,
 } from "#shared/agent-definition.js";
 import type { InternalToolDefinition } from "#shared/tool-definition.js";
@@ -112,12 +113,15 @@ type CompiledAgentCompactionDefinition = Omit<InternalAgentCompactionDefinition,
   model?: CompiledRuntimeModelReference;
 };
 
+type CompiledAgentLimitsDefinition = AgentLimitsDefinition;
+
 /**
  * Normalized additive agent configuration preserved in the compiled manifest.
  */
 export type CompiledAgentDefinition = Omit<InternalAgentDefinition, "model" | "compaction"> & {
   model: CompiledRuntimeModelReference;
   compaction?: CompiledAgentCompactionDefinition;
+  limits?: CompiledAgentLimitsDefinition;
 };
 
 /**
@@ -357,6 +361,18 @@ const compiledAgentCompactionDefinitionSchema: z.ZodType<CompiledAgentCompaction
   })
   .strict();
 
+const compiledAgentLimitsDefinitionSchema: z.ZodType<CompiledAgentLimitsDefinition> = z
+  .object({
+    subagents: z
+      .object({
+        maxCallsPerStep: z.number().int().min(1).optional(),
+        maxDepth: z.number().int().min(1).optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 const compiledAgentConfigSchema: z.ZodType<CompiledAgentDefinition> = z
   .object({
     build: compiledAgentBuildDefinitionSchema.optional(),
@@ -368,6 +384,7 @@ const compiledAgentConfigSchema: z.ZodType<CompiledAgentDefinition> = z
       })
       .strict()
       .optional(),
+    limits: compiledAgentLimitsDefinitionSchema.optional(),
     model: compiledRuntimeModelReferenceSchema,
     name: z.string(),
     outputSchema: jsonObjectSchema.optional(),
@@ -713,6 +730,7 @@ export function createCompiledAgentNodeManifest(input: {
                       world: input.config.experimental.workflow.world,
                     },
             },
+      limits: cloneCompiledAgentLimits(input.config.limits),
       model: cloneCompiledRuntimeModelReference(input.config.model),
       name: input.config.name,
       outputSchema: input.config.outputSchema,
@@ -754,6 +772,24 @@ export function createCompiledAgentNodeManifest(input: {
   }
 
   return node;
+}
+
+function cloneCompiledAgentLimits(
+  limits: CompiledAgentLimitsDefinition | undefined,
+): CompiledAgentLimitsDefinition | undefined {
+  if (limits === undefined) {
+    return undefined;
+  }
+
+  return {
+    subagents:
+      limits.subagents === undefined
+        ? undefined
+        : {
+            maxCallsPerStep: limits.subagents.maxCallsPerStep,
+            maxDepth: limits.subagents.maxDepth,
+          },
+  };
 }
 
 /**

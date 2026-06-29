@@ -81,6 +81,42 @@ describe("normalizeAgentDefinition", () => {
       ),
     ).toThrow('"experimental.workflow.world" must be a non-empty package name');
   });
+
+  it("accepts subagent limit overrides", () => {
+    const definition = normalizeAgentDefinition(
+      {
+        model: "openai/gpt-5.5",
+        limits: {
+          subagents: {
+            maxCallsPerStep: 8,
+            maxDepth: 6,
+          },
+        },
+      },
+      FAILURE_MESSAGE,
+    );
+
+    expect(definition.limits?.subagents).toEqual({
+      maxCallsPerStep: 8,
+      maxDepth: 6,
+    });
+  });
+
+  it("rejects invalid subagent limit overrides", () => {
+    expect(() =>
+      normalizeAgentDefinition(
+        {
+          model: "openai/gpt-5.5",
+          limits: {
+            subagents: {
+              maxCallsPerStep: 0,
+            },
+          },
+        },
+        FAILURE_MESSAGE,
+      ),
+    ).toThrow(FAILURE_MESSAGE);
+  });
 });
 
 describe("normalizeScheduleDefinition", () => {
