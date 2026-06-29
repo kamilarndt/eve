@@ -634,31 +634,48 @@ describe("dispatchRuntimeActionsStep", () => {
       sessionId: "parent-session",
     });
 
-    await expect(
-      dispatchRuntimeActionsStep({
-        callbackBaseUrl: "https://caller.example.com",
-        parentContinuationToken: "turn-inbox",
-        parentWritable: createTestWritable(),
-        serializedContext: createSerializedContext(),
-        sessionState,
-      }),
-    ).resolves.toEqual({
-      results: [
-        {
-          callId: "call-1",
-          isError: true,
-          kind: "subagent-result",
-          output: {
-            code: "REMOTE_AGENT_START_FAILED",
-            message: 'Remote agent "research" create-session request failed with HTTP 503.',
-          },
-          subagentName: "research",
-        },
-      ],
-      // A remote-agent dispatch failure does not mutate the session,
-      // so the step returns the input sessionState unchanged.
+    const result = await dispatchRuntimeActionsStep({
+      callbackBaseUrl: "https://caller.example.com",
+      parentContinuationToken: "turn-inbox",
+      parentWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
       sessionState,
     });
+
+    expect(result.results).toEqual([
+      {
+        callId: "call-1",
+        isError: true,
+        kind: "subagent-result",
+        output: {
+          code: "REMOTE_AGENT_START_FAILED",
+          message: 'Remote agent "research" create-session request failed with HTTP 503.',
+        },
+        subagentName: "research",
+      },
+    ]);
+    expect(result.sessionState).toMatchObject({
+      snapshot: {
+        session: {
+          state: {
+            "eve.runtime.subagentLimits": {
+              stepCalls: {
+                acceptedCalls: 1,
+                requestedCalls: 1,
+                stepIndex: 0,
+                turnId: "turn_0",
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(result.sessionState).toEqual(
+      expect.objectContaining({
+        hasProxyInputRequests: false,
+        sessionId: "parent-session",
+      }),
+    );
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string).callback.token).toBe(
       "turn-inbox",
     );

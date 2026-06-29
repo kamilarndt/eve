@@ -37,6 +37,12 @@ describe("resolveRuntimeAgentGraph", () => {
       agentRoot: "/app/agent",
       appRoot: "/app",
       config: {
+        limits: {
+          subagents: {
+            maxCallsPerStep: 8,
+            maxDepth: 6,
+          },
+        },
         model: {
           id: TEST_DEFAULT_MODEL_ID,
           routing: { kind: "gateway", target: "openai" },
@@ -109,6 +115,12 @@ describe("resolveRuntimeAgentGraph", () => {
     });
 
     expect(graph.root.sandboxRegistry.sandbox?.definition.backend.name).toBe("vercel");
+    expect(graph.root.turnAgent.limits).toEqual({
+      subagents: {
+        maxCallsPerStep: 8,
+        maxDepth: 6,
+      },
+    });
     expect(
       graph.nodesByNodeId.get("subagents/researcher")?.sandboxRegistry.sandbox?.definition.backend
         .name,

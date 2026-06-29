@@ -119,4 +119,52 @@ describe("applySubagentLimits", () => {
       },
     ]);
   });
+
+  it("shares the per-step fan-out limit across split runtime action batches", () => {
+    const session = setSubagentLimitState({
+      depth: undefined,
+      limits: {
+        maxCallsPerStep: 1,
+        maxDepth: 4,
+      },
+      session: createSession(),
+    });
+
+    const first = applySubagentLimits({
+      actions: [createSubagentAction(1)],
+      session,
+      step: { stepIndex: 0, turnId: "turn_0" },
+    });
+
+    const second = applySubagentLimits({
+      actions: [createSubagentAction(2)],
+      session: first.session,
+      step: { stepIndex: 0, turnId: "turn_0" },
+    });
+
+    const nextStep = applySubagentLimits({
+      actions: [createSubagentAction(3)],
+      session: second.session,
+      step: { stepIndex: 1, turnId: "turn_0" },
+    });
+
+    expect(first.actions.map((action) => action.callId)).toEqual(["call-1"]);
+    expect(first.rejectedResults).toEqual([]);
+    expect(second.actions).toEqual([]);
+    expect(second.rejectedResults).toEqual([
+      {
+        callId: "call-2",
+        isError: true,
+        kind: "subagent-result",
+        output: {
+          code: "EVE_SUBAGENT_STEP_LIMIT_EXCEEDED",
+          message:
+            "This step requested 2 subagent calls, but eve allows 1. The first 1 were started. Retry the remaining work in a later step with at most 1 subagent calls.",
+        },
+        subagentName: "agent",
+      },
+    ]);
+    expect(nextStep.actions.map((action) => action.callId)).toEqual(["call-3"]);
+    expect(nextStep.rejectedResults).toEqual([]);
+  });
 });

@@ -40,7 +40,9 @@ interface PendingRuntimeActionEventMetadata {
 interface PendingRuntimeActionBatch {
   readonly actions: readonly RuntimeActionRequest[];
   readonly childContinuationTokens?: Readonly<Record<string, string>>;
+  readonly dispatchActions?: readonly RuntimeActionRequest[];
   readonly event: PendingRuntimeActionEventMetadata;
+  readonly prefilledResults?: readonly RuntimeActionResult[];
   readonly responseMessages: readonly ModelMessage[];
 }
 
@@ -67,6 +69,8 @@ export function getPendingRuntimeActionBatch(
 
   if (
     !Array.isArray(batch.actions) ||
+    (batch.dispatchActions !== undefined && !Array.isArray(batch.dispatchActions)) ||
+    (batch.prefilledResults !== undefined && !Array.isArray(batch.prefilledResults)) ||
     !Array.isArray(batch.responseMessages) ||
     typeof batch.event !== "object" ||
     batch.event === null
@@ -98,14 +102,20 @@ export function clearPendingRuntimeActionBatch(session: HarnessSession): Harness
  */
 export function setPendingRuntimeActionBatch(input: {
   readonly actions: readonly RuntimeActionRequest[];
+  readonly dispatchActions?: readonly RuntimeActionRequest[];
   readonly event: PendingRuntimeActionEventMetadata;
+  readonly prefilledResults?: readonly RuntimeActionResult[];
   readonly responseMessages: readonly ModelMessage[];
   readonly session: HarnessSession;
 }): HarnessSession {
   const state = { ...input.session.state };
   state[PENDING_RUNTIME_ACTION_BATCH_KEY] = {
     actions: [...input.actions],
+    ...(input.dispatchActions === undefined ? {} : { dispatchActions: [...input.dispatchActions] }),
     event: input.event,
+    ...(input.prefilledResults === undefined || input.prefilledResults.length === 0
+      ? {}
+      : { prefilledResults: [...input.prefilledResults] }),
     responseMessages: [...input.responseMessages],
   } satisfies PendingRuntimeActionBatch;
 

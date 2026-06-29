@@ -26,6 +26,12 @@ describe("resolveAgent", () => {
       appRoot: "/app",
       channels: [slackChannelDefinition],
       config: {
+        limits: {
+          subagents: {
+            maxCallsPerStep: 8,
+            maxDepth: 6,
+          },
+        },
         model: {
           id: "anthropic/claude-sonnet-4.5",
           routing: { kind: "gateway", target: "anthropic" },
@@ -169,6 +175,12 @@ describe("resolveAgent", () => {
     expect(resolved.config.name).toBe("weather-agent");
     expect(resolved.config).toEqual({
       compaction: {},
+      limits: {
+        subagents: {
+          maxCallsPerStep: 8,
+          maxDepth: 6,
+        },
+      },
       model: {
         id: "anthropic/claude-sonnet-4.5",
       },
