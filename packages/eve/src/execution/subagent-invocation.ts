@@ -12,14 +12,12 @@ export interface FormattedSubagentInvocation extends StepInput {
  * Formats the stable delegated input handed to one child agent invocation.
  */
 export function formatSubagentInvocation(input: {
-  readonly description: string;
   readonly message: string;
   readonly name: string;
 }): FormattedSubagentInvocation {
   return {
     message: [
       `You are the subagent "${input.name}".`,
-      `Description: ${input.description}`,
       "",
       "The caller delegated the following task to you. Complete it and return the final result directly.",
       "",

@@ -107,7 +107,6 @@ async function resolveRemoteAgentRequestHeaders(
 function formatRemoteAgentCallInputMessage(input: RuntimeRemoteAgentCallActionRequest): string {
   const message = typeof input.input.message === "string" ? input.input.message : "";
   return formatSubagentInvocation({
-    description: input.description,
     message,
     name: input.remoteAgentName,
   }).message;

@@ -106,12 +106,11 @@ export function buildSubagentRunInput(input: {
  * Formats the synthesized child input message for one delegated subagent call.
  */
 function formatSubagentCallInputMessage(
-  action: Pick<RuntimeSubagentCallActionRequest, "description" | "input" | "subagentName">,
+  action: Pick<RuntimeSubagentCallActionRequest, "input" | "subagentName">,
 ): string {
   const { message } = action.input as { message: string };
 
   return formatSubagentInvocation({
-    description: action.description,
     message,
     name: action.subagentName,
   }).message;

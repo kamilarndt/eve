@@ -59,7 +59,6 @@ describe("startRemoteAgentSession", () => {
       },
       message: [
         'You are the subagent "research".',
-        "Description: Performs research.",
         "",
         "The caller delegated the following task to you. Complete it and return the final result directly.",
         "",

@@ -166,6 +166,35 @@ describe("buildSubagentRunInput", () => {
     expect(runInput.input.outputSchema).toEqual(schema);
   });
 
+  it("does not pass the built-in agent tool description into the child message", () => {
+    const action: RuntimeSubagentCallActionRequest = {
+      ...makeAction(),
+      description: "Delegate a focused subtask to a fresh copy of yourself.",
+      name: "agent",
+      nodeId: "root",
+      subagentName: "agent",
+    };
+    const { runInput } = buildSubagentRunInput({
+      action,
+      auth: null,
+      batchEvent: { sequence: 0, turnId: "turn-0" },
+      initiatorAuth: null,
+      session: makeSession(),
+    });
+
+    expect(runInput.input.message).toBe(
+      [
+        `You are the subagent "${action.subagentName}".`,
+        "",
+        "The caller delegated the following task to you. Complete it and return the final result directly.",
+        "",
+        "Caller message:",
+        "Make an issue titled 'Resolve flaky test'.",
+      ].join("\n"),
+    );
+    expect(runInput.input.message).not.toContain(action.description);
+  });
+
   it("leaves outputSchema undefined when not provided", () => {
     const { runInput } = buildSubagentRunInput({
       action: makeAction(),
