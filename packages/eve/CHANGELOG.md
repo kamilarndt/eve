@@ -1,5 +1,23 @@
 # eve
 
+## 0.17.1
+
+### Patch Changes
+
+- 97aa99b: Add HTTP Basic userinfo and repeatable `-H, --header` support to `eve dev` URL targets so the terminal UI can send credentials or routing headers to protected remote deployments.
+- c7827fb: Stop injecting subagent tool descriptions into delegated child prompts. Child runs now receive only the caller's delegated message plus the stable subagent invocation wrapper.
+- 739af96: Update eve's bundled Workflow SDK dependency set to the latest 5.0.0 beta releases, keeping the core package and local workflow world aligned.
+
+## 0.17.0
+
+### Minor Changes
+
+- 02ed501: Remove the experimental `ExperimentalWorkflow` opt-in marker from the public `eve/tools` API and remove the dynamic Workflow docs. The internal runtime path remains in place for existing compiled manifests, but authored apps can no longer enable the tool through the public API.
+
+### Patch Changes
+
+- 6dc84fc: Keep Telegram proactive private chat sessions keyed to their chat or topic after outbound sends, while group and supergroup proactive sends still anchor to the bot message id.
+
 ## 0.16.2
 
 ### Patch Changes
