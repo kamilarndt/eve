@@ -4,9 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "benchmark:parallel": "node scripts/benchmark-parallel.mjs",
     "build": "eve build",
     "dev": "eve dev",
     "start": "eve start",
+    "stats:parallel": "node scripts/stats-parallel.mjs",
     "typecheck": "eve build && tsc",
     "test:e2e": "eve eval --strict"
   },

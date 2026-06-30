@@ -1,0 +1,15 @@
+input	parallel-benchmark-results/2026-06-29-workspace-health-fixed-runs-1.jsonl
+bootstrap_iterations	10000
+seed	20260629
+
+Binary paired tests
+scenario	metric	pairs	control_rate	treatment_rate	delta	treatment_wins	control_wins	p_exact_sign
+workspace-health-80	full_parallel	1	0.0%	100.0%	100.0%	1	0	1.000000
+workspace-health-80	verdict_passed	1	100.0%	100.0%	0.0%	0	0	1.000000
+
+Continuous paired tests
+scenario	metric	pairs	control_mean	treatment_mean	mean_delta	median_delta	ci95_low	ci95_high	p_permutation
+workspace-health-80	concurrency_ratio	1	0.2500	1.0000	0.7500	0.7500	0.7500	0.7500	1.000000
+workspace-health-80	coverage_rate	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+workspace-health-80	wall_ms	1	107707.0000	62781.0000	-44926.0000	-44926.0000	-44926.0000	-44926.0000	1.000000
+workspace-health-80	avg_tool_duration_ms	1	3001.1375	3000.5250	-0.6125	-0.6125	-0.6125	-0.6125	1.000000

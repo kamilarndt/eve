@@ -1,0 +1,39 @@
+input	parallel-benchmark-results/2026-06-28-seed-20260628-runs-1.jsonl
+bootstrap_iterations	10000
+seed	20260628
+
+Binary paired tests
+scenario	metric	pairs	control_rate	treatment_rate	delta	treatment_wins	control_wins	p_exact_sign
+revenue-screen	full_parallel	1	100.0%	100.0%	0.0%	0	0	1.000000
+revenue-screen	verdict_passed	1	100.0%	100.0%	0.0%	0	0	1.000000
+ticket-triage	full_parallel	1	100.0%	100.0%	0.0%	0	0	1.000000
+ticket-triage	verdict_passed	1	100.0%	100.0%	0.0%	0	0	1.000000
+ticket-triage-80	full_parallel	1	0.0%	100.0%	100.0%	1	0	1.000000
+ticket-triage-80	verdict_passed	1	0.0%	0.0%	0.0%	0	0	1.000000
+vendor-risk	full_parallel	1	100.0%	100.0%	0.0%	0	0	1.000000
+vendor-risk	verdict_passed	1	100.0%	100.0%	0.0%	0	0	1.000000
+workspace-health-80	full_parallel	1	0.0%	0.0%	0.0%	0	0	1.000000
+workspace-health-80	verdict_passed	1	0.0%	0.0%	0.0%	0	0	1.000000
+
+Continuous paired tests
+scenario	metric	pairs	control_mean	treatment_mean	mean_delta	median_delta	ci95_low	ci95_high	p_permutation
+revenue-screen	concurrency_ratio	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+revenue-screen	coverage_rate	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+revenue-screen	wall_ms	1	36381.0000	25310.0000	-11071.0000	-11071.0000	-11071.0000	-11071.0000	1.000000
+revenue-screen	avg_tool_duration_ms	1	3000.5000	3000.8333	0.3333	0.3333	0.3333	0.3333	1.000000
+ticket-triage	concurrency_ratio	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+ticket-triage	coverage_rate	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+ticket-triage	wall_ms	1	14407.0000	27221.0000	12814.0000	12814.0000	12814.0000	12814.0000	1.000000
+ticket-triage	avg_tool_duration_ms	1	3001.0000	3000.0000	-1.0000	-1.0000	-1.0000	-1.0000	1.000000
+ticket-triage-80	concurrency_ratio	0	n/a	n/a	n/a	n/a	n/a	n/a	n/a
+ticket-triage-80	coverage_rate	0	n/a	n/a	n/a	n/a	n/a	n/a	n/a
+ticket-triage-80	wall_ms	0	n/a	n/a	n/a	n/a	n/a	n/a	n/a
+ticket-triage-80	avg_tool_duration_ms	0	n/a	n/a	n/a	n/a	n/a	n/a	n/a
+vendor-risk	concurrency_ratio	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+vendor-risk	coverage_rate	1	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+vendor-risk	wall_ms	1	21852.0000	13549.0000	-8303.0000	-8303.0000	-8303.0000	-8303.0000	1.000000
+vendor-risk	avg_tool_duration_ms	1	3001.0000	3000.0000	-1.0000	-1.0000	-1.0000	-1.0000	1.000000
+workspace-health-80	concurrency_ratio	1	0.2500	0.0000	-0.2500	-0.2500	-0.2500	-0.2500	1.000000
+workspace-health-80	coverage_rate	1	0.2500	0.0000	-0.2500	-0.2500	-0.2500	-0.2500	1.000000
+workspace-health-80	wall_ms	1	163613.0000	56558.0000	-107055.0000	-107055.0000	-107055.0000	-107055.0000	1.000000
+workspace-health-80	avg_tool_duration_ms	0	n/a	n/a	n/a	n/a	n/a	n/a	n/a

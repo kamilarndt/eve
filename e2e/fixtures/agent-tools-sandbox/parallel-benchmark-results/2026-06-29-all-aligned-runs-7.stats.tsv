@@ -1,0 +1,39 @@
+input	parallel-benchmark-results/2026-06-29-all-aligned-runs-10.jsonl
+bootstrap_iterations	10000
+seed	20260629
+
+Binary paired tests
+scenario	metric	pairs	control_rate	treatment_rate	delta	treatment_wins	control_wins	p_exact_sign
+revenue-screen	full_parallel	7	85.7%	100.0%	14.3%	1	0	1.000000
+revenue-screen	verdict_passed	7	100.0%	100.0%	0.0%	0	0	1.000000
+ticket-triage	full_parallel	7	85.7%	100.0%	14.3%	1	0	1.000000
+ticket-triage	verdict_passed	7	100.0%	100.0%	0.0%	0	0	1.000000
+ticket-triage-80	full_parallel	7	28.6%	100.0%	71.4%	5	0	0.062500
+ticket-triage-80	verdict_passed	7	100.0%	100.0%	0.0%	0	0	1.000000
+vendor-risk	full_parallel	7	100.0%	100.0%	0.0%	0	0	1.000000
+vendor-risk	verdict_passed	7	100.0%	100.0%	0.0%	0	0	1.000000
+workspace-health-80	full_parallel	7	71.4%	100.0%	28.6%	2	0	0.500000
+workspace-health-80	verdict_passed	7	100.0%	100.0%	0.0%	0	0	1.000000
+
+Continuous paired tests
+scenario	metric	pairs	control_mean	treatment_mean	mean_delta	median_delta	ci95_low	ci95_high	p_permutation
+revenue-screen	concurrency_ratio	7	0.8690	1.0000	0.1310	0.0000	0.0000	0.3929	1.000000
+revenue-screen	coverage_rate	7	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+revenue-screen	wall_ms	7	25619.4286	19577.4286	-6042.0000	-1771.0000	-17046.7143	1549.1429	0.295470
+revenue-screen	avg_tool_duration_ms	7	3001.2857	3002.9524	1.6667	0.2500	-0.1667	4.8571	0.343966
+ticket-triage	concurrency_ratio	7	0.8750	1.0000	0.1250	0.0000	0.0000	0.3750	1.000000
+ticket-triage	coverage_rate	7	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+ticket-triage	wall_ms	7	22355.8571	13668.0000	-8687.8571	-7273.0000	-17757.7143	-2265.4286	0.061594
+ticket-triage	avg_tool_duration_ms	7	3001.1607	3004.1071	2.9464	0.6250	-0.1429	8.5000	0.285571
+ticket-triage-80	concurrency_ratio	7	0.4643	1.0000	0.5357	0.7500	0.3214	0.7500	0.059194
+ticket-triage-80	coverage_rate	7	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+ticket-triage-80	wall_ms	7	71277.7143	53284.5714	-17993.1429	-23408.0000	-25560.4286	-8845.8571	0.031097
+ticket-triage-80	avg_tool_duration_ms	7	3002.2661	3006.6429	4.3768	1.2000	-0.9554	13.2071	0.474853
+vendor-risk	concurrency_ratio	7	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+vendor-risk	coverage_rate	7	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+vendor-risk	wall_ms	7	14081.8571	15835.0000	1753.1429	-66.0000	-510.5714	4952.4286	0.357564
+vendor-risk	avg_tool_duration_ms	7	3002.8571	3001.7143	-1.1429	-0.8750	-4.2321	1.4821	0.518848
+workspace-health-80	concurrency_ratio	7	0.7857	1.0000	0.2143	0.0000	0.0000	0.4286	0.499850
+workspace-health-80	coverage_rate	7	1.0000	1.0000	0.0000	0.0000	0.0000	0.0000	1.000000
+workspace-health-80	wall_ms	7	50197.5714	41150.2857	-9047.2857	-6376.0000	-17025.8571	-548.1429	0.129887
+workspace-health-80	avg_tool_duration_ms	7	3003.6304	3004.7732	1.1429	1.9125	-4.9911	6.2071	0.743926
