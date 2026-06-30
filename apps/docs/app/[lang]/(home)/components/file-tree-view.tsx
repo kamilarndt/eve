@@ -79,7 +79,9 @@ export function FileTreeView({ items, heading }: { items: FileTreeItem[]; headin
               <p className="border-b px-4 py-3 text-gray-900 text-copy-14">
                 {selected.description}
               </p>
-              <div className="grow pb-6 [&>div]:mb-0">{selected.code}</div>
+              <div className="grow pb-6 [&>div]:mb-0 [&_button]:opacity-0 [&_button]:transition-opacity [&:hover_button]:opacity-100 [&:focus-within_button]:opacity-100">
+                {selected.code}
+              </div>
             </div>
           </div>
         </div>
