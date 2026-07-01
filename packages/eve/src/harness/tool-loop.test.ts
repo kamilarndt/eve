@@ -4527,7 +4527,7 @@ describe("createToolLoopHarness", () => {
     const result = await harness(
       createTestSession({
         agent: {
-          modelReference: { id: "anthropic/claude-sonnet-4.6" },
+          modelReference: { id: "anthropic/claude-sonnet-5" },
           system: "You are a test assistant.",
           tools: [{ description: "Search the web", name: "web_search", inputSchema: null }],
         },
@@ -4655,7 +4655,7 @@ describe("createToolLoopHarness", () => {
     const result = await harness(
       createTestSession({
         agent: {
-          modelReference: { id: "anthropic/claude-sonnet-4.6" },
+          modelReference: { id: "anthropic/claude-sonnet-5" },
           system: "You are a test assistant.",
           tools: [
             { description: "Search the web", name: "web_search", inputSchema: null },
