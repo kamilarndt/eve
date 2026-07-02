@@ -8,6 +8,7 @@ import {
   isStepCount,
   type LanguageModel,
   type ModelMessage,
+  type ProviderMetadata,
   type SystemModelMessage,
   type TelemetryOptions,
   ToolLoopAgent,
@@ -1131,7 +1132,7 @@ function extractTokenUsageDelta(input: {
   };
 }
 
-function extractGatewayCostUsd(providerMetadata: unknown): number | undefined {
+function extractGatewayCostUsd(providerMetadata: ProviderMetadata | undefined): number | undefined {
   const gateway = readGatewayMetadata(providerMetadata);
   const cost = gateway?.cost;
   if (typeof cost === "number" && Number.isFinite(cost)) {
@@ -1144,18 +1145,11 @@ function extractGatewayCostUsd(providerMetadata: unknown): number | undefined {
   return undefined;
 }
 
-function readGatewayMetadata(providerMetadata: unknown): Record<string, unknown> | undefined {
-  if (
-    !providerMetadata ||
-    typeof providerMetadata !== "object" ||
-    Array.isArray(providerMetadata)
-  ) {
-    return undefined;
-  }
-  const gateway = (providerMetadata as Record<string, unknown>).gateway;
-  return gateway && typeof gateway === "object" && !Array.isArray(gateway)
-    ? (gateway as Record<string, unknown>)
-    : undefined;
+function readGatewayMetadata(
+  providerMetadata: ProviderMetadata | undefined,
+): ProviderMetadata[string] | undefined {
+  const gateway = providerMetadata?.gateway;
+  return gateway && typeof gateway === "object" && !Array.isArray(gateway) ? gateway : undefined;
 }
 
 function formatSessionTokenLimitMessage(kind: SessionTokenLimitViolation["kind"]): string {

@@ -3,6 +3,7 @@ import type {
   LanguageModelUsage,
   ModelMessage,
   PrepareStepFunction,
+  ProviderMetadata,
   StepResult,
   ToolSet,
   ToolResultPart,
@@ -13,6 +14,7 @@ import {
   createActionResultEvent,
   createActionsRequestedEvent,
   createStepCompletedEvent,
+  type StepCompletedProviderMetadata,
 } from "#protocol/message.js";
 import {
   createRuntimeToolResultFromToolError,
@@ -437,18 +439,14 @@ function extractStepUsage(input: {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
-function extractStepProviderMetadata(providerMetadata: unknown):
-  | {
-      gateway: {
-        generationId: string;
-      };
-    }
-  | undefined {
+function extractStepProviderMetadata(
+  providerMetadata: ProviderMetadata | undefined,
+): StepCompletedProviderMetadata | undefined {
   const generationId = readGatewayGenerationId(providerMetadata);
   return generationId === undefined ? undefined : { gateway: { generationId } };
 }
 
-function extractGatewayCostUsd(providerMetadata: unknown): number | undefined {
+function extractGatewayCostUsd(providerMetadata: ProviderMetadata | undefined): number | undefined {
   const gateway = readGatewayMetadata(providerMetadata);
   const cost = gateway?.cost;
   if (typeof cost === "number" && Number.isFinite(cost)) {
@@ -461,21 +459,16 @@ function extractGatewayCostUsd(providerMetadata: unknown): number | undefined {
   return undefined;
 }
 
-function readGatewayGenerationId(providerMetadata: unknown): string | undefined {
+function readGatewayGenerationId(
+  providerMetadata: ProviderMetadata | undefined,
+): string | undefined {
   const generationId = readGatewayMetadata(providerMetadata)?.generationId;
   return typeof generationId === "string" && generationId.length > 0 ? generationId : undefined;
 }
 
-function readGatewayMetadata(providerMetadata: unknown): Record<string, unknown> | undefined {
-  if (
-    !providerMetadata ||
-    typeof providerMetadata !== "object" ||
-    Array.isArray(providerMetadata)
-  ) {
-    return undefined;
-  }
-  const gateway = (providerMetadata as Record<string, unknown>).gateway;
-  return gateway && typeof gateway === "object" && !Array.isArray(gateway)
-    ? (gateway as Record<string, unknown>)
-    : undefined;
+function readGatewayMetadata(
+  providerMetadata: ProviderMetadata | undefined,
+): ProviderMetadata[string] | undefined {
+  const gateway = providerMetadata?.gateway;
+  return gateway && typeof gateway === "object" && !Array.isArray(gateway) ? gateway : undefined;
 }

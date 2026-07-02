@@ -1,5 +1,5 @@
 import type { ConnectionAuthorizationChallenge } from "#public/connections/errors.js";
-import type { UserContent } from "ai";
+import type { ProviderMetadata, UserContent } from "ai";
 
 import type { RuntimeActionRequest, RuntimeActionResult } from "#runtime/actions/types.js";
 import type { InputRequest, InputResponse } from "#runtime/input/types.js";
@@ -26,6 +26,15 @@ export type AssistantStepFinishReason =
   | "other"
   | "stop"
   | "tool-calls";
+
+type ProviderMetadataEntry = NonNullable<ProviderMetadata[string]>;
+type GatewayGenerationId = Extract<ProviderMetadataEntry["generationId"], string>;
+
+export interface StepCompletedProviderMetadata {
+  readonly gateway: {
+    readonly generationId: GatewayGenerationId;
+  };
+}
 
 /**
  * Durable metadata attached to one persisted session stream event.
@@ -357,11 +366,7 @@ export interface StepStartedStreamEvent {
 export interface StepCompletedStreamEvent {
   data: {
     finishReason: AssistantStepFinishReason;
-    providerMetadata?: {
-      gateway?: {
-        generationId?: string;
-      };
-    };
+    providerMetadata?: StepCompletedProviderMetadata;
     sequence: number;
     stepIndex: number;
     turnId: string;
@@ -993,11 +998,7 @@ export function createStepStartedEvent(input: {
  */
 export function createStepCompletedEvent(input: {
   readonly finishReason: AssistantStepFinishReason;
-  readonly providerMetadata?: {
-    readonly gateway?: {
-      readonly generationId?: string;
-    };
-  };
+  readonly providerMetadata?: StepCompletedProviderMetadata;
   readonly sequence: number;
   readonly stepIndex: number;
   readonly turnId: string;
