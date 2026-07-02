@@ -22,15 +22,22 @@ their artifacts identically.
 
 ## Authoring API
 
-One module under `agent/subagents/`, mirroring `defineRemoteAgent`:
+One module under `agent/subagents/`, mirroring `defineRemoteAgent`. The definition is imported
+from the extension's own package subpath, `eve/extensions/selfmod` — the main `eve` entry does not
+export it:
 
 ```ts title="agent/subagents/selfmod.ts"
-import { defineSelfModifyingAgent } from "eve";
+import { defineSelfModifyingAgent } from "eve/extensions/selfmod";
 
 export default defineSelfModifyingAgent({
   development: true,
 });
 ```
+
+Each framework extension ships as one subpath export under `eve/extensions/<name>`, so the mount
+surface scales per extension instead of accumulating define functions on the root entry. Only the
+definition module is exported; the extension's agent files stay internal to the package and are
+reached through compile-time logical paths, never app imports.
 
 - The subagent's name derives from the file path — here the parent gains a `selfmod` tool. The
   standard subagent/tool namespace and collision rules apply unchanged.
@@ -69,7 +76,8 @@ The subagent's substance lives in the eve package as a normal agent directory; t
 module above only mounts it:
 
 ```text
-packages/eve/extensions/self_modification/
+packages/eve/extensions/selfmod/
+├── index.ts            # defineSelfModifyingAgent — the eve/extensions/selfmod export
 ├── agent.ts            # description + defaults; discovery-grammar compatible
 ├── instructions.md     # live-tree scope, edit discipline, shell limits
 └── sandbox.ts          # just-bash backend mapped over the real project root
@@ -104,9 +112,10 @@ subagent it starts each delegation with fresh history and state.
 
 ## Internal architecture: `AgentExtension` and `AgentArtifact`
 
-The extension mechanism is internal (the public surface is only `defineSelfModifyingAgent`) but
-defined as a contract so future framework capabilities reuse it and the core consumes extensions
-through the same artifact types it already consumes.
+The extension mechanism is internal (the public surface is only the `eve/extensions/selfmod`
+subpath) but defined as a contract so future framework capabilities reuse it — each as its own
+`eve/extensions/<name>` export — and the core consumes extensions through the same artifact types
+it already consumes.
 
 ```text
 compileAgent({ target })
@@ -117,7 +126,7 @@ compileAgent({ target })
 |   `-- selfModifyingAgent producer(definition, target)
 |       |-- target "hosted"       -> null (nothing grafted)
 |       `-- target "development"  -> AgentArtifact
-|           |-- discovery over packages/eve/extensions/self_modification/
+|           |-- discovery over packages/eve/extensions/selfmod/
 |           `-- authored options merged over the packaged agent.ts defaults
 |-- normalize + graft                   -> CompiledAgentManifest
 |                                          (extension node = ordinary CompiledSubagentNode
@@ -134,14 +143,14 @@ compileAgent({ target })
   special-casing.
 - **`AgentExtension`** is the producer signature: given the authored mount definition, the root
   agent's config, and the compile target, return an `AgentArtifact` or `null`.
-  `defineSelfModifyingAgent` is the first mount surface, and its producer is the first
+  `eve/extensions/selfmod` is the first mount surface, and its producer is the first
   implementation.
 - **Compile target** is the one new compiler input: `compileAgent` gains
   `target: "development" | "hosted"` (threaded from the existing `prepareApplicationHost`
   dev/build fork). Compile metadata and the runtime cache key include the target, so dev and
   hosted artifacts of the same source tree are distinct, correctly invalidated artifacts.
 - Extension source lives outside the app root, so extension `ModuleSourceRef`s carry a
-  package-namespaced logical path (e.g. `eve:extensions/self_modification/sandbox.ts`) and the
+  package-namespaced logical path (e.g. `eve:extensions/selfmod/sandbox.ts`) and the
   module map emits absolute/package import specifiers for them — the generator already supports
   absolute specifier style.
 
