@@ -10,7 +10,7 @@ export const EVE_STREAM_FORMAT_HEADER = "x-eve-stream-format";
 export const EVE_STREAM_VERSION_HEADER = "x-eve-stream-version";
 export const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
 export const EVE_MESSAGE_STREAM_FORMAT = "ndjson";
-export const EVE_MESSAGE_STREAM_VERSION = "16";
+export const EVE_MESSAGE_STREAM_VERSION = "17";
 
 /**
  * eve-owned finish reason for one completed assistant step.
@@ -357,10 +357,16 @@ export interface StepStartedStreamEvent {
 export interface StepCompletedStreamEvent {
   data: {
     finishReason: AssistantStepFinishReason;
+    providerMetadata?: {
+      gateway?: {
+        generationId?: string;
+      };
+    };
     sequence: number;
     stepIndex: number;
     turnId: string;
     usage?: {
+      readonly costUsd?: number;
       readonly inputTokens?: number;
       readonly outputTokens?: number;
       readonly cacheReadTokens?: number;
@@ -987,10 +993,16 @@ export function createStepStartedEvent(input: {
  */
 export function createStepCompletedEvent(input: {
   readonly finishReason: AssistantStepFinishReason;
+  readonly providerMetadata?: {
+    readonly gateway?: {
+      readonly generationId?: string;
+    };
+  };
   readonly sequence: number;
   readonly stepIndex: number;
   readonly turnId: string;
   readonly usage?: {
+    readonly costUsd?: number;
     readonly inputTokens?: number;
     readonly outputTokens?: number;
     readonly cacheReadTokens?: number;
@@ -1006,6 +1018,9 @@ export function createStepCompletedEvent(input: {
 
   if (input.usage !== undefined) {
     data.usage = input.usage;
+  }
+  if (input.providerMetadata !== undefined) {
+    data.providerMetadata = input.providerMetadata;
   }
 
   return {
