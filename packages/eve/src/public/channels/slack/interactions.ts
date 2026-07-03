@@ -42,6 +42,10 @@ import {
   isHitlAction,
   type HitlFreeformModalMetadata,
 } from "#public/channels/slack/hitl.js";
+import {
+  SLACK_CARD_SUBTEXT_MAX_LENGTH,
+  truncateCardSubtext,
+} from "#public/channels/slack/limits.js";
 import type {
   SlackChannelConfig,
   SlackChannelState,
@@ -218,11 +222,18 @@ function buildAnsweredHitlMessageBlocks(input: {
     });
   }
 
-  const answeredBlocks = buildAnsweredBlocks({
-    promptBlocks: promptBlocksFromActionBlock(input.messageBlocks[actionBlockIndex]),
-    answerLabel: input.answerLabel,
-    userId: input.userId,
-  });
+  const actionBlock = input.messageBlocks[actionBlockIndex];
+  const answeredBlocks =
+    answeredBlocksFromActionBlock({
+      answerLabel: input.answerLabel,
+      block: actionBlock,
+      userId: input.userId,
+    }) ??
+    buildAnsweredBlocks({
+      promptBlocks: promptBlocksFromActionBlock(actionBlock),
+      answerLabel: input.answerLabel,
+      userId: input.userId,
+    });
   return [
     ...input.messageBlocks.slice(0, actionBlockIndex),
     ...answeredBlocks,
@@ -249,6 +260,51 @@ function actionsContainActionId(actions: unknown, actionId: string): boolean {
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function answeredBlocksFromActionBlock(input: {
+  readonly answerLabel: string;
+  readonly block: unknown;
+  readonly userId: string;
+}): unknown[] | undefined {
+  if (!isObjectRecord(input.block) || input.block.type !== "card") return undefined;
+
+  const { actions: _actions, subtext: _subtext, ...blockWithoutActions } = input.block;
+  const answeredCard = {
+    ...blockWithoutActions,
+    subtext: {
+      type: "mrkdwn",
+      text: formatAnsweredCardSubtext(input),
+      verbatim: false,
+    },
+  };
+  return hasCardContent(answeredCard) ? [answeredCard] : undefined;
+}
+
+const ANSWERED_CARD_SUBTEXT_PREFIX = ":white_check_mark: *";
+const ANSWERED_CARD_SUBTEXT_SUFFIX = "*";
+
+function formatAnsweredCardSubtext(input: {
+  readonly answerLabel: string;
+  readonly userId: string;
+}): string {
+  const attribution = input.userId.length > 0 ? ` by <@${input.userId}>` : "";
+  const labelBudget =
+    SLACK_CARD_SUBTEXT_MAX_LENGTH -
+    ANSWERED_CARD_SUBTEXT_PREFIX.length -
+    ANSWERED_CARD_SUBTEXT_SUFFIX.length -
+    attribution.length;
+  const label = truncateWithEllipsis(input.answerLabel, labelBudget);
+  return truncateCardSubtext(
+    `${ANSWERED_CARD_SUBTEXT_PREFIX}${label}${ANSWERED_CARD_SUBTEXT_SUFFIX}${attribution}`,
+  );
+}
+
+function truncateWithEllipsis(value: string, maxLength: number): string {
+  if (maxLength <= 0) return "";
+  if (value.length <= maxLength) return value;
+  const sliceLength = Math.max(0, maxLength - 3);
+  return `${value.slice(0, sliceLength).trimEnd()}...`;
 }
 
 function promptBlocksFromActionBlock(block: unknown): unknown[] {

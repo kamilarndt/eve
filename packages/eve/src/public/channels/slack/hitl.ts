@@ -62,6 +62,7 @@ export const HITL_FREEFORM_MODAL_ACTION_ID = "eve_freeform_text";
 const RADIO_SELECT_OPTION_LIMIT = 6;
 const BUTTON_ACTION_ID_RE = /^(?<requestId>.+):button:\d+$/u;
 const TOOL_INPUT_PREFIX = "*Tool input*\n```\n";
+const TOOL_INPUT_CODE_PREFIX = "```\n";
 const TOOL_INPUT_SUFFIX = "\n```";
 const ANSWERED_TEXT_PREFIX = ":white_check_mark: *";
 const ANSWERED_TEXT_SUFFIX = "*";
@@ -167,7 +168,9 @@ export function renderInputRequestBlocks(request: InputRequest): unknown[] {
   }
 
   if (options && options.length > 0) {
-    return [renderInputRequestCardBlock(request, actionId)];
+    const card = renderInputRequestCardBlock(request, actionId);
+    const details = renderToolInputContainerBlock(request);
+    return details === undefined ? [card] : [card, details];
   }
 
   if (acceptsFreeform) {
@@ -309,7 +312,7 @@ function renderInputRequestCardBlock(
     type: "card",
     body: {
       type: "mrkdwn",
-      text: truncateCardBodyText(formatInputRequestCardBody(request)),
+      text: truncateCardBodyText(`*${request.prompt}*`),
       verbatim: false,
     },
     actions: cardButtonOptions(request).map((opt, index) => buildCardButton(opt, actionId, index)),
@@ -336,12 +339,6 @@ function toCardButtonOption(option: InputRequestOption): CardButtonOption {
     return { ...result, style: option.style };
   }
   return result;
-}
-
-function formatInputRequestCardBody(request: InputRequest): string {
-  const details = formatToolInputDetails(request);
-  const prompt = `*${request.prompt}*`;
-  return details === undefined ? prompt : `${prompt}\n\n${details}`;
 }
 
 /**
@@ -389,6 +386,31 @@ function renderInputRequestDetailBlocks(request: InputRequest): unknown[] {
   return details === undefined
     ? []
     : [{ type: "section", text: { type: "mrkdwn", text: details } }];
+}
+
+function renderToolInputContainerBlock(request: InputRequest): Record<string, unknown> | undefined {
+  const details = formatToolInputContainerText(request);
+  if (details === undefined) return undefined;
+
+  return {
+    type: "container",
+    title: { type: "plain_text", text: "Tool input" },
+    is_collapsible: true,
+    default_collapsed: false,
+    child_blocks: [{ type: "section", text: { type: "mrkdwn", text: details } }],
+  };
+}
+
+function formatToolInputContainerText(request: InputRequest): string | undefined {
+  if (!isApprovalRequest(request)) return undefined;
+
+  const json = JSON.stringify(request.action.input, null, 2);
+  if (json === "{}") return undefined;
+
+  const bodyBudget =
+    SLACK_SECTION_TEXT_MAX_LENGTH - TOOL_INPUT_CODE_PREFIX.length - TOOL_INPUT_SUFFIX.length;
+  const body = truncateWithEllipsis(json, bodyBudget);
+  return `${TOOL_INPUT_CODE_PREFIX}${body}${TOOL_INPUT_SUFFIX}`;
 }
 
 function formatToolInputDetails(request: InputRequest): string | undefined {

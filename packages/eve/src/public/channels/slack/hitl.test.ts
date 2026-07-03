@@ -123,7 +123,7 @@ describe("renderInputRequestBlocks", () => {
     });
   });
 
-  it("shows tool input for confirmation approval requests", () => {
+  it("shows tool input for confirmation approval requests in a collapsible container", () => {
     const request = makeRequest({
       action: {
         kind: "tool-call",
@@ -146,24 +146,41 @@ describe("renderInputRequestBlocks", () => {
 
     const blocks = renderInputRequestBlocks(request);
 
-    expect(blocks).toHaveLength(1);
+    expect(blocks).toHaveLength(2);
     const card = blocks[0] as {
       actions: Array<Record<string, unknown>>;
       body: { text: string; type: string };
       type: string;
     };
-    expect(card).toMatchObject({ type: "card", body: { type: "mrkdwn" } });
-    expect(card.body.text).toContain("*Approve tool call: mongodb-mutate*");
-    expect(card.body.text).toContain("*Tool input*");
-    expect(card.body.text).toContain('"collection": "org_members"');
-    expect(card.body.text).toContain('"_id": "qudw7ekkzulpgw3j"');
+    expect(card).toMatchObject({
+      type: "card",
+      body: { type: "mrkdwn", text: "*Approve tool call: mongodb-mutate*" },
+    });
     expect(card.actions).toMatchObject([
       { text: { text: "Deny" }, value: "deny" },
       { style: "primary", text: { text: "Allow" }, value: "approve" },
     ]);
+
+    const details = blocks[1] as {
+      child_blocks: Array<{ text?: { text?: string }; type: string }>;
+      default_collapsed: boolean;
+      is_collapsible: boolean;
+      title: { text: string; type: string };
+      type: string;
+    };
+    expect(details).toMatchObject({
+      type: "container",
+      title: { type: "plain_text", text: "Tool input" },
+      is_collapsible: true,
+      default_collapsed: false,
+    });
+    expect(details.child_blocks).toHaveLength(1);
+    expect(details.child_blocks[0]).toMatchObject({ type: "section", text: { type: "mrkdwn" } });
+    expect(details.child_blocks[0]?.text?.text).toContain('"collection": "org_members"');
+    expect(details.child_blocks[0]?.text?.text).toContain('"_id": "qudw7ekkzulpgw3j"');
   });
 
-  it("keeps long approval input details within the card body limit", () => {
+  it("keeps long approval input details within the collapsible container section limit", () => {
     const blocks = renderInputRequestBlocks(
       makeRequest({
         action: {
@@ -182,7 +199,12 @@ describe("renderInputRequestBlocks", () => {
 
     const card = blocks[0] as { body: { text: string } };
     expect(card.body.text.length).toBeLessThanOrEqual(SLACK_CARD_BODY_TEXT_MAX_LENGTH);
-    expect(card.body.text.endsWith("...")).toBe(true);
+    expect(card.body.text).toBe("*Pick one*");
+
+    const details = blocks[1] as { child_blocks: Array<{ text?: { text?: string } }> };
+    const text = details.child_blocks[0]?.text?.text;
+    expect(text?.length).toBeLessThanOrEqual(SLACK_SECTION_TEXT_MAX_LENGTH);
+    expect(text?.endsWith("...\n```")).toBe(true);
   });
 
   it("renders a radio_buttons widget for select-display requests with ≤6 options", () => {

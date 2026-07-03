@@ -18,6 +18,7 @@ import {
 } from "#public/channels/slack/hitl.js";
 import {
   SLACK_CARD_BODY_TEXT_MAX_LENGTH,
+  SLACK_CARD_SUBTEXT_MAX_LENGTH,
   SLACK_MAX_BLOCKS_PER_MESSAGE,
   SLACK_MESSAGE_TEXT_MAX_LENGTH,
   SLACK_SECTION_TEXT_MAX_LENGTH,
@@ -435,6 +436,8 @@ describe("slackChannel() default event handlers", () => {
           value: string;
         }>;
         body?: { text: string; type: string; verbatim?: boolean };
+        child_blocks?: Array<{ text?: { text?: string; type?: string }; type: string }>;
+        title?: { text: string; type: string };
         type: string;
       }>;
       channel: string;
@@ -447,16 +450,32 @@ describe("slackChannel() default event handlers", () => {
       thread_ts: "1700000000.000001",
     });
 
-    const [card] = body.blocks;
+    expect(body.blocks).toHaveLength(2);
+    const [card, details] = body.blocks;
     expect(card).toMatchObject({
       type: "card",
       body: {
         type: "mrkdwn",
-        text: '*Approve tool call: mongodb-mutate*\n\n*Tool input*\n```\n{\n  "operation": "deleteMany"\n}\n```',
+        text: "*Approve tool call: mongodb-mutate*",
         verbatim: false,
       },
     });
     expect(card?.body?.text.length).toBeLessThanOrEqual(SLACK_CARD_BODY_TEXT_MAX_LENGTH);
+    expect(details).toMatchObject({
+      type: "container",
+      title: { type: "plain_text", text: "Tool input" },
+      is_collapsible: true,
+      default_collapsed: false,
+      child_blocks: [
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: '```\n{\n  "operation": "deleteMany"\n}\n```',
+          },
+        },
+      ],
+    });
 
     const actions = card?.actions ?? [];
     const actionIds = actions.map((element) => element.action_id);
@@ -528,8 +547,9 @@ describe("slackChannel() default event handlers", () => {
     );
     const ctx = buildAdapterContext(adapter, stubAccessor());
 
-    // Approval requests render as one card block each. 60 requests must
-    // split across two posts to stay below Slack's 50-block message cap.
+    // Approval requests with tool input render as a card plus a tool-input
+    // container. 60 requests must split across three posts to stay below
+    // Slack's 50-block message cap.
     const requests = Array.from({ length: 60 }, (_, index) => ({
       action: {
         callId: `call_${index}`,
@@ -552,7 +572,7 @@ describe("slackChannel() default event handlers", () => {
       ctx,
     );
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     const allRequestIds: string[] = [];
     for (const [url, init] of fetchMock.mock.calls) {
       expect(String(url)).toBe("https://slack.com/api/chat.postMessage");
@@ -1584,6 +1604,15 @@ describe("slackChannel() HITL interaction pipeline", () => {
               ],
             },
             {
+              type: "container",
+              title: { type: "plain_text", text: "Tool input" },
+              is_collapsible: true,
+              default_collapsed: false,
+              child_blocks: [
+                { type: "section", text: { type: "mrkdwn", text: '```\n{"issue":451}\n```' } },
+              ],
+            },
+            {
               type: "card",
               body: {
                 type: "mrkdwn",
@@ -1605,12 +1634,21 @@ describe("slackChannel() HITL interaction pipeline", () => {
                 },
               ],
             },
+            {
+              type: "container",
+              title: { type: "plain_text", text: "Tool input" },
+              is_collapsible: true,
+              default_collapsed: false,
+              child_blocks: [
+                { type: "section", text: { type: "mrkdwn", text: '```\n{"issue":508}\n```' } },
+              ],
+            },
           ],
         },
         actions: [
           {
             action_id: firstApproveActionId,
-            text: { type: "plain_text", text: "Approve" },
+            text: { type: "plain_text", text: "Allow" },
             value: "approve",
           },
         ],
@@ -1630,6 +1668,7 @@ describe("slackChannel() HITL interaction pipeline", () => {
       blocks: Array<{
         actions?: Array<{ action_id?: string }>;
         elements?: Array<{ action_id?: string }>;
+        subtext?: { text?: string };
         text?: { text?: string };
       }>;
       channel: string;
@@ -1639,11 +1678,17 @@ describe("slackChannel() HITL interaction pipeline", () => {
 
     expect(body).toMatchObject({
       channel: "C01",
-      text: "Answered: Approve",
+      text: "Answered: Allow",
       ts: "1700000000.000010",
     });
     expect(JSON.stringify(body.blocks)).toContain("Approve issue 451?");
+    expect(JSON.stringify(body.blocks)).toContain("Allow");
+    expect(JSON.stringify(body.blocks)).toContain("Tool input");
     expect(JSON.stringify(body.blocks)).toContain("Approve issue 508?");
+    expect(body.blocks[0]?.subtext?.text).toBe(":white_check_mark: *Allow* by <@U_APPROVER>");
+    expect(body.blocks[0]?.subtext?.text?.length).toBeLessThanOrEqual(
+      SLACK_CARD_SUBTEXT_MAX_LENGTH,
+    );
 
     const remainingActionIds = body.blocks.flatMap(
       (block) =>
