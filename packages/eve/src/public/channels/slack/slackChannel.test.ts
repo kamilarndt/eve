@@ -1699,6 +1699,139 @@ describe("slackChannel() HITL interaction pipeline", () => {
     expect(remainingActionIds).toEqual([secondDenyActionId, secondApproveActionId]);
   });
 
+  it("covers the observed e0 batched escalation approval run", async () => {
+    const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
+    const adapter = withState(getAdapter(channel), THREAD_STATE);
+    const ctx = buildAdapterContext(adapter, stubAccessor());
+
+    await callEvent(
+      adapter,
+      makeEvent("input.requested", {
+        requests: [
+          {
+            action: {
+              callId: "toolu_escalate_451",
+              input: { issueNumber: 451, ownerSlackUserId: "U0AT7H56S90" },
+              kind: "tool-call",
+              toolName: "escalate_issue",
+            },
+            display: "confirmation",
+            options: [
+              { id: "approve", label: "Yes" },
+              { id: "deny", label: "No" },
+            ],
+            prompt: "Approve tool call: escalate_issue",
+            requestId: "approval_451",
+          },
+          {
+            action: {
+              callId: "toolu_escalate_508",
+              input: { issueNumber: 508 },
+              kind: "tool-call",
+              toolName: "escalate_issue",
+            },
+            display: "confirmation",
+            options: [
+              { id: "approve", label: "Yes" },
+              { id: "deny", label: "No" },
+            ],
+            prompt: "Approve tool call: escalate_issue",
+            requestId: "approval_508",
+          },
+        ],
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "turn_0",
+      }),
+      ctx,
+    );
+
+    const postCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "https://slack.com/api/chat.postMessage",
+    );
+    expect(postCall).toBeDefined();
+    const posted = parseSlackRequestBody(postCall?.[1] as RequestInit) as {
+      blocks: Array<{
+        actions?: Array<{ action_id?: string; text?: { text?: string }; value?: string }>;
+        child_blocks?: Array<{ text?: { text?: string } }>;
+        title?: { text?: string };
+        type?: string;
+      }>;
+    };
+    expect(posted.blocks).toHaveLength(4);
+    expect(posted.blocks[1]?.child_blocks?.[0]?.text?.text).toContain('"issueNumber": 451');
+    expect(posted.blocks[1]?.child_blocks?.[0]?.text?.text).toContain(
+      '"ownerSlackUserId": "U0AT7H56S90"',
+    );
+    expect(posted.blocks[3]?.child_blocks?.[0]?.text?.text).toContain('"issueNumber": 508');
+
+    const firstDenyAction = posted.blocks[0]?.actions?.find((action) => action.value === "deny");
+    expect(firstDenyAction).toMatchObject({
+      action_id: `${HITL_ACTION_PREFIX}approval_451:button:0`,
+      text: { text: "Deny" },
+      value: "deny",
+    });
+
+    const { send } = await firePost(
+      channel,
+      buildSignedInteractionRequest({
+        type: "block_actions",
+        team: { id: "T01" },
+        user: {
+          id: "U0AT7H56S90",
+          username: "rui",
+          name: "rui",
+          team_id: "T01",
+        },
+        channel: { id: "C01" },
+        message: {
+          ts: "1700000000.000010",
+          thread_ts: "1700000000.000001",
+          blocks: posted.blocks,
+        },
+        actions: [
+          {
+            action_id: firstDenyAction?.action_id,
+            text: { type: "plain_text", text: "Deny" },
+            value: "deny",
+          },
+        ],
+      }),
+    );
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0]).toEqual({
+      inputResponses: [{ optionId: "deny", requestId: "approval_451" }],
+    });
+
+    const updateCall = fetchMock.mock.calls.find(
+      ([url]) => String(url) === "https://slack.com/api/chat.update",
+    );
+    expect(updateCall).toBeDefined();
+    const body = parseSlackRequestBody(updateCall?.[1] as RequestInit) as {
+      blocks: Array<{
+        actions?: Array<{ action_id?: string }>;
+        child_blocks?: Array<{ text?: { text?: string } }>;
+        elements?: Array<{ action_id?: string }>;
+        subtext?: { text?: string };
+      }>;
+    };
+
+    expect(body.blocks[0]?.subtext?.text).toBe(":white_check_mark: *Deny* by <@U0AT7H56S90>");
+    expect(body.blocks[1]?.child_blocks?.[0]?.text?.text).toContain('"issueNumber": 451');
+    expect(body.blocks[3]?.child_blocks?.[0]?.text?.text).toContain('"issueNumber": 508');
+    const remainingActionIds = body.blocks.flatMap(
+      (block) =>
+        (block.actions ?? block.elements)
+          ?.map((element) => element.action_id)
+          .filter((actionId): actionId is string => typeof actionId === "string") ?? [],
+    );
+    expect(remainingActionIds).toEqual([
+      `${HITL_ACTION_PREFIX}approval_508:button:0`,
+      `${HITL_ACTION_PREFIX}approval_508:button:1`,
+    ]);
+  });
+
   it("resumes freeform modal answers with the submitting Slack user auth", async () => {
     const channel = slackChannel({ credentials: { botToken: "xoxb-test" } });
 
