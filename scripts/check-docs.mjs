@@ -188,8 +188,12 @@ for (const root of ROOTS) {
 }
 
 // 3. Internal links resolve. Every relative (./ ../) or site-absolute (/docs/)
-//    markdown link in a doc page must point at a rendered doc URL or folder.
-//    fumadocs renders broken links as dead clicks; CI should catch them.
+//    markdown link in a doc page must point at a page fumadocs actually
+//    renders. A bare folder (e.g. `../channels`) is not a page unless that
+//    folder's index has a `url:` frontmatter override pointing at it — a
+//    folder with no override renders nothing at its own path and 404s, even
+//    though it appears in the sidebar as a group. fumadocs renders broken
+//    links as dead clicks; CI should catch them.
 function renderedUrl(relPath, source) {
   const slug = relPath.replace(/\.mdx?$/, "").replace(/(^|\/)index$/, "");
   const override = parseFrontmatter(source)?.url;
@@ -200,17 +204,11 @@ function renderedUrl(relPath, source) {
 function checkLinks(rootDir) {
   const files = walkMarkdown(rootDir);
   const renderedUrls = new Set();
-  const renderedDirs = new Set();
   for (const abs of files) {
     const rel = relative(rootDir, abs).split("\\").join("/");
     if (isExcluded(rel)) continue;
     const source = readFileSync(abs, "utf8");
     renderedUrls.add(renderedUrl(rel, source));
-    let dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-    while (dir) {
-      renderedDirs.add(`/docs/${dir}`);
-      dir = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
-    }
   }
   const linkRe = /\]\((\s*[^)]+?)\s*\)/g;
   for (const abs of files) {
@@ -233,11 +231,10 @@ function checkLinks(rootDir) {
         .replace(/\.mdx?$/, "");
       if (resolvedUrl === "/docs") continue; // docs root / index
       if (renderedUrls.has(resolvedUrl)) continue;
-      if (renderedDirs.has(resolvedUrl)) continue; // folder link (sidebar group)
       failures.push({
         root: "docs",
         file: rel,
-        issue: `broken internal link → \`${m[1].trim()}\` (resolves to \`${resolvedUrl}\`, no such page)`,
+        issue: `broken internal link → \`${m[1].trim()}\` (resolves to \`${resolvedUrl}\`, no such page — folders without a \`url:\` override on their index page have no route of their own)`,
       });
     }
   }
