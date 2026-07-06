@@ -252,13 +252,45 @@ describe("turnWorkflow", () => {
     });
   });
 
+  it("reports a cancelled turn as a park with the cancelled marker", async () => {
+    const sessionState = createSessionState();
+    installInbox([]);
+    vi.mocked(turnStep).mockResolvedValueOnce({
+      action: "cancelled",
+      serializedContext: { state: "cancelled" },
+      sessionState,
+    });
+
+    // Task mode on purpose: cancellation bypasses the `canPark` gate.
+    const { input } = createInput({
+      driverCapabilities: { turnInbox: true },
+      mode: "task",
+      sessionState,
+    });
+    await turnWorkflow(input);
+
+    expect(vi.mocked(turnStep).mock.calls[0]?.[0].abortSignal).toBeInstanceOf(AbortSignal);
+    // The cancelled result is a pure marker: the control payload carries
+    // the cursor's last settled state, not the aborted step's echo.
+    expect(resumeHookMock).toHaveBeenCalledWith("turn-token", {
+      action: {
+        cancelled: true,
+        kind: "park",
+        serializedContext: { state: "start" },
+        sessionState,
+      },
+      kind: "turn-result",
+    });
+    expect(resumeHookMock.mock.calls.filter((call) => call[1]?.kind === "turn-error")).toEqual([]);
+  });
+
   it("deduplicates concurrent turn workflows through inbox ownership", async () => {
     const sessionState = createSessionState();
     const ownerInbox = createInboxMock([]);
     const duplicateInbox = createInboxMock([], {
       conflict: { runId: "wrun_owner" },
     });
-    createHookMock.mockReturnValueOnce(ownerInbox.hook).mockReturnValueOnce(duplicateInbox.hook);
+    installHookDispatch([ownerInbox, duplicateInbox]);
     vi.mocked(turnStep).mockResolvedValueOnce({
       action: "done",
       output: "ok",
@@ -759,8 +791,33 @@ function installInbox(
   } = {},
 ): InboxMock {
   const inbox = createInboxMock(values, options);
-  createHookMock.mockReturnValue(inbox.hook);
+  installHookDispatch([inbox]);
   return inbox;
+}
+
+/**
+ * Routes inbox tokens to the queued inbox mocks and `:cancel` tokens to
+ * inert cancel hooks (their reads never resolve, so no cancellation is
+ * ever observed unless a test wires its own cancel mock).
+ */
+function installHookDispatch(inboxes: readonly InboxMock[]): void {
+  const queue = [...inboxes];
+  createHookMock.mockImplementation((input: { token: string }) =>
+    input.token.endsWith(":cancel") ? createCancelHookMock(input.token) : queue.shift()?.hook,
+  );
+}
+
+function createCancelHookMock(token: string): unknown {
+  return {
+    token,
+    dispose: vi.fn(),
+    [Symbol.asyncIterator](): AsyncIterator<unknown> {
+      return {
+        next: () => new Promise<IteratorResult<unknown>>(() => {}),
+        return: vi.fn(async () => ({ done: true, value: undefined })),
+      };
+    },
+  };
 }
 
 function createInboxMock(

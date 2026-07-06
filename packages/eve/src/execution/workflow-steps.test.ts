@@ -25,9 +25,9 @@ import { projectToDurableSession } from "#execution/session.js";
 import { createExecutionNodeStep } from "#execution/node-step.js";
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
 import { runProxySubagentEventStep } from "#execution/subagent-event-proxy-step.js";
+import { emitTerminalSessionFailureStep } from "#execution/terminal-session-failure-step.js";
 import {
   dispatchTurnStep,
-  emitTerminalSessionFailureStep,
   resolveEffectiveOutputSchema,
   turnStep,
 } from "#execution/workflow-steps.js";

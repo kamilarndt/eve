@@ -18,6 +18,10 @@ import {
 import type { NextDriverAction } from "#execution/next-driver-action.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
 import { runProxySubagentEventStep } from "#execution/subagent-event-proxy-step.js";
+import {
+  createTurnCancellationControl,
+  type TurnCancellationControl,
+} from "#execution/turn-cancellation-control.js";
 import { TurnExecutionCursor } from "#execution/turn-execution-cursor.js";
 import { resolveWorkflowCallbackBaseUrl } from "#execution/workflow-callback-url.js";
 import { normalizeSerializableError } from "#execution/workflow-errors.js";
@@ -29,7 +33,15 @@ const TASK_MODE_WAIT_ERROR_MESSAGE = "Task mode cannot wait for follow-up input 
 
 export type { TurnWorkflowInput };
 
-/** Runs one complete logical turn, including child-agent waits when supported. */
+/**
+ * Runs one complete logical turn, including child-agent waits when supported.
+ *
+ * The turn-owned path also owns turn cancellation: it registers a per-turn
+ * cancel hook (`{completionToken}:cancel`) and serializes a durable abort
+ * signal into every `turnStep`. Resuming that hook mid-turn settles the
+ * turn as cancelled (`turn.cancelled` → `session.waiting`) — never as a
+ * failure; resuming it after the turn settled is a benign no-op.
+ */
 export async function turnWorkflow(rawInput: unknown): Promise<void> {
   "use workflow";
 
@@ -62,6 +74,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
   const bufferedDeliveries: DeliverHookPayload[] = [];
   let nextStepInput = input.stepInput.input;
   let ownsInbox = false;
+  let cancellation: TurnCancellationControl | undefined;
 
   try {
     try {
@@ -72,8 +85,33 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
       throw error;
     }
 
+    // Created only after the inbox claim so a losing duplicate run never
+    // registers the (per-turn, conflict-free) cancel token.
+    cancellation = createTurnCancellationControl(input.completionToken);
+
     while (true) {
-      const result = await turnStep(cursor.createStepInput(nextStepInput));
+      // No race here: a cancel payload aborts the durable signal from the
+      // hook-read continuation (see TurnCancellationControl), and the
+      // runtime delivers that abort to the in-flight step attempt in
+      // real time. The step then settles on its own with `cancelled`.
+      const result = await turnStep(cursor.createStepInput(nextStepInput, cancellation.signal));
+
+      if (result.action === "cancelled") {
+        // Report the cancellation to the driver and exit; the state in
+        // the control payload is the last state the turn actually
+        // settled. The epilogue must NOT run as a step in this run:
+        // queued cancel-payload wakes can re-dispatch an in-flight step
+        // here, and two racing attempts would double-emit it. The driver
+        // — whose wake sources exclude the cancel hook — runs
+        // `settleCancelledTurnStep` instead. The `canPark` gate below is
+        // intentionally bypassed.
+        await cursor.finish(
+          { sessionState: cursor.sessionState },
+          { cancelled: true, kind: "park" },
+          bufferedDeliveries,
+        );
+        return;
+      }
 
       if (result.action === "done") {
         await cursor.finish(
@@ -114,6 +152,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
 
         const results = await waitForRuntimeActionResults({
           bufferedDeliveries,
+          cancellation,
           cursor,
           inboxToken: inbox.token,
           initialResults: dispatchResult.results,
@@ -121,6 +160,15 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
           nextDeliveryRequestId,
           pendingActionKeys,
         });
+        if (results === "cancelled") {
+          // The signal is aborted; the next turnStep settles the
+          // cancelled epilogue before its park-resume stages run, then
+          // the loop finishes through the `cancelled` arm above.
+          // Descendants are not cascaded to (layer 3); their late
+          // results land on this turn's disposed inbox and are dropped.
+          nextStepInput = undefined;
+          continue;
+        }
         nextStepInput = { kind: "runtime-action-result", results };
         continue;
       }
@@ -152,19 +200,21 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
     throw error;
   } finally {
     await closeHookIterator(iterator);
+    if (cancellation !== undefined) await cancellation.dispose();
     if (ownsInbox) await disposeHook(inbox);
   }
 }
 
 async function waitForRuntimeActionResults(input: {
   readonly bufferedDeliveries: DeliverHookPayload[];
+  readonly cancellation: TurnCancellationControl;
   readonly cursor: TurnExecutionCursor;
   readonly inboxToken: string;
-  readonly initialResults: readonly RuntimeActionResult[];
   readonly iterator: AsyncIterator<TurnInboxPayload>;
   readonly nextDeliveryRequestId: () => string;
   readonly pendingActionKeys: readonly string[];
-}): Promise<readonly RuntimeActionResult[]> {
+  readonly initialResults: readonly RuntimeActionResult[];
+}): Promise<readonly RuntimeActionResult[] | "cancelled"> {
   let pendingDeliveryRequest: string | undefined;
   const results: RuntimeActionResult[] = [...input.initialResults];
 
@@ -195,7 +245,29 @@ async function waitForRuntimeActionResults(input: {
       });
     }
 
-    const next = await input.iterator.next();
+    const nextPromise = input.iterator.next();
+    const winner = await Promise.race([
+      nextPromise.then(
+        () => "payload" as const,
+        () => "payload" as const,
+      ),
+      input.cancellation.requested,
+    ]);
+    if (winner === "cancel") {
+      if (pendingDeliveryRequest !== undefined) {
+        // Mirror the resolved-wait path: release the raced public input
+        // back to the driver so it stays available for the next turn.
+        await input.cursor.send({
+          kind: "turn-delivery-cancelled",
+          requestId: pendingDeliveryRequest,
+        });
+      }
+      // The dangling inbox `next()` follows the established
+      // dispose-with-outstanding-read pattern (see waitForNextDeliver).
+      return "cancelled";
+    }
+
+    const next = await nextPromise;
     if (next.done) throw new Error("Turn inbox closed before runtime actions completed.");
 
     const value = next.value;

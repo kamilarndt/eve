@@ -16,7 +16,7 @@ export const EVE_STREAM_FORMAT_HEADER = "x-eve-stream-format";
 export const EVE_STREAM_VERSION_HEADER = "x-eve-stream-version";
 export const EVE_MESSAGE_STREAM_CONTENT_TYPE = "application/x-ndjson; charset=utf-8";
 export const EVE_MESSAGE_STREAM_FORMAT = "ndjson";
-export const EVE_MESSAGE_STREAM_VERSION = "18";
+export const EVE_MESSAGE_STREAM_VERSION = "19";
 
 /**
  * eve-owned finish reason for one completed assistant step.
@@ -449,6 +449,20 @@ export interface TurnFailedStreamEvent {
 }
 
 /**
+ * Stream event emitted when one turn is cancelled before reaching a
+ * terminal outcome. Cancellation is not failure: the turn ends without
+ * `turn.failed`/`session.failed`, is followed by `session.waiting`, and
+ * the session accepts the next message normally.
+ */
+export interface TurnCancelledStreamEvent {
+  data: {
+    sequence: number;
+    turnId: string;
+  };
+  type: "turn.cancelled";
+}
+
+/**
  * Stream event emitted when the workflow decides to compact the current
  * visible session history before the next model fragment runs.
  */
@@ -590,6 +604,7 @@ export type HandleMessageStreamEvent = (
   | StepCompletedStreamEvent
   | StepFailedStreamEvent
   | StepStartedStreamEvent
+  | TurnCancelledStreamEvent
   | TurnCompletedStreamEvent
   | TurnFailedStreamEvent
   | TurnStartedStreamEvent
@@ -1283,6 +1298,22 @@ export function createTurnFailedEvent(input: {
       turnId: input.turnId,
     },
     type: "turn.failed",
+  };
+}
+
+/**
+ * Creates the `turn.cancelled` event for one cancelled turn.
+ */
+export function createTurnCancelledEvent(input: {
+  readonly sequence: number;
+  readonly turnId: string;
+}): TurnCancelledStreamEvent {
+  return {
+    data: {
+      sequence: input.sequence,
+      turnId: input.turnId,
+    },
+    type: "turn.cancelled",
   };
 }
 

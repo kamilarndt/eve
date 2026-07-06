@@ -11,6 +11,7 @@ import {
   createMessageReceivedEvent,
   createResultCompletedEvent,
   createStepStartedEvent,
+  createTurnCancelledEvent,
   encodeMessageStreamEvent,
   timestampHandleMessageStreamEvent,
 } from "#protocol/message.js";
@@ -18,7 +19,14 @@ import { createEveConnectionCallbackRoutePath } from "#protocol/routes.js";
 
 describe("message stream protocol", () => {
   it("pins the stream version for timed session events", () => {
-    expect(EVE_MESSAGE_STREAM_VERSION).toBe("18");
+    expect(EVE_MESSAGE_STREAM_VERSION).toBe("19");
+  });
+
+  it("creates turn.cancelled events", () => {
+    expect(createTurnCancelledEvent({ sequence: 2, turnId: "turn_2" })).toEqual({
+      data: { sequence: 2, turnId: "turn_2" },
+      type: "turn.cancelled",
+    });
   });
 
   it("creates result.completed events", () => {

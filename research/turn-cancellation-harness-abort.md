@@ -1,7 +1,7 @@
 ---
 issue: https://github.com/vercel/eve/issues/483
-status: proposed
-last_updated: "2026-07-02"
+status: complete
+last_updated: "2026-07-06"
 ---
 
 # Turn cancellation, layer 0: harness abort propagation
