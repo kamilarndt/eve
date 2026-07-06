@@ -14,10 +14,12 @@ export interface DispatchedTurn {
    * *next* turn is settled (or the session ends): the turn run's final
    * control send is an at-least-once step — a queued wake (e.g. a
    * duplicate cancel payload or the durable abort's own hook event) can
-   * re-dispatch it while in flight, and the late duplicate resume must
-   * land on a live hook. A resume on a disposed hook diverges the
-   * driver's replay and corrupts its event log. By the time the next
-   * turn settles, the previous turn's run has completed and can no
+   * re-dispatch it while in flight
+   * (https://github.com/vercel/workflow/issues/2780), and the late
+   * duplicate resume must land on a live hook. A resume on a disposed
+   * hook diverges the driver's replay and corrupts its event log
+   * (https://github.com/vercel/workflow/issues/2781). By the time the
+   * next turn settles, the previous turn's run has completed and can no
    * longer re-send.
    */
   dispose(): Promise<void>;

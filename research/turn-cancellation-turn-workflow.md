@@ -91,17 +91,21 @@ through the same cancelled arm.
 Integration against the real runtime (vendored `@workflow/core`
 5.0.0-beta.26) surfaced behaviors that reshaped the epilogue path:
 
-1. **No workflow-side race; abort in the hook-read continuation.** Whether a
-   `Promise.race` resolves `cancel`-first is not stable across replays, and
-   the durable `abort()` writes a hook event — reaching it conditionally
-   corrupts the event log (observed as `REPLAY_DIVERGENCE` →
-   `CorruptedEventLogError`). The abort now fires in the `.then` of the
-   cancel-hook read itself, keyed to the `hook_received` event.
+1. **No workflow-side race; abort in the hook-read continuation.** The
+   durable `abort()` writes a hook event, and the upstream contract
+   ("`abort()` becomes a no-op on replay") presumes the call site is
+   reached deterministically on every replay — gating it behind a
+   `Promise.race` winner makes that reachability replay-dependent. The
+   abort now fires in the `.then` of the cancel-hook read itself, keyed to
+   the `hook_received` event. (The corruption initially attributed to this
+   shape was later traced to workflow#2781; the deterministic call site is
+   kept as contract hygiene.)
 2. **`turnStep`'s cancelled result is a pure marker.** The runtime can
    supersede an aborted step attempt and re-dispatch it under the same
    correlation id, with both attempts running to completion in-process
-   (at-least-once inline execution). Any cancel-path side effect inside
-   `turnStep` — including the epilogue — can therefore duplicate.
+   (at-least-once inline execution, workflow#2780). Any cancel-path side
+   effect inside `turnStep` — including the epilogue — can therefore
+   duplicate.
 3. **The epilogue runs in the _driver_, not the turn run.** Queued
    cancel-payload and abort-hook wakes re-dispatch in-flight steps of the
    turn run; the driver's wake sources exclude the cancel hook. The driver
@@ -109,9 +113,10 @@ Integration against the real runtime (vendored `@workflow/core`
    before the normal park playbook. (Old pinned drivers ignore the marker
    and simply park — harmless, since no cancel trigger predates them.)
 4. **Turn control hooks are disposed one turn late.** The turn run's final
-   control send is at-least-once; a late duplicate resume on a _disposed_
-   hook is accepted and logged by the world and then diverges the driver's
-   replay. `dispatchAndAwaitTurn` now returns a deferred `dispose()` that
+   control send is at-least-once (workflow#2780); a late duplicate resume
+   on a _disposed_ hook is accepted and logged by the world and then
+   diverges the driver's replay (workflow#2781).
+   `dispatchAndAwaitTurn` now returns a deferred `dispose()` that
    the driver invokes when the _next_ turn settles (or the session ends),
    by which time the previous turn's run has completed and cannot re-send.
 5. **The settle step is single-flighted in-process.** A wake landing while
@@ -121,27 +126,39 @@ Integration against the real runtime (vendored `@workflow/core`
    re-execution (crash recovery on another instance) can still duplicate
    the epilogue; see upstream notes.
 
-## Runtime findings (candidate upstream issues)
+## Runtime findings (filed upstream)
 
-Observed against `@workflow/world-local` during integration testing, all
-reproducible via the layer-1 test suite before the mitigations above:
+Observed against `@workflow/world-local` during integration testing and
+re-validated with standalone spike repros before filing:
 
-- **At-least-once inline step execution under wakes**: a workflow wake that
-  lands while a step is in flight can re-dispatch the step under the same
-  correlation id; both attempts run and both flush side effects (only one
-  `step_completed` is recorded). Complement to workflow#2777/#2778.
-- **Resume-after-dispose corrupts replay**: `resumeHook` on a disposed hook
-  is accepted and journaled (`hook_received` after `hook_disposed`), and the
-  owning run's next replay diverges (`REPLAY_DIVERGENCE`, escalating to
-  `CorruptedEventLogError`).
-- **Replay-conditional `abort()`**: durable `AbortController.abort()` must
-  be reached deterministically on every replay; gating it on a race winner
-  or on live `signal.aborted` state corrupts the event log or re-fires the
-  abort hook.
+- **[workflow#2780](https://github.com/vercel/workflow/issues/2780)** —
+  at-least-once inline step execution under wakes: a `hook_received` that
+  lands while a step attempt is in flight re-dispatches the step under the
+  same correlation id; both attempts run concurrently in-process and both
+  flush side effects (only one `step_completed` is recorded). Standalone
+  repro deterministic (4/4). Complement to workflow#2777/#2778.
+- **[workflow#2781](https://github.com/vercel/workflow/issues/2781)** —
+  a `resumeHook` racing hook disposal is accepted and journaled after
+  `hook_disposed`; the owning run's replay then deterministically diverges
+  at that event (`REPLAY_DIVERGENCE`, escalating to
+  `CorruptedEventLogError`). The duplicate resume that hit the window came
+  from a #2780-style re-executed step. The acceptance window is
+  timing-dependent (a simplified standalone repro produced the duplicate
+  resume but landed it after disposal enforcement); the journal-level
+  evidence is unambiguous.
+- **Not filed — falsified in isolation**: an earlier hypothesis that
+  reaching `abort()` behind a promise-race winner corrupts the event log
+  did not reproduce standalone (5/5 clean); every corruption we observed
+  traced to #2781. The abort-in-hook-continuation shape is kept anyway as
+  determinism hygiene: the upstream abort-controller contract ("`abort()`
+  becomes a no-op on replay") presumes the call site is reached on every
+  replay, and the duplicate `abrt` `hook_received` we logged under wake
+  storms adds wakes that feed #2780's preconditions.
 
-Because of the first two, layer 2's cancel trigger must single-flight
-cancel resumes per turn (resume the hook at most once; treat "already
-resumed/disposed" as success).
+Because of #2780/#2781, layer 2's cancel trigger must single-flight cancel
+resumes per turn (resume the hook at most once; treat "already
+resumed/disposed" as success), and turn control hooks stay on deferred
+disposal.
 
 ## Invariants (pinned by tests)
 

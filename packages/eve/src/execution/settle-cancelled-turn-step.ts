@@ -29,11 +29,12 @@ export interface CancelledTurnSettleResult {
  * In-process single-flight for {@link settleCancelledTurnStep}.
  *
  * A workflow wake that lands while the settle step is in flight can
- * re-dispatch it under the runtime's at-least-once execution, and the
- * racing attempts share this process (wake replays run on the same
- * event loop as the in-flight attempt). Collapsing them onto one
- * execution keeps the epilogue single on the stream. A retry after a
- * genuine failure re-executes: rejected flights are evicted.
+ * re-dispatch it under the runtime's at-least-once execution
+ * (https://github.com/vercel/workflow/issues/2780), and the racing
+ * attempts share this process (wake replays run on the same event loop
+ * as the in-flight attempt). Collapsing them onto one execution keeps
+ * the epilogue single on the stream. A retry after a genuine failure
+ * re-executes: rejected flights are evicted.
  *
  * Entries expire after {@link CANCELLED_TURN_FLIGHT_TTL_MS} — far past
  * any duplicate-dispatch window — so results do not accumulate.
