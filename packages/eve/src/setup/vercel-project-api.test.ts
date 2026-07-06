@@ -53,10 +53,56 @@ describe("listTeams", () => {
     );
   });
 
-  it("rejects a repeated pagination cursor", async () => {
+  it("drains a team list that spans the 20-item page limit even when Vercel echoes the same cursor", async () => {
+    // Repro for an `eve init` report: a user with 23 teams (over the 20-item
+    // page limit) got a pagination-cursor failure. Vercel's `next` cursor is
+    // a createdAt timestamp (ms), so teams created in the same millisecond
+    // (bulk-provisioned accounts) can make it repeat across pages even though
+    // the next page still returns new teams, not the same page again. A pure
+    // "seen this cursor before" check treats that as an infinite loop and
+    // fails the request; it should only bail when a page stops making
+    // progress.
+    const firstPage = Array.from({ length: 20 }, (_, i) => ({
+      name: `Team ${i + 1}`,
+      slug: `team-${i + 1}`,
+      current: i === 0,
+    }));
+    const secondPage = Array.from({ length: 3 }, (_, i) => ({
+      name: `Team ${i + 21}`,
+      slug: `team-${i + 21}`,
+      current: false,
+    }));
+    const boundaryCursor = 1_700_000_000_000;
+
+    mockedCaptureVercel
+      .mockResolvedValueOnce(captured({ teams: firstPage, pagination: { next: boundaryCursor } }))
+      .mockResolvedValueOnce(captured({ teams: secondPage, pagination: { next: boundaryCursor } }))
+      .mockResolvedValueOnce(captured({ teams: [], pagination: { next: null } }));
+
+    const teams = await listTeams("/repo");
+
+    expect(teams).toHaveLength(23);
+    expect(teams.map((team) => team.slug)).toEqual([
+      ...firstPage.map((team) => team.slug),
+      ...secondPage.map((team) => team.slug),
+    ]);
+    expect(mockedCaptureVercel).toHaveBeenCalledTimes(3);
+    expect(mockedCaptureVercel).toHaveBeenNthCalledWith(
+      2,
+      ["teams", "ls", "--format", "json", "--next", String(boundaryCursor)],
+      { cwd: "/repo", signal: undefined },
+    );
+    expect(mockedCaptureVercel).toHaveBeenNthCalledWith(
+      3,
+      ["teams", "ls", "--format", "json", "--next", String(boundaryCursor)],
+      { cwd: "/repo", signal: undefined },
+    );
+  });
+
+  it("rejects a cursor that stops making progress", async () => {
     mockedCaptureVercel.mockResolvedValue(captured({ teams: [], pagination: { next: 20 } }));
 
-    await expect(listTeams("/repo")).rejects.toThrow("repeated pagination cursor");
+    await expect(listTeams("/repo")).rejects.toThrow("stopped making progress");
   });
 
   it("rejects an invalid entry instead of returning a partial page", async () => {

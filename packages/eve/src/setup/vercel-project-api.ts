@@ -65,8 +65,13 @@ export function parseVercelJson(stdout: string, description: string): unknown {
 }
 
 /**
- * Drains a cursor-paginated Vercel list, deduping by `key`. A repeated cursor
- * means Vercel paged us in a circle — bail rather than loop forever.
+ * Drains a cursor-paginated Vercel list, deduping by `key`. Vercel's cursor is
+ * a createdAt timestamp, so items created in the same millisecond can make it
+ * repeat across pages even while new items are still arriving (a page
+ * genuinely earns the same cursor as the one before it). Bailing on a repeated
+ * cursor alone false-positives on that case, so bail only once a page adds no
+ * items we have not already seen: that is the actual sign Vercel paged us in
+ * a circle.
  */
 async function drainPages<T>(
   label: string,
@@ -74,16 +79,15 @@ async function drainPages<T>(
   fetchPage: (next: number | undefined) => Promise<VercelPage<T>>,
 ): Promise<T[]> {
   const items = new Map<string, T>();
-  const cursors = new Set<number>();
   let next: number | undefined;
   while (true) {
     const page = await fetchPage(next);
+    const sizeBeforePage = items.size;
     for (const item of page.items) items.set(key(item), item);
     if (page.next === undefined) return [...items.values()];
-    if (cursors.has(page.next)) {
-      throw new Error(`Vercel returned a repeated pagination cursor for ${label}.`);
+    if (items.size === sizeBeforePage) {
+      throw new Error(`Vercel's pagination cursor for ${label} stopped making progress.`);
     }
-    cursors.add(page.next);
     next = page.next;
   }
 }
