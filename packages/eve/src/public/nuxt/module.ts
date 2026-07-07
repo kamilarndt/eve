@@ -170,12 +170,6 @@ export default defineNuxtModule<EveNuxtModuleOptions>({
     // without an explicit import, matching Nuxt's composable conventions.
     addImports({ name: "useEveAgent", from: "eve/vue" });
 
-    extendRouteRules(`${servicePrefix}/**`, {
-      headers: {
-        "cache-control": "no-store",
-      },
-    });
-
     // On Vercel the eve app deploys as a sibling experimental service. A Nitro
     // runtime `proxy` rule can't reach it — the proxied request loops back into
     // the Nuxt function and 404s — so route eve transport at the edge via a
