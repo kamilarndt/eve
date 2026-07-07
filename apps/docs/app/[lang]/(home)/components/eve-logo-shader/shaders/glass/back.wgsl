@@ -1,5 +1,6 @@
 import { oriented_normal, env_reflect_dir, env_reflection_from_dir, encode_normal } from "../shared/material-core.wgsl";
-import { Params, VertexInput, VertexOutput, WIRE_PASS_THRESHOLD, glass_vs_main, is_back_facing_to_camera } from "../shared/glass-common.wgsl";
+import { Params, WIRE_PASS_THRESHOLD } from "../shared/scene-params.wgsl";
+import { VertexInput, VertexOutput, glass_vs_main, is_back_facing_to_camera } from "../shared/glass-vertex.wgsl";
 import { shade_glass } from "../shared/glass-material.wgsl";
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -38,10 +39,10 @@ fn fs_main(input: VertexOutput) -> @location(0) vec4f {
       return vec4f(encode_normal(reflected), 1.0);
     }
     case 3u: {
-      return vec4f(env_reflection_from_dir(studioCube, studioSampler, reflected, params.envYaw), 1.0);
+      return vec4f(env_reflection_from_dir(studioCube, studioSampler, reflected, params.envYaw, params.envPitch), 1.0);
     }
     default: {
-      return shade_glass(studioCube, studioSampler, n, v, reflected, params.envYaw, true);
+      return shade_glass(studioCube, studioSampler, n, v, reflected, params.envYaw, params.envPitch, true, params.glassAbsorption);
     }
   }
 }

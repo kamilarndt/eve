@@ -7,6 +7,7 @@ import type {
 } from "#channel/types.js";
 import { dispatchStreamEventHooks } from "#context/hook-lifecycle.js";
 import { dispatchDynamicInstructionEvent } from "#context/dynamic-instruction-lifecycle.js";
+import { dispatchDynamicModelEvent } from "#context/dynamic-model-lifecycle.js";
 import { dispatchDynamicSkillEvent } from "#context/dynamic-skill-lifecycle.js";
 import { dispatchDynamicToolEvent } from "#context/dynamic-tool-lifecycle.js";
 import { AuthKey, CapabilitiesKey, ContinuationTokenKey, ModeKey } from "#context/keys.js";
@@ -25,6 +26,8 @@ import {
 import { getPendingWorkflowInterrupt } from "#harness/workflow-interrupt-state.js";
 import { getPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
 import type { HarnessSession, StepInput, StepResult } from "#harness/types.js";
+import { getTurnUsageState, toUsage } from "#harness/turn-tag-state.js";
+import type { TokenUsage } from "#shared/token-usage.js";
 import type { JsonObject } from "#shared/json.js";
 import type { RunMode } from "#shared/run-mode.js";
 import { getRuntimeActionRequestKey } from "#runtime/actions/keys.js";
@@ -58,9 +61,11 @@ import {
 } from "#execution/durable-session-migrations/turn-workflow.js";
 import { createExecutionNodeStep } from "#execution/node-step.js";
 import { emitProxiedInputRequest, routeDeliverPayload } from "#execution/subagent-hitl-proxy.js";
+import { recordSubagentUsageSpans } from "#execution/subagent-usage-span.js";
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
 import { buildTurnAttributes, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import { normalizeEveAttributes } from "#runtime/attributes/normalize.js";
+import { resolveSessionSkillRoot } from "#execution/workflow-skill-root.js";
 import {
   createWorkflowRuntime,
   startWorkflowPreferLatest,
@@ -83,6 +88,8 @@ export type DurableStepResult =
       readonly isError?: boolean;
       readonly serializedContext: Record<string, unknown>;
       readonly sessionState: DurableSessionState;
+      /** Session-total token usage; set on `done` when the session spent any. */
+      readonly usage?: TokenUsage;
     }
   | {
       readonly action: "park";
@@ -210,6 +217,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
     }
     resolved = results.length === 0 ? undefined : results.reduce(coalesceTurnInputs);
   } else if (input.input?.kind === "runtime-action-result") {
+    recordSubagentUsageSpans(input.input.results);
     resolved = { runtimeActionResults: input.input.results };
   }
 
@@ -258,6 +266,19 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
   ): Promise<void> => {
     const emitted = await emit(event);
     await dispatchStreamEventHooks({ ctx, registry: hookRegistry, event: emitted });
+    if (emitted.type !== "step.started") {
+      await dispatchDynamicModelEvent({
+        ctx,
+        dynamicModel: bundle.turnAgent.dynamicModel,
+        event: emitted,
+        fallback: bundle.turnAgent.model,
+        messages: messages ?? [],
+        scope: {
+          moduleMap: bundle.moduleMap,
+          nodeId: bundle.nodeId,
+        },
+      });
+    }
     await dispatchDynamicToolEvent({
       ctx,
       resolvers: dynamicToolResolvers,
@@ -309,11 +330,16 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
       lifecycleSession: HarnessSession,
       stepInput: StepInput | undefined,
     ): Promise<StepResult> => {
+      const skillRoot = await resolveSessionSkillRoot({
+        ctx,
+        turnAgent: bundle.turnAgent,
+      });
       const refreshedSession = refreshSessionFromTurnAgent({
         compactionOverrides: {
           thresholdPercent: bundle.resolvedAgent.config.compaction?.thresholdPercent,
         },
         session: lifecycleSession,
+        skillRoot,
         turnAgent: bundle.turnAgent,
       });
 
@@ -328,6 +354,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
           nodeId: bundle.nodeId,
         },
         node: bundle.graph.root,
+        workflowMaxSubagents: refreshedSession.workflowMaxSubagents,
       });
       return step(refreshedSession, stepInput);
     };
@@ -349,12 +376,14 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
     "done" in stepResult.next
   ) {
     await writer.close();
+    const sessionTotals = getTurnUsageState(stepResult.session.state)?.session;
     return {
       action: "done",
       output: stepResult.next.output,
       isError: stepResult.next.isError,
       serializedContext: nextSerializedContext,
       sessionState: nextState,
+      usage: sessionTotals === undefined ? undefined : toUsage(sessionTotals),
     };
   }
 

@@ -368,6 +368,10 @@ describe("dispatchRuntimeActionsStep", () => {
           input: {
             message: expect.stringContaining("Description: Local delegate child description."),
           },
+          limits: {
+            maxInputTokensPerSession: false,
+            maxOutputTokensPerSession: false,
+          },
           serializedContext: expect.objectContaining({
             "eve.channel": expect.objectContaining({
               kind: "subagent",
@@ -702,6 +706,72 @@ describe("turnStep", () => {
       expect(second.output).toBe("thread=alpha; user=follow up");
     }
     expect(second.serializedContext[ThreadKey.name]).toBe("alpha");
+  });
+
+  it("carries session-total usage on the done result, not the final turn's", async () => {
+    // Flat fields are the *final turn's* usage; `session` carries the
+    // session-lifetime totals. The done action must report the latter.
+    const session = createStubSession({
+      state: {
+        "eve.harness.turnUsage": {
+          turnId: "turn_1",
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 1,
+          cacheWriteTokens: 0,
+          session: { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5 },
+        },
+      },
+    });
+    installSessionStoreMocks([session]);
+
+    const compiledBundle = {
+      adapterRegistry: {
+        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
+      },
+      compiledArtifactsSource: {} as never,
+      graph: {
+        nodesByNodeId: new Map(),
+        root: {
+          sandboxRegistry: { sandbox: null },
+          turnAgent: TestTurnAgent,
+        },
+      },
+      moduleMap: { nodes: {} },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: {},
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never;
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+
+    vi.mocked(createExecutionNodeStep).mockImplementation(() => {
+      return async (stepSession): Promise<StepResult> => ({
+        next: { done: true, output: "final" },
+        session: stepSession,
+      });
+    });
+
+    const result = await turnStep({
+      input: {
+        kind: "deliver",
+        payloads: [{ message: "finish up" }],
+      },
+      parentWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
+      sessionState: createStubSessionState(),
+    });
+
+    expect(result.action).toBe("done");
+    if (result.action === "done") {
+      expect(result.usage).toEqual({
+        cacheReadTokens: 10,
+        cacheWriteTokens: 5,
+        inputTokens: 100,
+        outputTokens: 50,
+      });
+    }
   });
 
   it("refreshes the system prompt from the current bundled deployment", async () => {

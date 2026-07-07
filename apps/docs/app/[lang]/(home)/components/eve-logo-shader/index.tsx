@@ -1,12 +1,39 @@
 "use client";
 
 import { App, Device, type VGPUAdapter } from "@vgpu/core";
-import { getImageProps } from "next/image";
-import fallbackDarkImage from "../../../../../public/eve-5/fallback-dark-content.webp";
-import fallbackLightImage from "../../../../../public/eve-5/fallback-light-content.webp";
-import { useEffect, useRef, useState, type ComponentProps, type CSSProperties } from "react";
-import { decodeGltfMesh, meshAspect } from "./mesh";
-import { BLOOM_RADIUS, createEve5Renderer, type RenderControls } from "./render";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { meshAspect } from "./mesh";
+import {
+  FallbackImage,
+  FALLBACK_CONTAINER_ASPECT_RATIO,
+  getFallbackImageProps,
+} from "./fallback-image";
+import { usePrefersReducedMotion, useResolvedTheme } from "./hooks";
+import { DEFAULT_LOGO_ASPECT, getLogicalRenderSize, resizeCanvas } from "./runtime/canvas-sizing";
+import { loadMesh } from "./runtime/load-mesh";
+import {
+  destroyTransitionDebugGui,
+  setupTransitionDebugGui,
+  type EveTransitionDebugGui,
+  type EveTransitionDebugState,
+} from "./runtime/debug-gui";
+import { createDrawLoop } from "./runtime/frame-loop";
+import { createPointerController } from "./runtime/pointer-input";
+import type { HeroRuntimeState } from "./runtime/state";
+import {
+  BLOOM_RADIUS,
+  DEFAULT_CAMERA_FOV,
+  DEFAULT_PAINT_BRUSH_RADIUS,
+  DEFAULT_PAINT_BRUSH_STRENGTH,
+  DEFAULT_PAINT_DECAY_PER_FRAME_120,
+  DEFAULT_PAINT_DIFFUSION_JITTER,
+  DEFAULT_PAINT_DIFFUSION_RATE,
+  DEFAULT_IMPRINT_GRID_SCALE_MULTIPLIER,
+  cameraRadiusForFov,
+  createEve5Renderer,
+  type RenderControls,
+} from "./render";
+import type { InstallAudience } from "../install-switcher";
 
 class BrowserAdapter implements VGPUAdapter {
   async requestDevice(): Promise<Device> {
@@ -16,82 +43,23 @@ class BrowserAdapter implements VGPUAdapter {
   }
 }
 
-const MODEL_URL = "/eve-5/eve-logo.gltf";
-const FALLBACK_IMAGE_WIDTH = 1095;
-const FALLBACK_IMAGE_HEIGHT = 348;
-const FALLBACK_IMAGE_ASPECT_RATIO = `${FALLBACK_IMAGE_WIDTH} / ${FALLBACK_IMAGE_HEIGHT}`;
-const FALLBACK_CONTAINER_ASPECT_RATIO = `${FALLBACK_IMAGE_WIDTH + BLOOM_RADIUS} / ${FALLBACK_IMAGE_HEIGHT + BLOOM_RADIUS}`;
-const FALLBACK_IMAGE_SIZES = "(min-width: 768px) 1095px, calc(100vw - 16px)";
-const DEFAULT_LOGO_ASPECT = 78 / 25;
 const DEFAULT_CONTROLS: RenderControls = {
   yaw: 0,
   pitch: 0,
-  radius: 1.9,
-  fov: 35,
+  radius: cameraRadiusForFov(DEFAULT_CAMERA_FOV),
+  fov: DEFAULT_CAMERA_FOV,
   envYaw: 0,
+  envPitch: 0,
   insideRendering: true,
   outsideRendering: true,
   material: "glass",
   wireframe: false,
   showEnv: false,
 };
-const LOGO_RENDER_HEIGHT = 500;
-const MAX_DEVICE_PIXEL_RATIO = 2;
-const FALLBACK_IMAGE_PADDING = BLOOM_RADIUS / MAX_DEVICE_PIXEL_RATIO;
-const MAX_ENV_YAW = 0.45;
-const ENV_YAW_LERP_SPEED = 3;
-const CANVAS_FADE_FALLBACK_MS = 800;
-const CANVAS_REVEAL_RENDER_COUNT = 3;
-
-function getCurrentTheme(): "light" | "dark" {
-  if (typeof document === "undefined") return "light";
-  const root = document.documentElement;
-  if (root.classList.contains("dark") || root.dataset.theme === "dark") return "dark";
-  if (root.classList.contains("light") || root.dataset.theme === "light") return "light";
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-}
-
-function useResolvedTheme() {
-  const [theme, setTheme] = useState<"light" | "dark">("light");
-
-  useEffect(() => {
-    const syncTheme = () => setTheme(getCurrentTheme());
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const observer = new MutationObserver(syncTheme);
-
-    syncTheme();
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"],
-    });
-    media.addEventListener("change", syncTheme);
-
-    return () => {
-      observer.disconnect();
-      media.removeEventListener("change", syncTheme);
-    };
-  }, []);
-
-  return theme;
-}
-
-function usePrefersReducedMotion() {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const syncPreference = () => setPrefersReducedMotion(media.matches);
-
-    syncPreference();
-    media.addEventListener("change", syncPreference);
-
-    return () => media.removeEventListener("change", syncPreference);
-  }, []);
-
-  return prefersReducedMotion;
-}
-
-export function EveLogoShader() {
+export const AGENTS_ENV_YAW_LERP_SPEED = 3;
+const LOGO_MODE_TRANSITION_DURATION_SECONDS = 0.45;
+const IMPRINT_GLYPH_SCALE = 1.35;
+export function EveLogoShader({ audience = "humans" }: { audience?: InstallAudience }) {
   const theme = useResolvedTheme();
   const prefersReducedMotion = usePrefersReducedMotion();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -99,13 +67,43 @@ export function EveLogoShader() {
   const [logoAspect, setLogoAspect] = useState(DEFAULT_LOGO_ASPECT);
   const [revealed, setRevealed] = useState(false);
   const [showLightFallback, setShowLightFallback] = useState(false);
+  const targetAgentsEnvYawMixRef = useRef(audience === "agents" ? 1 : 0);
+  const targetLogoModeProgressRef = useRef(audience === "agents" ? 1 : 0);
+  const agentsSelected = audience === "agents";
+  targetAgentsEnvYawMixRef.current = agentsSelected ? 1 : 0;
+  targetLogoModeProgressRef.current = agentsSelected ? 1 : 0;
 
   useEffect(() => {
-    let cancelled = false;
-    let animationFrame = 0;
-    let cleanup: (() => void) | undefined;
-    let targetEnvYaw = controlsRef.current.envYaw;
-    let previousFrameTime = performance.now();
+    const state: HeroRuntimeState = {
+      cancelled: false,
+      animationFrame: 0,
+      cleanup: undefined,
+      mouseEnvYaw: controlsRef.current.envYaw,
+      targetMouseEnvYaw: controlsRef.current.envYaw,
+      mouseEnvPitch: controlsRef.current.envPitch,
+      targetMouseEnvPitch: controlsRef.current.envPitch,
+      asciiMouseX: 0,
+      asciiMouseY: 0,
+      targetAsciiMouseX: 0,
+      targetAsciiMouseY: 0,
+      brushCellX: 0,
+      brushCellY: 0,
+      previousRenderedBrushCellX: 0,
+      previousRenderedBrushCellY: 0,
+      hasBrushCell: false,
+      hasRenderedBrushCell: false,
+      brushActive: false,
+      paintGridScaleMultiplier: DEFAULT_IMPRINT_GRID_SCALE_MULTIPLIER,
+      targetBrushActive: false,
+      activeMesh: undefined,
+      agentsEnvYawMix: targetAgentsEnvYawMixRef.current,
+      previousFrameTime: performance.now(),
+      autoRotateStartTime: performance.now(),
+      lastBrushMoveTime: Number.NEGATIVE_INFINITY,
+      lastPointerClientX: undefined,
+      lastPointerClientY: undefined,
+      isCoarsePointer: window.matchMedia("(pointer: coarse)").matches,
+    };
 
     const canvas = canvasRef.current;
     resetCanvasVisibility(canvas);
@@ -121,13 +119,7 @@ export function EveLogoShader() {
     }
     setShowLightFallback(false);
 
-    const updateEnvYaw = (clientX: number) => {
-      const viewportWidth = Math.max(1, window.innerWidth || 1);
-      const normalizedX = Math.max(-1, Math.min(1, (clientX / viewportWidth) * 2 - 1));
-      targetEnvYaw = normalizedX * MAX_ENV_YAW;
-    };
-    const onPointerMove = (event: PointerEvent) => updateEnvYaw(event.clientX);
-    window.addEventListener("pointermove", onPointerMove, { passive: true });
+    const pointerController = createPointerController({ state, controlsRef, canvasRef });
 
     async function start() {
       const renderTheme = theme;
@@ -139,13 +131,14 @@ export function EveLogoShader() {
       }
 
       const mesh = await loadMesh();
-      if (cancelled) return;
+      if (state.cancelled) return;
+      state.activeMesh = mesh;
       setLogoAspect(meshAspect(mesh));
       await nextFrame();
       resizeCanvas(canvas);
 
       const app = await App.create({ adapter: new BrowserAdapter() });
-      if (cancelled) {
+      if (state.cancelled) {
         app.device.destroy();
         return;
       }
@@ -154,78 +147,88 @@ export function EveLogoShader() {
       const alphaMode = renderTheme === "light" ? "premultiplied" : "opaque";
       context.configure({ device: app.device.gpu, format, alphaMode });
       const renderer = createEve5Renderer(app.device, format, mesh, { theme: renderTheme });
-      previousFrameTime = performance.now();
-
       let disposed = false;
-      let successfulRenderCount = 0;
-      let finishCanvasFade: (() => void) | undefined;
+      let drawLoopDispose: (() => void) | undefined;
+      let transitionDebugGui: EveTransitionDebugGui | undefined;
+      const modeTransitionProgressRef = { current: targetLogoModeProgressRef.current };
+      const transitionDebug: EveTransitionDebugState = {
+        overrideEnabled: false,
+        progress: modeTransitionProgressRef.current,
+        gridScaleMultiplier: DEFAULT_IMPRINT_GRID_SCALE_MULTIPLIER,
+        glyphScale: IMPRINT_GLYPH_SCALE,
+        durationSeconds: LOGO_MODE_TRANSITION_DURATION_SECONDS,
+        paintDecayPerFrame120: DEFAULT_PAINT_DECAY_PER_FRAME_120,
+        diffusionAmount: DEFAULT_PAINT_DIFFUSION_RATE,
+        diffusionJitter: DEFAULT_PAINT_DIFFUSION_JITTER,
+        brushRadius: DEFAULT_PAINT_BRUSH_RADIUS,
+        brushStrength: DEFAULT_PAINT_BRUSH_STRENGTH,
+        visualizePaintBuffer: false,
+      };
+      state.previousFrameTime = performance.now();
+      state.autoRotateStartTime = state.previousFrameTime;
+
+      void setupTransitionDebugGui({
+        transitionDebug,
+        isCancelled: () => state.cancelled,
+        isDisposed: () => disposed,
+        onReady: (gui) => {
+          transitionDebugGui = gui;
+        },
+      });
+
       const dispose = () => {
         if (disposed) return;
         disposed = true;
-        cancelAnimationFrame(animationFrame);
-        finishCanvasFade?.();
+        drawLoopDispose?.();
         resetCanvasVisibility(canvas);
-        if (!cancelled) setRevealed(false);
+        if (!state.cancelled) setRevealed(false);
+        destroyTransitionDebugGui(transitionDebugGui);
+        transitionDebugGui = undefined;
         renderer.dispose();
         app.device.destroy();
       };
 
       app.device.gpu.lost
         .then(() => {
-          if (cancelled) return;
+          if (state.cancelled) return;
           setRevealed(false);
           setShowLightFallback(true);
-          cancelled = true;
+          state.cancelled = true;
           dispose();
         })
         .catch(() => {
           // The landing page must degrade silently when the GPU process is unavailable.
         });
 
-      const draw = (frameTime = performance.now()) => {
-        if (cancelled || disposed) return;
-
-        const deltaSeconds = Math.max(0, (frameTime - previousFrameTime) / 1000);
-        previousFrameTime = frameTime;
-        controlsRef.current.envYaw = safeLerp(controlsRef.current.envYaw, targetEnvYaw, deltaSeconds * ENV_YAW_LERP_SPEED);
-
-        resizeCanvas(canvas);
-        // The renderer pads the logical scene size by BLOOM_RADIUS on each side before allocating
-        // its offscreen back/depth targets. The canvas itself is that padded physical render target,
-        // so subtract the padding here. Passing CSS/logical logo dimensions would make the front
-        // shader's @builtin(position) sample different pixels from the back-side targets on DPR > 1.
-        const logicalWidth = Math.max(1, canvas.width - BLOOM_RADIUS * 2);
-        const logicalHeight = Math.max(1, canvas.height - BLOOM_RADIUS * 2);
-
-        try {
-          renderer.render(context.getCurrentTexture().createView(), controlsRef.current, logicalWidth, logicalHeight);
-        } catch {
-          cancelled = true;
+      const drawLoop = createDrawLoop({
+        state,
+        canvas,
+        context,
+        renderer,
+        controlsRef,
+        transitionDebug,
+        modeTransitionProgressRef,
+        targetLogoModeProgressRef,
+        targetAgentsEnvYawMixRef,
+        defaultMaterial: DEFAULT_CONTROLS.material,
+        onCanvasRevealed: () => {
+          if (!state.cancelled) setRevealed(true);
+        },
+        onFallback: () => {
           setRevealed(false);
           setShowLightFallback(true);
-          dispose();
-          return;
-        }
-
-        successfulRenderCount += 1;
-        if (successfulRenderCount === CANVAS_REVEAL_RENDER_COUNT) {
-          canvas.style.opacity = "1";
-          finishCanvasFade = onCanvasFullyOpaque(canvas, () => {
-            if (!cancelled) setRevealed(true);
-          });
-        }
-
-        animationFrame = requestAnimationFrame(draw);
-      };
-
-      draw();
+        },
+        onFatalError: dispose,
+      });
+      drawLoopDispose = drawLoop.dispose;
+      drawLoop.draw();
 
       return dispose;
     }
 
     start()
       .then((dispose) => {
-        cleanup = dispose;
+        state.cleanup = dispose;
       })
       .catch(() => {
         setShowLightFallback(true);
@@ -233,10 +236,10 @@ export function EveLogoShader() {
       });
 
     return () => {
-      cancelled = true;
-      cancelAnimationFrame(animationFrame);
-      window.removeEventListener("pointermove", onPointerMove);
-      cleanup?.();
+      state.cancelled = true;
+      cancelAnimationFrame(state.animationFrame);
+      pointerController.detach();
+      state.cleanup?.();
       resetCanvasVisibility(canvasRef.current);
     };
   }, [theme, prefersReducedMotion]);
@@ -244,22 +247,7 @@ export function EveLogoShader() {
   const logicalSize = getLogicalRenderSize(logoAspect);
   const paddedWidth = logicalSize.width + BLOOM_RADIUS * 2;
   const paddedHeight = logicalSize.height + BLOOM_RADIUS * 2;
-  const fallbackImageOptions = {
-    alt: "",
-    width: FALLBACK_IMAGE_WIDTH,
-    height: FALLBACK_IMAGE_HEIGHT,
-    sizes: FALLBACK_IMAGE_SIZES,
-    priority: true,
-    quality: 95,
-  } as const;
-  const { props: fallbackLightImageProps } = getImageProps({
-    ...fallbackImageOptions,
-    src: fallbackLightImage,
-  });
-  const { props: fallbackDarkImageProps } = getImageProps({
-    ...fallbackImageOptions,
-    src: fallbackDarkImage,
-  });
+  const { fallbackLightImageProps, fallbackDarkImageProps } = getFallbackImageProps();
 
   return (
     <div
@@ -282,102 +270,20 @@ export function EveLogoShader() {
         visible={!revealed}
         className="hidden dark:block"
       />
-      <canvas ref={canvasRef} className="absolute inset-0 size-full opacity-0 transition-opacity duration-700 ease-linear" />
-      <div
-        className={`pointer-events-none absolute inset-0 hidden bg-gradient-to-b from-transparent md:block ${theme === "light" ? "to-background-200" : "to-black"}`}
+      <canvas
+        ref={canvasRef}
+        data-eve-audience={audience}
+        data-eve-target-ascii={audience === "agents" ? "true" : "false"}
+        className="absolute inset-0 size-full opacity-0 transition-opacity duration-700 ease-linear"
       />
+      <div className="pointer-events-none absolute inset-0 hidden bg-gradient-to-b from-transparent from-20% to-background-200/80 md:block dark:from-40% dark:to-black" />
     </div>
   );
-}
-
-function FallbackImage({
-  imageProps,
-  visible,
-  className,
-}: {
-  imageProps: ComponentProps<"img">;
-  visible: boolean;
-  className: string;
-}) {
-  return (
-    <div
-      className={`${className} absolute transition-opacity duration-700 ease-linear ${visible ? "opacity-100" : "opacity-0"}`}
-      style={{ inset: FALLBACK_IMAGE_PADDING }}
-    >
-      <img
-        {...imageProps}
-        aria-hidden="true"
-        role="presentation"
-        decoding="async"
-        className="absolute left-1/2 top-1/2 h-full w-auto max-w-none -translate-x-1/2 -translate-y-1/2"
-        style={{ aspectRatio: FALLBACK_IMAGE_ASPECT_RATIO }}
-      />
-    </div>
-  );
-}
-
-async function loadMesh() {
-  const response = await fetch(MODEL_URL, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Failed to load ${MODEL_URL}: ${response.status}`);
-  return decodeGltfMesh(await response.json(), (uri) => loadGltfBuffer(uri, MODEL_URL));
-}
-
-async function loadGltfBuffer(uri: string, modelUrl: string) {
-  if (uri.startsWith("data:application/octet-stream;base64,")) {
-    return Uint8Array.from(atob(uri.split(",")[1]!), (char) => char.charCodeAt(0)).buffer;
-  }
-  const url = new URL(uri, window.location.origin + modelUrl);
-  const response = await fetch(url, { cache: "no-store" });
-  if (!response.ok) throw new Error(`Failed to load glTF buffer ${url.pathname}: ${response.status}`);
-  return response.arrayBuffer();
-}
-
-function getLogicalRenderSize(aspect: number) {
-  return {
-    width: Math.max(1, Math.round(LOGO_RENDER_HEIGHT * aspect)),
-    height: LOGO_RENDER_HEIGHT,
-  };
-}
-
-function resizeCanvas(canvas: HTMLCanvasElement | null) {
-  if (!canvas) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, MAX_DEVICE_PIXEL_RATIO);
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.floor(rect.width * dpr));
-  const height = Math.max(1, Math.floor(rect.height * dpr));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-}
-
-function safeLerp(from: number, to: number, amount: number) {
-  const safeAmount = Math.max(0, Math.min(1, amount));
-  return from + (to - from) * safeAmount;
 }
 
 function resetCanvasVisibility(canvas: HTMLCanvasElement | null) {
   if (!canvas) return;
   canvas.style.opacity = "";
-}
-
-function onCanvasFullyOpaque(canvas: HTMLCanvasElement, callback: () => void) {
-  let done = false;
-  let timeout = 0;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    canvas.removeEventListener("transitionend", onTransitionEnd);
-    window.clearTimeout(timeout);
-    if (canvas.isConnected) callback();
-  };
-  const onTransitionEnd = (event: TransitionEvent) => {
-    if (event.propertyName === "opacity") finish();
-  };
-
-  canvas.addEventListener("transitionend", onTransitionEnd);
-  timeout = window.setTimeout(finish, CANVAS_FADE_FALLBACK_MS);
-  return finish;
 }
 
 function nextFrame() {
