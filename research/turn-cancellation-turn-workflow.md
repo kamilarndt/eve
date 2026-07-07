@@ -28,7 +28,7 @@ trigger is resuming the cancel hook, which tests do directly.
 - **Cancel during model/tool work**: the durable signal (threaded through
   `TurnStepInput.abortSignal`, the layer-0 seam) aborts the in-flight harness
   work in real time. The turn settles with `turn.cancelled` followed by
-  `session.waiting` on the session stream (stream version 17), and the
+  `session.waiting` on the session stream (stream version 18), and the
   session accepts the next message normally.
 - **Cancel is not failure.** A cancelled turn never emits `turn.failed`,
   `step.failed`, or `session.failed`, and the aborted `turnStep` is never
@@ -214,6 +214,6 @@ make the stable-token shape claimable.
 ## Delivery
 
 Shipped in one PR with a **patch** changeset (additive `turn.cancelled`
-protocol event, stream version 16 → 17; no breaking public API). Scope
+protocol event, stream version 17 → 18; no breaking public API). Scope
 decisions settled at review: the runtime-action wait arm is **in**, and the
 cancellation reason is canonical-only until layer 2.
