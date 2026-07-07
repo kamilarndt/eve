@@ -111,7 +111,10 @@ interface GeneratedMcpRecord {
   tagline: string;
   url: string;
   transport: "http" | "sse";
-  authHint: "none" | "required" | "unknown";
+  authHint: "none" | "oauth" | "headers" | "required" | "unknown";
+  /** `detected` when an unauthenticated probe confirmed the strategy. */
+  authBasis: "declared" | "detected";
+  authHeaders: { name: string; description?: string; secret: boolean }[];
   popularity: number;
   docsHref: string;
   categories: string[];
@@ -130,6 +133,7 @@ interface GeneratedOpenApiRecord {
   docsHref: string;
   originId: string;
   version?: string;
+  popularity?: number;
   source: string;
   sourceUrl: string;
   keywords: string[];
@@ -476,6 +480,7 @@ const escapeTsString = (value: string): string =>
 /** APIs.guru's provider names are usually bare domains ("stripe.com"). */
 const openApiLogoDomain = (record: GeneratedOpenApiRecord): string | undefined => {
   const provider = record.provider.toLowerCase().trim();
+  if (provider === "googleapis.com") return "google.com";
   return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(provider) ? provider : undefined;
 };
 
@@ -542,13 +547,80 @@ function buildGeneratedOpenApi(record: GeneratedOpenApiRecord): Integration {
       },
     ],
     source: "generated",
+    ...(record.popularity !== undefined ? { popularity: record.popularity } : {}),
   };
 }
 
 const generatedMcpAuthLabel: Record<GeneratedMcpRecord["authHint"], string> = {
   none: "Public",
+  oauth: "OAuth",
+  headers: "API key",
   required: "Auth required",
   unknown: "Review auth",
+};
+
+/** SCREAMING_SNAKE env-var prefix derived from the provider domain. */
+const envPrefix = (record: GeneratedMcpRecord): string =>
+  record.rootDomain
+    .split(".")[0]
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "PROVIDER";
+
+const envVarForHeader = (prefix: string, headerName: string): string => {
+  if (headerName.toLowerCase() === "authorization") return `${prefix}_TOKEN`;
+  const suffix = headerName
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^X_/, "")
+    .replace(/^_+|_+$/g, "");
+  return `${prefix}_${suffix || "API_KEY"}`;
+};
+
+const headerSnippetLines = (record: GeneratedMcpRecord): string[] => {
+  const prefix = envPrefix(record);
+  const lines = record.authHeaders.map((header) => {
+    const envVar = envVarForHeader(prefix, header.name);
+    if (header.name.toLowerCase() === "authorization") {
+      return `    Authorization: \`Bearer \${process.env.${envVar}}\`,`;
+    }
+    return `    "${header.name}": process.env.${envVar}!,`;
+  });
+  return [`  headers: () => ({`, ...lines, `  }),`];
+};
+
+const authSnippetLines = (record: GeneratedMcpRecord): string[] => {
+  if (record.authHint === "none") {
+    return [`  // Public server: no credentials required.`];
+  }
+  if (record.authHint === "oauth") {
+    return [
+      `  // OAuth server: create a Connect client (vercel connect create) and`,
+      `  // pass auth: connect("<connector-uid>"), or supply a bearer token here.`,
+    ];
+  }
+  if (record.authHint === "headers" && record.authHeaders.length > 0) {
+    return headerSnippetLines(record);
+  }
+  return [`  // Review the provider docs for auth (OAuth or headers), scopes, and rate limits.`];
+};
+
+const authConfigureNote = (record: GeneratedMcpRecord): string => {
+  if (record.authHint === "none") {
+    return "The endpoint answered an unauthenticated MCP initialize, so no credentials are needed — still review which tools it exposes before giving it to an agent.";
+  }
+  if (record.authHint === "oauth") {
+    return "The server advertises OAuth. Front it with a [Vercel Connect](https://vercel.com/docs/connect) client and pass `auth: connect(...)`, or complete the provider's OAuth flow yourself and send the bearer token via `headers`.";
+  }
+  if (record.authHint === "headers" && record.authHeaders.length > 0) {
+    const list = record.authHeaders
+      .map((header) =>
+        header.description ? `\`${header.name}\` — ${header.description}` : `\`${header.name}\``,
+      )
+      .join("; ");
+    return `The server expects credential headers: ${list}.`;
+  }
+  return "Before using it in an agent, confirm the endpoint is live and review the server's authentication (many remote MCP servers use OAuth challenges; others expect header credentials).";
 };
 
 function buildGeneratedMcp(record: GeneratedMcpRecord): Integration {
@@ -561,7 +633,7 @@ function buildGeneratedMcp(record: GeneratedMcpRecord): Integration {
     `export default defineMcpClientConnection({`,
     `  url: "${escapeTsString(record.url)}",`,
     `  description: "${escapeTsString(description)}",`,
-    `  // Review the provider docs for auth (OAuth or headers), scopes, and rate limits.`,
+    ...authSnippetLines(record),
     `});`,
   ].join("\n");
 
@@ -594,7 +666,9 @@ function buildGeneratedMcp(record: GeneratedMcpRecord): Integration {
     configure: [
       `This entry was generated from the ${record.source}. Treat it as a starting point, not a verified scaffold.`,
       "",
-      "Before using it in an agent, confirm the endpoint is live, review the server's authentication (many remote MCP servers use OAuth challenges; others expect header credentials), and check which tools it exposes. Once reviewed, it can be promoted into the curated catalog with concrete auth metadata.",
+      authConfigureNote(record),
+      "",
+      "Once reviewed, it can be promoted into the curated catalog with concrete auth metadata.",
     ].join("\n"),
     surfaces: [
       {
@@ -606,7 +680,7 @@ function buildGeneratedMcp(record: GeneratedMcpRecord): Integration {
         authModes: [],
         authLabels: [generatedMcpAuthLabel[record.authHint] ?? "Review auth"],
         scaffoldable: false,
-        basisLabel: "Declared",
+        basisLabel: record.authBasis === "detected" ? "Detected" : "Declared",
       },
     ],
     source: "generated",

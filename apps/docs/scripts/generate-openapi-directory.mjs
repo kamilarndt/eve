@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { applyTrancoBoost, fetchTrancoRanks } from "./tranco.mjs";
 
 const SOURCE_URL = "https://api.apis.guru/v2/list.json";
 const OUTPUT_PATH = path.join(
@@ -36,7 +37,7 @@ const slugify = (value) =>
 
 const hash = (value) => createHash("sha1").update(value).digest("hex").slice(0, 8);
 
-const response = await fetch(SOURCE_URL);
+const [response, trancoRanks] = await Promise.all([fetch(SOURCE_URL), fetchTrancoRanks()]);
 if (!response.ok) {
   throw new Error(`Failed to fetch ${SOURCE_URL}: ${response.status} ${response.statusText}`);
 }
@@ -71,6 +72,7 @@ const records = Object.entries(directory)
         docsHref,
         originId: id,
         version,
+        popularity: 0,
         source: "APIs.guru OpenAPI Directory",
         sourceUrl: SOURCE_URL,
         keywords: [provider, service, title, id, version, "openapi", "generated"].filter(Boolean),
@@ -78,6 +80,18 @@ const records = Object.entries(directory)
     ];
   })
   .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+// Group API-only provider domains with their brand domain so one flagship
+// spec per brand gets the boost. Bulk specs are unvetted; halve their boost
+// like registry-only MCP entries.
+const providerGroup = (provider) =>
+  provider.toLowerCase() === "googleapis.com" ? "google.com" : provider.toLowerCase();
+applyTrancoBoost(
+  records,
+  trancoRanks,
+  (record) => providerGroup(record.provider),
+  () => 0.5,
+);
 
 const limitedRecords = Number.isFinite(limit) && limit > 0 ? records.slice(0, limit) : records;
 

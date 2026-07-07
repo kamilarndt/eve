@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { applyTrancoBoost, fetchTrancoRanks } from "./tranco.mjs";
 
 /**
  * Generates the bulk MCP connection catalog from public registries:
@@ -188,6 +189,14 @@ const fetchRegistryServers = async () => {
       );
       if (!remote) continue;
       const endpoint = parseEndpoint(remote.url);
+      const authHeaders = (remote.headers ?? [])
+        .filter((header) => header.isRequired === true && typeof header.name === "string")
+        .slice(0, 3)
+        .map((header) => ({
+          name: header.name,
+          description: truncate(cleanText(header.description), 140) || undefined,
+          secret: header.isSecret === true,
+        }));
       records.push({
         endpoint,
         name: cleanText(server.title) || cleanText(server.name) || endpoint.domain,
@@ -195,7 +204,8 @@ const fetchRegistryServers = async () => {
         transport: remote.type === "sse" ? "sse" : "http",
         docsHref: server.websiteUrl ?? server.repository?.url,
         categories: [],
-        authHint: "unknown",
+        authHint: authHeaders.length > 0 ? "headers" : "unknown",
+        authHeaders,
         popularity: 0,
         feed: "mcp-registry",
         registryName: server.name,
@@ -225,7 +235,9 @@ const fetchDirectoryServers = async () => {
         transport: server.remote?.transport === "sse" ? "sse" : "http",
         docsHref: server.documentation ?? server.author?.url,
         categories: (server.categories ?? []).map(cleanText).filter(Boolean),
-        authHint: server.remote?.is_authless === true ? "none" : "required",
+        // Directory connectors authenticate via OAuth unless marked authless.
+        authHint: server.remote?.is_authless === true ? "none" : "oauth",
+        authHeaders: [],
         popularity:
           typeof server.popularity_score === "number" && server.popularity_score > 0
             ? Math.round(server.popularity_score)
@@ -238,9 +250,10 @@ const fetchDirectoryServers = async () => {
   return records;
 };
 
-const [registryServers, directoryServers] = await Promise.all([
+const [registryServers, directoryServers, trancoRanks] = await Promise.all([
   fetchRegistryServers(),
   fetchDirectoryServers(),
+  fetchTrancoRanks(),
 ]);
 
 // Merge by canonical endpoint. The directory feed is listed first so its
@@ -257,6 +270,7 @@ for (const record of [...directoryServers, ...registryServers]) {
   existing.docsHref ||= record.docsHref;
   if (existing.categories.length === 0) existing.categories = record.categories;
   if (existing.authHint === "unknown") existing.authHint = record.authHint;
+  if (existing.authHeaders.length === 0) existing.authHeaders = record.authHeaders;
   existing.popularity = Math.max(existing.popularity, record.popularity);
 }
 
@@ -291,6 +305,8 @@ const records = capped
       url: endpoint.url,
       transport: record.transport,
       authHint: record.authHint,
+      authBasis: "declared",
+      authHeaders: record.authHeaders,
       popularity: record.popularity,
       docsHref: record.docsHref ?? `https://${endpoint.domain}`,
       categories: record.categories,
@@ -311,6 +327,15 @@ const records = capped
     };
   })
   .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+// Anthropic-directory entries are vetted; bare registry entries are not
+// (anyone can publish near a famous domain), so their domain boost is halved.
+applyTrancoBoost(
+  records,
+  trancoRanks,
+  (record) => record.rootDomain,
+  (record) => (record.feeds.includes("anthropic-directory") ? 1 : 0.5),
+);
 
 const limitedRecords = Number.isFinite(limit) && limit > 0 ? records.slice(0, limit) : records;
 
