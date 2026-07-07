@@ -160,6 +160,15 @@ resumes per turn (resume the hook at most once; treat "already
 resumed/disposed" as success), and turn control hooks stay on deferred
 disposal.
 
+Upstream status: [workflow#2779](https://github.com/vercel/workflow/pull/2779)
+fixes #2777/#2778 (suspension-handler per-token ordering; world-local claim
+release). It narrows #2781 (no more late acceptance via event-log
+resurrection) but leaves its accept-before-lock journal race and the replay
+divergence open, and does not touch #2780 — so none of layer 1's
+mitigations become removable when it lands, and per-turn cancel tokens
+remain preferred over a stable session-scoped token even though #2779 would
+make the stable-token shape claimable.
+
 ## Invariants (pinned by tests)
 
 1. An aborted `turnStep` settles by return value; no thrown cancellation
