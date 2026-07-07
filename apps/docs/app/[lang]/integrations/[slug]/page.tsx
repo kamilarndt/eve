@@ -15,7 +15,9 @@ import {
   protocolBadgeClassName,
   protocolLabel,
 } from "@/lib/integrations/data";
+import { integrationMarkdown } from "@/lib/integrations/markdown";
 import { translations } from "@/geistdocs";
+import { CopyMarkdownButton } from "../components/copy-markdown-button";
 import { IntegrationLogo } from "../components/integration-logo";
 import { Markdown } from "../components/markdown";
 import { SetupTabs } from "../components/setup-tabs";
@@ -165,13 +167,23 @@ const IntegrationDetailPage = async ({ params }: PageProps<"/[lang]/integrations
           </div>
           <p className="text-gray-900 text-lg">{integration.tagline}</p>
         </div>
-        <Link
-          className="inline-flex w-fit items-center gap-1 text-gray-900 text-sm transition-colors hover:text-gray-1000"
-          href={integration.docsHref}
-        >
-          Read the full {typeLabel[integration.type].toLowerCase()} docs
-          <ArrowUpRightIcon className="size-3.5" />
-        </Link>
+        <div className="flex flex-wrap items-center gap-4">
+          <Link
+            className="inline-flex w-fit items-center gap-1 text-gray-900 text-sm transition-colors hover:text-gray-1000"
+            href={integration.docsHref}
+          >
+            Read the full {typeLabel[integration.type].toLowerCase()} docs
+            <ArrowUpRightIcon className="size-3.5" />
+          </Link>
+          <CopyMarkdownButton markdown={integrationMarkdown(integration)} />
+          <a
+            className="inline-flex w-fit items-center gap-1 text-gray-900 text-sm transition-colors hover:text-gray-1000"
+            href={`/integrations/${integration.slug}.md`}
+          >
+            View as Markdown
+            <ArrowUpRightIcon className="size-3.5" />
+          </a>
+        </div>
       </header>
 
       <div className="mt-10 flex flex-col">
