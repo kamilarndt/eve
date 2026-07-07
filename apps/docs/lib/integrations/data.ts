@@ -1,10 +1,13 @@
 import {
-  type ConnectionIdentity,
+  type ConnectionCredential,
+  type ConnectionIntegrationRecord,
   type IntegrationEntry,
+  type ConnectionSurfaceRecord,
   channelEntries,
-  connectionEntries,
-  connectionProtocols as protocolsForIdentity,
+  connectionIntegrationRecords,
 } from "@vercel/eve-catalog";
+import generatedMcpCatalog from "./generated-mcp-catalog.json";
+import generatedOpenApiCatalog from "./generated-openapi-catalog.json";
 import type { LogoKey } from "./logos";
 
 /**
@@ -28,7 +31,7 @@ import type { ConnectionProtocol } from "@vercel/eve-catalog";
  * app installation), and `jwtBearer` (a JWT bearer assertion whose subject maps
  * to a principal your IdP recognizes).
  */
-export type AuthMode = "user" | "app" | "jwtBearer";
+export type AuthMode = "user" | "app" | "jwtBearer" | "apiKey" | "basic";
 
 /**
  * Structured description of a connection consumed by the detail page to
@@ -43,10 +46,25 @@ export interface ConnectionSpec {
   authModes: AuthMode[];
   /** Model-facing description; defaults to the integration tagline. */
   description?: string;
-  mcp?: ConnectionIdentity["mcp"];
-  openapi?: ConnectionIdentity["openapi"];
+  mcp?: Extract<ConnectionSurfaceRecord, { type: "mcp" }>;
+  openapi?: Extract<ConnectionSurfaceRecord, { type: "openapi" }>;
+  credentials?: Record<string, ConnectionCredential>;
+  surfaces: ConnectionSurface[];
   /** Optional one-line, provider-specific configure note. Keep it short. */
   configureNote?: string;
+}
+
+export interface ConnectionSurface {
+  protocol: ConnectionProtocol;
+  name: string;
+  description?: string;
+  endpointLabel: string;
+  endpointValue: string;
+  authModes: AuthMode[];
+  authLabels: string[];
+  scaffoldable: boolean;
+  basisLabel: string;
+  headers?: Record<string, string>;
 }
 
 export interface Integration {
@@ -60,6 +78,11 @@ export interface Integration {
   tagline: string;
   /** Brand logo key from `lib/integrations/logos`. */
   logo: LogoKey;
+  /**
+   * Provider domain for generated entries; when set, the UI renders the
+   * domain's favicon (via `/api/logo/[domain]`) instead of the `logo` key.
+   */
+  logoDomain?: string;
   /** Canonical reference doc for deeper details. */
   docsHref: string;
   /** Searchable keywords beyond the name. */
@@ -73,6 +96,39 @@ export interface Integration {
   configure?: string;
   /** Structured connection spec; present only for `type: "connection"`. */
   connection?: ConnectionSpec;
+  surfaces?: ConnectionSurface[];
+  source?: "curated" | "generated";
+}
+
+interface GeneratedMcpRecord {
+  slug: string;
+  name: string;
+  provider: string;
+  domain: string;
+  tagline: string;
+  url: string;
+  transport: "http" | "sse";
+  authHint: "none" | "required" | "unknown";
+  docsHref: string;
+  categories: string[];
+  feeds: string[];
+  source: string;
+  sourceUrl: string;
+  keywords: string[];
+}
+
+interface GeneratedOpenApiRecord {
+  slug: string;
+  name: string;
+  provider: string;
+  tagline: string;
+  specUrl: string;
+  docsHref: string;
+  originId: string;
+  version?: string;
+  source: string;
+  sourceUrl: string;
+  keywords: string[];
 }
 
 /** Docs presentation overlay shared by every integration kind. */
@@ -336,6 +392,56 @@ const connectionPresentations: Record<string, ConnectionPresentation> = {
     keywords: ["mcp", "observability", "traces", "queries"],
     authModes: ["jwtBearer"],
   },
+  stripe: {
+    logo: "stripe",
+    docsHref: "/docs/connections",
+    keywords: ["mcp", "openapi", "payments", "billing", "customers", "subscriptions"],
+    authModes: ["apiKey"],
+    configureNote:
+      "Prefer a restricted API key with only the Stripe resources this agent should read or write.",
+  },
+  sentry: {
+    logo: "sentry",
+    docsHref: "/docs/connections",
+    keywords: ["mcp", "openapi", "errors", "issues", "events", "observability"],
+    authModes: ["apiKey"],
+    configureNote:
+      "The MCP surface uses Sentry's direct-token `Sentry-Bearer` authorization scheme; the OpenAPI surface uses a normal bearer token.",
+  },
+  "github-rest": {
+    logo: "github",
+    docsHref: "/docs/connections",
+    keywords: ["openapi", "code", "issues", "pull requests", "actions", "repositories"],
+    authModes: ["apiKey"],
+    configureNote:
+      "Use a fine-grained GitHub token when possible and keep the `X-GitHub-Api-Version` header aligned with the API version you target.",
+  },
+  asana: {
+    logo: "asana",
+    docsHref: "/docs/connections",
+    keywords: ["openapi", "tasks", "projects", "portfolios", "workspaces"],
+    authModes: ["apiKey"],
+  },
+  jira: {
+    logo: "jira",
+    docsHref: "/docs/connections",
+    keywords: ["openapi", "issues", "projects", "workflows", "atlassian"],
+    authModes: ["basic"],
+    configureNote:
+      "Replace `https://your-domain.atlassian.net` with the Jira Cloud site that owns the issues this agent can access.",
+  },
+  "slack-web-api": {
+    logo: "slack",
+    docsHref: "/docs/connections",
+    keywords: ["openapi", "messages", "channels", "users", "files", "bot token"],
+    authModes: ["apiKey"],
+  },
+  "twilio-api": {
+    logo: "twilio",
+    docsHref: "/docs/connections",
+    keywords: ["openapi", "sms", "calls", "phone numbers", "whatsapp"],
+    authModes: ["basic"],
+  },
 };
 
 function buildChannel(entry: IntegrationEntry): Integration {
@@ -356,48 +462,281 @@ function buildChannel(entry: IntegrationEntry): Integration {
     install: presentation.install,
     quickStart: presentation.quickStart,
     configure: presentation.configure,
+    source: "curated",
   };
 }
 
-function buildConnection(entry: IntegrationEntry): Integration {
-  const presentation = connectionPresentations[entry.slug];
+const escapeTsString = (value: string): string =>
+  value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
+
+/** APIs.guru's provider names are usually bare domains ("stripe.com"). */
+const openApiLogoDomain = (record: GeneratedOpenApiRecord): string | undefined => {
+  const provider = record.provider.toLowerCase().trim();
+  return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(provider) ? provider : undefined;
+};
+
+function buildGeneratedOpenApi(record: GeneratedOpenApiRecord): Integration {
+  const description = record.tagline || `OpenAPI tools for ${record.name}.`;
+  const connectionFile = `agent/connections/${record.slug}.ts`;
+  const snippet = [
+    `// ${connectionFile}`,
+    `import { defineOpenAPIConnection } from "eve/connections";`,
+    ``,
+    `export default defineOpenAPIConnection({`,
+    `  spec: "${escapeTsString(record.specUrl)}",`,
+    `  description: "${escapeTsString(description)}",`,
+    `  // Review the provider docs for baseUrl, headers, auth, scopes, and rate limits.`,
+    `});`,
+  ].join("\n");
+
+  return {
+    slug: record.slug,
+    name: record.name,
+    type: "connection",
+    tagline: description,
+    protocols: ["openapi"],
+    logo: "web",
+    logoDomain: openApiLogoDomain(record),
+    docsHref: record.docsHref,
+    keywords: [
+      ...record.keywords,
+      record.provider,
+      record.originId,
+      record.version,
+      record.source,
+    ].filter((value): value is string => typeof value === "string" && value.length > 0),
+    install: [
+      "Generated OpenAPI entries are docs-only until they are reviewed and tested with eve's runtime.",
+      "",
+      "```bash",
+      "npm install eve@latest",
+      "```",
+    ].join("\n"),
+    quickStart: [
+      `Create \`${connectionFile}\` after reviewing the provider's OpenAPI spec and auth requirements:`,
+      "",
+      "```ts",
+      snippet,
+      "```",
+    ].join("\n"),
+    configure: [
+      `This entry was generated from the ${record.source}. Treat it as a starting point, not a verified scaffold.`,
+      "",
+      "Before using it in an agent, confirm the provider's base URL, authentication scheme, required scopes, write permissions, and rate limits. Once reviewed, it can be promoted into the curated catalog with concrete auth metadata.",
+    ].join("\n"),
+    surfaces: [
+      {
+        protocol: "openapi",
+        name: `${record.name} OpenAPI`,
+        description,
+        endpointLabel: "Spec",
+        endpointValue: record.specUrl,
+        authModes: [],
+        authLabels: ["Review auth"],
+        scaffoldable: false,
+        basisLabel: "Generated",
+      },
+    ],
+    source: "generated",
+  };
+}
+
+const generatedMcpAuthLabel: Record<GeneratedMcpRecord["authHint"], string> = {
+  none: "Public",
+  required: "Auth required",
+  unknown: "Review auth",
+};
+
+function buildGeneratedMcp(record: GeneratedMcpRecord): Integration {
+  const description = record.tagline || `Remote MCP server for ${record.name}.`;
+  const connectionFile = `agent/connections/${record.slug}.ts`;
+  const snippet = [
+    `// ${connectionFile}`,
+    `import { defineMcpClientConnection } from "eve/connections";`,
+    ``,
+    `export default defineMcpClientConnection({`,
+    `  url: "${escapeTsString(record.url)}",`,
+    `  description: "${escapeTsString(description)}",`,
+    `  // Review the provider docs for auth (OAuth or headers), scopes, and rate limits.`,
+    `});`,
+  ].join("\n");
+
+  return {
+    slug: record.slug,
+    name: record.name,
+    type: "connection",
+    tagline: description,
+    protocols: ["mcp"],
+    logo: "web",
+    logoDomain: record.domain,
+    docsHref: record.docsHref,
+    keywords: [...record.keywords, record.provider, record.source].filter(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    ),
+    install: [
+      "Generated MCP entries are docs-only until they are reviewed and tested with eve's runtime.",
+      "",
+      "```bash",
+      "npm install eve@latest",
+      "```",
+    ].join("\n"),
+    quickStart: [
+      `Create \`${connectionFile}\` after reviewing the provider's MCP server docs and auth requirements:`,
+      "",
+      "```ts",
+      snippet,
+      "```",
+    ].join("\n"),
+    configure: [
+      `This entry was generated from the ${record.source}. Treat it as a starting point, not a verified scaffold.`,
+      "",
+      "Before using it in an agent, confirm the endpoint is live, review the server's authentication (many remote MCP servers use OAuth challenges; others expect header credentials), and check which tools it exposes. Once reviewed, it can be promoted into the curated catalog with concrete auth metadata.",
+    ].join("\n"),
+    surfaces: [
+      {
+        protocol: "mcp",
+        name: `${record.name} MCP`,
+        description,
+        endpointLabel: "Endpoint",
+        endpointValue: record.url,
+        authModes: [],
+        authLabels: [generatedMcpAuthLabel[record.authHint] ?? "Review auth"],
+        scaffoldable: false,
+        basisLabel: "Declared",
+      },
+    ],
+    source: "generated",
+  };
+}
+
+const authModeOrder: AuthMode[] = ["user", "app", "jwtBearer", "apiKey", "basic"];
+
+function authModeFromEntry(id: string): AuthMode | null {
+  if (id === "user" || id === "app" || id === "jwtBearer" || id === "apiKey" || id === "basic") {
+    return id;
+  }
+  return null;
+}
+
+function sortAuthModes(modes: Iterable<AuthMode>): AuthMode[] {
+  const set = new Set(modes);
+  return authModeOrder.filter((mode) => set.has(mode));
+}
+
+function authModesForSurface(surface: ConnectionSurfaceRecord): AuthMode[] {
+  if (surface.auth.status !== "required") return [];
+  return sortAuthModes(
+    surface.auth.entries
+      .map((entry) => authModeFromEntry(entry.id))
+      .filter((mode): mode is AuthMode => mode !== null),
+  );
+}
+
+function authLabelsForSurface(surface: ConnectionSurfaceRecord): string[] {
+  if (surface.auth.status === "none") return ["Public"];
+  if (surface.auth.status === "unknown") return ["Unknown"];
+  return surface.auth.entries.map((entry) => entry.label);
+}
+
+function basisLabel(surface: ConnectionSurfaceRecord): string {
+  const via = surface.basis.via;
+  return via.charAt(0).toUpperCase() + via.slice(1);
+}
+
+function buildSurfaceView(surface: ConnectionSurfaceRecord): ConnectionSurface {
+  const base = {
+    protocol: surface.type,
+    name: surface.name,
+    description: surface.description,
+    authModes: authModesForSurface(surface),
+    authLabels: authLabelsForSurface(surface),
+    scaffoldable: surface.scaffoldable ?? false,
+    basisLabel: basisLabel(surface),
+    headers: surface.headers,
+  };
+  if (surface.type === "mcp") {
+    return {
+      ...base,
+      endpointLabel: "Endpoint",
+      endpointValue: surface.url,
+    };
+  }
+  return {
+    ...base,
+    endpointLabel: "Spec",
+    endpointValue: surface.spec,
+  };
+}
+
+function buildConnection(record: ConnectionIntegrationRecord): Integration {
+  const presentation = connectionPresentations[record.slug];
   if (presentation === undefined) {
     throw new Error(
-      `Connection "${entry.slug}" is in the catalog gallery but has no docs presentation.`,
+      `Connection "${record.slug}" is in the catalog gallery but has no docs presentation.`,
     );
   }
-  if (entry.connection === undefined) {
-    throw new Error(`Catalog connection "${entry.slug}" is missing its connection identity.`);
-  }
-  const identity: ConnectionIdentity = entry.connection;
+  const mcp = record.surfaces.find((surface) => surface.type === "mcp");
+  const openapi = record.surfaces.find((surface) => surface.type === "openapi");
+  const surfaces = record.surfaces.map(buildSurfaceView);
+  const authModes = sortAuthModes(surfaces.flatMap((surface) => surface.authModes));
   const spec: ConnectionSpec = {
-    authModes: presentation.authModes,
-    description: identity.description,
+    authModes,
+    description: record.surfaces[0]?.description ?? record.tagline,
+    credentials: record.credentials,
+    surfaces,
   };
   if (presentation.connector !== undefined) spec.connector = presentation.connector;
-  if (identity.mcp !== undefined) spec.mcp = identity.mcp;
-  if (identity.openapi !== undefined) spec.openapi = identity.openapi;
+  if (mcp !== undefined) spec.mcp = mcp;
+  if (openapi !== undefined) spec.openapi = openapi;
   if (presentation.configureNote !== undefined) spec.configureNote = presentation.configureNote;
   return {
-    slug: entry.slug,
-    name: entry.name,
+    slug: record.slug,
+    name: record.name,
     type: "connection",
-    tagline: entry.tagline,
-    protocols: protocolsForIdentity(identity),
+    tagline: record.tagline,
+    protocols: surfaces.map((surface) => surface.protocol),
     logo: presentation.logo,
     docsHref: presentation.docsHref,
-    keywords: presentation.keywords,
+    keywords: [...(record.keywords ?? []), ...(presentation.keywords ?? [])],
     connection: spec,
+    surfaces,
+    source: "curated",
   };
 }
 
-const channels: Integration[] = channelEntries()
+export const channelIntegrations: Integration[] = channelEntries()
   .filter((entry) => entry.surfaces.gallery)
   .map(buildChannel);
 
-const connections: Integration[] = connectionEntries()
-  .filter((entry) => entry.surfaces.gallery)
+export const connectionIntegrations: Integration[] = connectionIntegrationRecords()
+  .filter((entry) => entry.availability.gallery)
   .map(buildConnection);
+
+const hostnameOf = (value: string): string | null => {
+  try {
+    return new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+};
+
+/** Domains already covered by a curated MCP connection; curated always wins. */
+const curatedMcpDomains = new Set(
+  connectionIntegrations.flatMap((integration) =>
+    (integration.surfaces ?? [])
+      .filter((surface) => surface.protocol === "mcp")
+      .map((surface) => hostnameOf(surface.endpointValue))
+      .filter((domain): domain is string => domain !== null),
+  ),
+);
+
+export const generatedMcpIntegrations: Integration[] = (generatedMcpCatalog as GeneratedMcpRecord[])
+  .filter((record) => !curatedMcpDomains.has(record.domain))
+  .map(buildGeneratedMcp);
+
+export const generatedOpenApiIntegrations: Integration[] = (
+  generatedOpenApiCatalog as GeneratedOpenApiRecord[]
+).map(buildGeneratedOpenApi);
 
 /** Display label for each connection protocol. */
 export const protocolLabel: Record<ConnectionProtocol, string> = {
@@ -416,9 +755,40 @@ export const authModeLabel: Record<AuthMode, string> = {
   user: "User",
   app: "App",
   jwtBearer: "JWT bearer",
+  apiKey: "API key",
+  basic: "Basic auth",
 };
 
-export const integrations: Integration[] = [...channels, ...connections];
+export const integrations: Integration[] = [
+  ...channelIntegrations,
+  ...connectionIntegrations,
+  ...generatedMcpIntegrations,
+  ...generatedOpenApiIntegrations,
+];
+
+/**
+ * Slim projection passed to the client gallery: everything the list needs to
+ * render, filter, and search — without the per-entry setup markdown, which
+ * would multiply the page payload by the size of the generated catalogs.
+ */
+export type GalleryIntegration = Pick<
+  Integration,
+  "slug" | "name" | "type" | "tagline" | "logo" | "logoDomain" | "keywords" | "source" | "surfaces"
+>;
+
+export const galleryIntegrations: GalleryIntegration[] = integrations.map(
+  ({ slug, name, type, tagline, logo, logoDomain, keywords, source, surfaces }) => ({
+    slug,
+    name,
+    type,
+    tagline,
+    logo,
+    ...(logoDomain !== undefined ? { logoDomain } : {}),
+    ...(keywords !== undefined ? { keywords } : {}),
+    ...(source !== undefined ? { source } : {}),
+    ...(surfaces !== undefined ? { surfaces } : {}),
+  }),
+);
 
 export const getIntegration = (slug: string): Integration | undefined =>
   integrations.find((integration) => integration.slug === slug);
