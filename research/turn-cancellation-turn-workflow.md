@@ -1,28 +1,27 @@
 ---
 issue: https://github.com/vercel/eve/issues/483
-status: blocked
-last_updated: "2026-07-07"
+status: in-review
+last_updated: "2026-07-08"
 ---
 
 # Turn cancellation, layer 1: turn-workflow ownership
 
-> **Ship status: blocked on upstream performance**
-> (eve#573, draft). The `e2e-local` stress suite exposed that serializing
-> the durable `AbortSignal` into `turnStep` costs ~0.5 s fixed per step on
-> world-local and opens an abort-stream tail reader whose 100 ms polling
-> does a full `readdir` of the world-global chunks directory — a 100-turn
-> session compounds from ~0.9 s/turn into a 240 s replay timeout. The
-> Vercel world is unaffected. Bisection proved the cancel hook and the
-> controller creation are free; the signal-in-step is 100% of the
-> regression (bare step 84 ms → 600 ms; with 20k chunk files on disk,
-> 24–38 s). Filed as
+> **Ship status: unblocked** (eve#573). The `e2e-local` stress suite had
+> exposed that serializing the durable `AbortSignal` into `turnStep` cost
+> ~0.5 s fixed per step on world-local and opened an abort-stream tail
+> reader whose 100 ms polling did a full `readdir` of the world-global
+> chunks directory — a 100-turn session compounded from ~0.9 s/turn into
+> a 240 s replay timeout (the Vercel world was unaffected). Filed as
 > [workflow#2795](https://github.com/vercel/workflow/issues/2795) (fixed
 > cost) and
 > [workflow#2797](https://github.com/vercel/workflow/issues/2797)
-> (scaling). Fallback if upstream stalls: ship without the per-step
-> signal — cancellation immediate during runtime-action waits, next-step-
-> boundary otherwise — and restore real-time mid-step abort when the
-> primitive is cheap.
+> (scaling); both fixed upstream by
+> [workflow#2807](https://github.com/vercel/workflow/pull/2807)
+> (`executeStep` cancels abort readers post-step; chunks sharded
+> per-stream), shipped in `@workflow/core` 5.0.0-beta.28 /
+> `@workflow/world-local` 5.0.0-beta.24 and vendored into eve by #612.
+> Re-benched on the fixed runtime: 40 sequential signal-bearing turns run
+> at the ~385 ms no-signal floor with no compounding.
 
 ## Summary
 
