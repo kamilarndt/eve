@@ -80,6 +80,7 @@ import {
   accumulateObservabilityIssues,
   getObservabilityIssueState,
   observabilityIssueAttributes,
+  preserveObservabilityIssueState,
   setObservabilityIssueState,
 } from "#harness/observability-issues.js";
 import {
@@ -525,9 +526,12 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       stepInput: stepInput.input,
     });
     if (resolvedRuntimeActions.outcome === "unresolved") {
-      return { next: null, session: resolvedRuntimeActions.session };
+      return {
+        next: null,
+        session: preserveObservabilityIssueState(session, resolvedRuntimeActions.session),
+      };
     }
-    session = resolvedRuntimeActions.session;
+    session = preserveObservabilityIssueState(session, resolvedRuntimeActions.session);
 
     const pending = resolvePendingInput({
       history: resolvedRuntimeActions.messages,
@@ -546,11 +550,14 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
         emissionState = await emitTurnEpilogue(emit, emissionState, config.mode);
         return {
           next: null,
-          session: setHarnessEmissionState(pending.session, emissionState),
+          session: setHarnessEmissionState(
+            preserveObservabilityIssueState(session, pending.session),
+            emissionState,
+          ),
         };
       }
 
-      return { next: null, session: pending.session };
+      return { next: null, session: preserveObservabilityIssueState(session, pending.session) };
     }
 
     // Surface denied tool-call approvals as rejected `action.result` events.
@@ -587,7 +594,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       }
     }
 
-    session = pending.session;
+    session = preserveObservabilityIssueState(session, pending.session);
     let messages: ModelMessage[] = pending.messages;
 
     // A resolved session-limit continuation prompt grants a fresh token
@@ -600,9 +607,12 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       session,
     });
     if (continuation.result !== null) {
-      return continuation.result;
+      return {
+        ...continuation.result,
+        session: preserveObservabilityIssueState(session, continuation.result.session),
+      };
     }
-    session = continuation.session;
+    session = preserveObservabilityIssueState(session, continuation.session);
 
     if (stepInput.input?.context !== undefined) {
       for (const entry of stepInput.input.context) {
@@ -656,7 +666,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     // `messages` (which the harness uses to rebuild session history).
     const attributionHeaders = buildGatewayAttributionHeaders(model, config.runtimeIdentity);
 
-    ({ messages, session } = await maybeCompact({
+    const compacted = await maybeCompact({
       abortSignal: config.abortSignal,
       emit,
       emissionState,
@@ -667,7 +677,9 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       resolveModel: config.resolveModel,
       session,
       telemetry: enrichTelemetry(telemetryConfig, agentName) ?? undefined,
-    }));
+    });
+    messages = compacted.messages;
+    session = preserveObservabilityIssueState(session, compacted.session);
 
     const approvedTools = getApprovedTools(session);
 
@@ -1014,7 +1026,10 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       session,
     });
     if (pendingWorkflowInterrupt !== null) {
-      return pendingWorkflowInterrupt;
+      return {
+        ...pendingWorkflowInterrupt,
+        session: preserveObservabilityIssueState(session, pendingWorkflowInterrupt.session),
+      };
     }
 
     const limitResult = await enforceSessionTokenLimit({
@@ -1025,7 +1040,10 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       session,
     });
     if (limitResult !== null) {
-      return limitResult;
+      return {
+        ...limitResult,
+        session: preserveObservabilityIssueState(session, limitResult.session),
+      };
     }
 
     let result: HarnessStepResult;
@@ -1263,10 +1281,14 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
     // --- Handle result ------------------------------------------------------
 
+    const preserveObservedIssueState = (target: HarnessSession) =>
+      preserveObservabilityIssueState(session, target);
+
     return handleStepResult({
       config,
       emit,
       emissionState,
+      preserveObservedIssueState,
       promptMessages: messages,
       result,
       runStep,
@@ -1726,12 +1748,13 @@ async function handleStepResult(input: {
   readonly config: ToolLoopHarnessConfig;
   readonly emit?: ToolLoopHarnessConfig["handleEvent"];
   readonly emissionState: ReturnType<typeof getHarnessEmissionState>;
+  readonly preserveObservedIssueState: (session: HarnessSession) => HarnessSession;
   readonly promptMessages: readonly ModelMessage[];
   readonly result: HarnessStepResult;
   readonly runStep: StepFn;
   readonly session: HarnessSession;
 }): Promise<StepResult> {
-  const { config, emit, promptMessages, result, runStep } = input;
+  const { config, emit, preserveObservedIssueState, promptMessages, result, runStep } = input;
   let { emissionState, session } = input;
 
   const resolvedStepOutput = resolveAssistantStepText(result.response.messages, result.text);
@@ -1963,7 +1986,7 @@ async function handleStepResult(input: {
   // in effect is mode-independent — it is resolved once at the execution layer
   // and read straight off the session here.
   if (config.mode === "task") {
-    return finishTaskTurn({
+    const stepResult = await finishTaskTurn({
       emissionState,
       emit,
       history: promptMessages,
@@ -1972,9 +1995,13 @@ async function handleStepResult(input: {
       session: nextSession,
       stepOutput,
     });
+    return {
+      ...stepResult,
+      session: preserveObservedIssueState(stepResult.session),
+    };
   }
 
-  return finishConversationTurn({
+  const stepResult = await finishConversationTurn({
     emissionState,
     emit,
     history: promptMessages,
@@ -1982,6 +2009,10 @@ async function handleStepResult(input: {
     schema: nextSession.outputSchema,
     session: nextSession,
   });
+  return {
+    ...stepResult,
+    session: preserveObservedIssueState(stepResult.session),
+  };
 }
 
 const OUTPUT_SCHEMA_NOT_FULFILLED = {

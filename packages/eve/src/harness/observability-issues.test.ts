@@ -4,6 +4,7 @@ import {
   accumulateObservabilityIssues,
   getObservabilityIssueState,
   observabilityIssueAttributes,
+  preserveObservabilityIssueState,
   setObservabilityIssueState,
 } from "#harness/observability-issues.js";
 import type { HandleMessageStreamEvent } from "#protocol/message.js";
@@ -187,6 +188,40 @@ describe("accumulateObservabilityIssues", () => {
 
     expect(getObservabilityIssueState(nextSession.state)).toEqual(state);
     expect(session.state).toBeUndefined();
+  });
+
+  it("preserves issue state when a later session snapshot replaces harness state", () => {
+    const base = { sessionId: "wrun_session" } as HarnessSession;
+    const state = accumulateObservabilityIssues({
+      event: eventWithTime({
+        type: "action.result",
+        data: {
+          error: { code: "ACTION_RESULT_REJECTED", message: "Tool execution was denied." },
+          result: {
+            callId: "call_bash",
+            isError: true,
+            kind: "tool-result",
+            output: "Tool execution was denied.",
+            toolName: "bash",
+          },
+          sequence: 1,
+          status: "rejected",
+          stepIndex: 0,
+          turnId: "turn_5",
+        },
+      }),
+      previous: undefined,
+    });
+    const source = setObservabilityIssueState(base, state);
+    const staleSnapshot = {
+      ...base,
+      state: { "eve.harness.other": { value: true } },
+    } as HarnessSession;
+
+    const preserved = preserveObservabilityIssueState(source, staleSnapshot);
+
+    expect(preserved.state?.["eve.harness.other"]).toEqual({ value: true });
+    expect(getObservabilityIssueState(preserved.state)).toEqual(state);
   });
 });
 

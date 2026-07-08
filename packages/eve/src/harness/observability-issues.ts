@@ -58,6 +58,17 @@ export function setObservabilityIssueState(
   };
 }
 
+export function preserveObservabilityIssueState(
+  source: HarnessSession,
+  target: HarnessSession,
+): HarnessSession {
+  const state = getObservabilityIssueState(source.state);
+  if (state === undefined) {
+    return target;
+  }
+  return setObservabilityIssueState(target, state);
+}
+
 export function accumulateObservabilityIssues(input: {
   readonly event: HandleMessageStreamEvent;
   readonly previous: EveObservabilityIssueState | undefined;
