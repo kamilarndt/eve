@@ -8,7 +8,7 @@ import {
   readDurableSession,
 } from "#execution/durable-session-store.js";
 import { hydrateDurableSession } from "#execution/session.js";
-import { reconcileSessionContinuationToken } from "#execution/workflow-steps.js";
+import { reconcileSessionContinuationToken } from "#execution/reconcile-session-continuation-token.js";
 import { emitCancelledTurn } from "#harness/cancelled-turn-emission.js";
 import { getHarnessEmissionState, setHarnessEmissionState } from "#harness/emission.js";
 import { clearPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
