@@ -39,6 +39,7 @@ import {
   createCompactionCompletedEvent,
   createCompactionRequestedEvent,
   createInputRequestedEvent,
+  createMessageCompletedEvent,
   createResultCompletedEvent,
   createStepStartedEvent,
 } from "#protocol/message.js";
@@ -92,11 +93,15 @@ import {
   getHarnessEmissionState,
   setHarnessEmissionState,
 } from "#harness/emission.js";
+import { getModelStreamFailureState } from "#harness/model-stream-attempt.js";
 import {
   extractQuestionInputRequests,
   extractToolApprovalInputRequests,
 } from "#harness/input-extraction.js";
-import { createToolResultMessagePartFromToolError } from "#harness/action-result-helpers.js";
+import {
+  createRuntimeToolResultFromValue,
+  createToolResultMessagePartFromToolError,
+} from "#harness/action-result-helpers.js";
 import { buildTelemetryRuntimeContext } from "#harness/instrumentation-runtime-context.js";
 import {
   consumeDeferredStepInput,
@@ -736,20 +741,26 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
      * The empty-response reissue passes `retryReason` to label the retried
      * call's telemetry.
      */
-    const runOneModelCall = async (opts: {
+    type ModelCallOptions = {
       disabledProviderTools?: ReadonlySet<string>;
       extraSystemNote?: string;
       preparedInput?: ReturnType<typeof prepareModelCallInput>;
-      retryReason?: "empty-response";
+      retryAttempt?: number;
+      retryReason?: "empty-response" | "transient-error";
       suppressStepStartedEmission?: boolean;
       trailingUserNote?: string;
-    }): Promise<HarnessStepResult> => {
+    };
+
+    const runSingleModelCall = async (opts: ModelCallOptions): Promise<HarnessStepResult> => {
       const { instructions, telemetryRuntimeContext = {} } =
         opts.preparedInput ?? prepareModelCallInput(opts.extraSystemNote);
       // Label the reissued call's telemetry; without this a retry is only
       // visible as a second LLM span under one step.
       if (opts.retryReason) {
         telemetryRuntimeContext["eve.retry.reason"] = opts.retryReason;
+      }
+      if (opts.retryAttempt !== undefined) {
+        telemetryRuntimeContext["eve.retry.attempt"] = opts.retryAttempt;
       }
       // Trailing rather than an extraSystemNote prepend: keeps the provider's
       // cached prompt prefix valid, and handleStepResult rebuilds history
@@ -953,15 +964,73 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
         return stepResult;
       };
 
-      return runModelCallWithRetries(
-        () => executeModelCall().catch(rethrowNoOutputAsEmptyResponse),
+      return executeModelCall().catch(rethrowNoOutputAsEmptyResponse);
+    };
+
+    const prepareTransientModelCallRetry = async (error: unknown): Promise<boolean> => {
+      const failureState = getModelStreamFailureState(error);
+      if (failureState?.providerExecutedActionObserved === true) {
+        log.warn("not retrying transient model failure after provider-executed activity", {
+          error,
+          sessionId: session.sessionId,
+          turnId: emissionState.turnId,
+        });
+        return false;
+      }
+
+      if (emit !== undefined && failureState !== undefined) {
+        if (failureState.reasoningObserved || failureState.textObserved) {
+          await emit(
+            createMessageCompletedEvent({
+              finishReason: "error",
+              message: null,
+              sequence: emissionState.sequence,
+              stepIndex: emissionState.stepIndex,
+              turnId: emissionState.turnId,
+            }),
+          );
+        }
+        for (const action of failureState.pendingLocalActionRequests) {
+          await emit(
+            createActionResultEvent({
+              result: createRuntimeToolResultFromValue({
+                callId: action.callId,
+                isError: true,
+                output: {
+                  code: "MODEL_CALL_RETRIED",
+                  message:
+                    "The model response ended before this tool call executed; retrying the model call.",
+                },
+                toolName: action.toolName,
+              }),
+              sequence: emissionState.sequence,
+              stepIndex: emissionState.stepIndex,
+              turnId: emissionState.turnId,
+            }),
+          );
+        }
+      }
+
+      return true;
+    };
+
+    const runOneModelCall = async (opts: ModelCallOptions): Promise<HarnessStepResult> =>
+      runModelCallWithRetries(
+        (attempt) =>
+          runSingleModelCall({
+            ...opts,
+            preparedInput: attempt === 1 ? opts.preparedInput : undefined,
+            retryAttempt: attempt === 1 ? opts.retryAttempt : attempt,
+            retryReason: attempt === 1 ? opts.retryReason : "transient-error",
+            suppressStepStartedEmission: attempt === 1 ? opts.suppressStepStartedEmission : true,
+          }),
         {
           sessionId: session.sessionId,
           turnId: emissionState.turnId,
         },
         config.abortSignal,
+        prepareTransientModelCallRetry,
       );
-    };
 
     // Resolve first-attempt instrumentation before step.started dispatch
     // allows dynamic tool resolvers to update the effective toolset.
@@ -1365,7 +1434,7 @@ type RecoveryRetryCallOptions = {
  */
 type RecoveryModelCallFn = (
   opts: RecoveryRetryCallOptions & {
-    readonly retryReason?: "empty-response";
+    readonly retryReason?: "empty-response" | "transient-error";
     readonly suppressStepStartedEmission?: boolean;
     readonly trailingUserNote?: string;
   },
@@ -2357,17 +2426,21 @@ function resolveApprovalKeyFromTools(
  * transient.
  */
 async function runModelCallWithRetries<T>(
-  fn: () => Promise<T>,
+  fn: (attempt: number) => Promise<T>,
   diag: { readonly sessionId: string; readonly turnId: string },
   abortSignal?: AbortSignal,
+  prepareRetry?: (error: unknown) => Promise<boolean>,
 ): Promise<T> {
   for (let attempt = 1; ; attempt++) {
     throwIfTurnAborted(abortSignal);
     try {
-      return await fn();
+      return await fn(attempt);
     } catch (error) {
       throwIfTurnAborted(abortSignal);
       if (attempt === MODEL_CALL_MAX_ATTEMPTS || classifyModelCallError(error) !== "retry") {
+        throw error;
+      }
+      if (prepareRetry !== undefined && !(await prepareRetry(error))) {
         throw error;
       }
       const delayMs =
@@ -2379,9 +2452,36 @@ async function runModelCallWithRetries<T>(
         turnId: diag.turnId,
         error,
       });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await waitForModelCallRetry(delayMs, abortSignal);
     }
   }
+}
+
+async function waitForModelCallRetry(delayMs: number, abortSignal?: AbortSignal): Promise<void> {
+  if (abortSignal === undefined) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    if (abortSignal.aborted) onAbort();
+  });
+  throwIfTurnAborted(abortSignal);
 }
 
 function findAuthorizationSignalFromToolResults(

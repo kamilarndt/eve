@@ -113,8 +113,10 @@ export type AgentTUIStreamEvent =
   | { type: "step-start" }
   | { type: "step-finish"; usage?: AgentTUIStreamUsage }
   | { type: "assistant-delta"; id: string; delta: string }
+  | { type: "assistant-replace"; id: string; text: string }
   | { type: "assistant-complete"; id: string; text?: string | null }
   | { type: "reasoning-delta"; id: string; delta: string }
+  | { type: "reasoning-replace"; id: string; text: string }
   | { type: "reasoning-complete"; id: string }
   | { type: "tool-call"; toolCallId: string; toolName: string; input: unknown }
   | { type: "tool-approval-request"; approvalId: string; toolCallId: string }
@@ -1836,6 +1838,21 @@ async function* eveEventsToTUIStream(
         const base = textPartId(event.data.turnId, event.data.stepIndex);
         const state = partStateFor(textParts, base);
         const message = event.data.message;
+
+        if (message === null && event.data.finishReason === "error") {
+          const textId = partGenerationId(base, state.generation);
+          state.text = "";
+          state.completed = false;
+          yield { type: "assistant-replace", id: textId, text: "" };
+
+          const reasoningBase = reasoningPartId(event.data.turnId, event.data.stepIndex);
+          const reasoningState = partStateFor(reasoningParts, reasoningBase);
+          const reasoningId = partGenerationId(reasoningBase, reasoningState.generation);
+          reasoningState.text = "";
+          reasoningState.completed = false;
+          yield { type: "reasoning-replace", id: reasoningId, text: "" };
+          break;
+        }
 
         if (state.completed) {
           if (message === null || message === state.text) break;

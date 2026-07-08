@@ -9,6 +9,7 @@ import {
   createInputRequestedEvent,
   createMessageAppendedEvent,
   createMessageCompletedEvent,
+  createReasoningAppendedEvent,
   createReasoningCompletedEvent,
   createResultCompletedEvent,
   createStepStartedEvent,
@@ -690,6 +691,43 @@ describe("defaultMessageReducer", () => {
       },
       { type: "step-start" },
     ]);
+  });
+
+  it("removes partial text and reasoning when a failed model attempt is retried", () => {
+    const reducer = defaultMessageReducer();
+    let data = reducer.reduce(
+      reducer.initial(),
+      createReasoningAppendedEvent({
+        reasoningDelta: "Partial reasoning",
+        reasoningSoFar: "Partial reasoning",
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    );
+    data = reducer.reduce(
+      data,
+      createMessageAppendedEvent({
+        messageDelta: "Partial answer",
+        messageSoFar: "Partial answer",
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    );
+    data = reducer.reduce(
+      data,
+      createMessageCompletedEvent({
+        finishReason: "error",
+        message: null,
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "turn_1",
+      }),
+    );
+
+    expect(data.messages[0]?.parts).toEqual([{ type: "step-start" }]);
+    expect(data.messages[0]?.metadata?.status).toBe("streaming");
   });
 
   it("projects structured file parts from message.received onto the user message", () => {

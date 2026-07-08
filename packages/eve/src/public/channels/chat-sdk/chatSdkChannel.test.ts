@@ -330,6 +330,57 @@ describe("chatSdkChannel", () => {
     ]);
   });
 
+  it("keeps the streamed anchor so a retry replaces partial output", async () => {
+    const adapter = testAdapter();
+    const bridge = chatSdkChannel({
+      adapters: { test: adapter },
+      state: memoryState(),
+      streamingEditIntervalMs: 0,
+      userName: "bot",
+    });
+    const state: ChatSdkChannelState = {
+      anchorMessageId: "posted-1",
+      editSupported: true,
+      streamStepIndex: 0,
+      thread: serializedThread(),
+    };
+    const channelAdapter = withState(getAdapter(bridge.channel), state);
+    const ctx = buildAdapterContext(channelAdapter, stubAccessor());
+
+    await callEvent(
+      channelAdapter,
+      makeEvent("message.completed", {
+        finishReason: "error",
+        message: null,
+        sequence: 1,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+    await callEvent(
+      channelAdapter,
+      makeEvent("message.appended", {
+        messageDelta: "Recovered answer",
+        messageSoFar: "Recovered answer",
+        sequence: 2,
+        stepIndex: 0,
+        turnId: "turn-1",
+      }),
+      ctx,
+    );
+
+    expect(adapter.posted).toEqual([]);
+    expect(adapter.edited).toEqual([
+      {
+        message: { markdown: "Recovered answer" },
+        messageId: "posted-1",
+        threadId: THREAD_ID,
+      },
+    ]);
+    expect(state.anchorMessageId).toBe("posted-1");
+  });
+
   it("falls back to a fresh post when streaming edits are not implemented", async () => {
     const adapter = testAdapter();
     adapter.editError = new NotImplementedError("editMessage");

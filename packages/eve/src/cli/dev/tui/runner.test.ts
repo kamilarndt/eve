@@ -913,6 +913,90 @@ describe("EveTUIRunner reused step indexes", () => {
 });
 
 describe("EveTUIRunner replay guards", () => {
+  it("replaces partial text when the harness retries a failed stream attempt", async () => {
+    const prompts: Array<string | undefined> = ["weather", undefined];
+    const emitted: AgentTUIStreamEvent[] = [];
+    const session = sessionYielding([
+      { type: "step.started", data: { sequence: 0, stepIndex: 0, turnId: "turn_0" } },
+      {
+        type: "reasoning.appended",
+        data: {
+          reasoningDelta: "Partial thought",
+          reasoningSoFar: "Partial thought",
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      {
+        type: "message.appended",
+        data: {
+          messageDelta: "Partial answer",
+          messageSoFar: "Partial answer",
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      {
+        type: "message.completed",
+        data: {
+          finishReason: "error",
+          message: null,
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      {
+        type: "message.appended",
+        data: {
+          messageDelta: "Recovered answer",
+          messageSoFar: "Recovered answer",
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      {
+        type: "message.completed",
+        data: {
+          finishReason: "stop",
+          message: "Recovered answer",
+          sequence: 0,
+          stepIndex: 0,
+          turnId: "turn_0",
+        },
+      },
+      { type: "turn.completed", data: { sequence: 0, turnId: "turn_0" } },
+      { type: "session.waiting", data: { wait: "next-user-message" } },
+    ]);
+    const renderer: AgentTUIRenderer = {
+      readPrompt: vi.fn(async () => prompts.shift()),
+      renderStream: vi.fn(async (result) => {
+        for await (const event of result.events as AsyncIterable<AgentTUIStreamEvent>) {
+          emitted.push(event);
+        }
+      }),
+    };
+
+    await new EveTUIRunner({ session, renderer, name: "Weather Agent" }).run();
+
+    expect(emitted).toContainEqual({
+      id: "text:turn_0:0",
+      text: "",
+      type: "assistant-replace",
+    });
+    expect(emitted).toContainEqual({
+      id: "reasoning:turn_0:0",
+      text: "",
+      type: "reasoning-replace",
+    });
+    expect(
+      emitted.filter((event) => event.type === "assistant-delta").map((event) => event.delta),
+    ).toEqual(["Partial answer", "Recovered answer"]);
+  });
+
   it("deduplicates repeated call IDs and divergent text attempts in one turn", async () => {
     const prompts: Array<string | undefined> = ["weather", undefined];
     const emitted: AgentTUIStreamEvent[] = [];

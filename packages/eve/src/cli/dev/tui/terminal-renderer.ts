@@ -2318,6 +2318,18 @@ export class TerminalRenderer implements AgentTUIRenderer {
         break;
       }
 
+      case "assistant-replace": {
+        const text = stripTerminalControls(event.text);
+        turnState.text.set(event.id, text);
+        if (text.trim().length === 0) {
+          this.#removeBlock(event.id);
+          this.#paint();
+        } else {
+          this.#upsertAssistantBlock(event.id, text, true);
+        }
+        break;
+      }
+
       case "assistant-complete": {
         const existing = turnState.text.get(event.id) ?? "";
         const text =
@@ -2337,6 +2349,19 @@ export class TerminalRenderer implements AgentTUIRenderer {
         this.#setStreamStatus(STATUS.streaming);
         turnState.reasoning.set(event.id, text);
         this.#upsertReasoningBlock(event.id, text, true, displayModes);
+        break;
+      }
+
+      case "reasoning-replace": {
+        if (displayModes.reasoning === "hidden") break;
+        const text = stripTerminalControls(event.text);
+        turnState.reasoning.set(event.id, text);
+        if (text.trim().length === 0) {
+          this.#removeBlock(event.id);
+          this.#paint();
+        } else {
+          this.#upsertReasoningBlock(event.id, text, true, displayModes);
+        }
         break;
       }
 

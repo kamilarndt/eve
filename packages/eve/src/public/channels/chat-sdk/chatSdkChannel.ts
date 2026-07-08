@@ -381,6 +381,11 @@ function defaultEvents<TAdapters extends ChatSdkAdapters>(
       }
       channel.state.pendingToolCallMessage = null;
       if (!event.message) {
+        // A transient stream retry uses an error/null completion to discard
+        // the failed attempt. Keep the live anchor so the retry's full
+        // `messageSoFar` snapshot replaces it instead of posting a second
+        // message and leaving the partial response visible.
+        if (event.finishReason === "error") return;
         clearStream(channel.state);
         return;
       }

@@ -579,6 +579,29 @@ describe("TerminalRenderer (inline scrollback)", () => {
     expect(countOccurrences(snapshot, "get_weather")).toBe(2);
   });
 
+  it("replaces partial assistant and reasoning blocks for a retried stream attempt", async () => {
+    const { screen, renderer } = makeRenderer();
+
+    await renderer.renderStream(
+      streamOf([
+        { type: "reasoning-delta", id: "reasoning:turn-0:0", delta: "Partial thought" },
+        { type: "assistant-delta", id: "text:turn-0:0", delta: "Partial answer" },
+        { type: "reasoning-replace", id: "reasoning:turn-0:0", text: "" },
+        { type: "assistant-replace", id: "text:turn-0:0", text: "" },
+        { type: "assistant-delta", id: "text:turn-0:0", delta: "Recovered answer" },
+        { type: "assistant-complete", id: "text:turn-0:0" },
+        { type: "finish" },
+      ]),
+      { submittedPrompt: "retry", continueSession: true },
+    );
+    renderer.shutdown();
+
+    const snapshot = screen.snapshot();
+    expect(snapshot).toContain("Recovered answer");
+    expect(snapshot).not.toContain("Partial answer");
+    expect(snapshot).not.toContain("Partial thought");
+  });
+
   it("settles a tool block when its result arrives in a later stream pass", async () => {
     const { screen, renderer } = makeRenderer();
 

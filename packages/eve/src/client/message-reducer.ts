@@ -249,7 +249,9 @@ function reduceMessageData(data: EveMessageData, event: EveAgentReducerEvent): E
     case "message.completed":
       return updateAssistantMessage(data, event.data.turnId, (message) => {
         if (event.data.message === null) {
-          return removeTextPart(message, event.data.stepIndex);
+          return event.data.finishReason === "error"
+            ? removeStreamedAttemptParts(message, event.data.stepIndex)
+            : removeTextPart(message, event.data.stepIndex);
         }
 
         return upsertPart(ensureStepStartPart(message, event.data.stepIndex), {
@@ -392,6 +394,27 @@ function removeTextPart(message: EveAssistantMessage, stepIndex: number): EveAss
     metadata: {
       ...message.metadata,
       status: "complete",
+    },
+    parts,
+  };
+}
+
+function removeStreamedAttemptParts(
+  message: EveAssistantMessage,
+  stepIndex: number,
+): EveAssistantMessage {
+  const parts = message.parts.filter(
+    (part) => (part.type !== "text" && part.type !== "reasoning") || part.stepIndex !== stepIndex,
+  );
+  if (parts.length === message.parts.length) {
+    return message;
+  }
+
+  return {
+    ...message,
+    metadata: {
+      ...message.metadata,
+      status: "streaming",
     },
     parts,
   };

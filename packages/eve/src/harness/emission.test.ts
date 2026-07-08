@@ -7,6 +7,7 @@ import {
   type HarnessEmissionState,
   setHarnessEmissionState,
 } from "#harness/emission.js";
+import { getModelStreamFailureState } from "#harness/model-stream-attempt.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { HarnessEmitFn, HarnessSession } from "#harness/types.js";
 import { EMPTY_DELIVERY_SENTINEL } from "#shared/empty-delivery.js";
@@ -590,6 +591,67 @@ describe("emitStreamContent error-part handling", () => {
     expect(caught).toBeInstanceOf(Error);
     expect((caught as Error).message).toBe("upstream 503");
     expect((caught as Error).name).toBe("APICallError");
+    expect((caught as Error).cause).toBe(raw);
+  });
+
+  it("retains pending local calls and provider activity on a streamed failure", async () => {
+    const raw = { message: "Overloaded", type: "overloaded_error" };
+    let caught: unknown;
+
+    try {
+      await emitStreamContent(
+        createEmitStub(),
+        EMISSION_STATE,
+        streamOf([
+          {
+            input: {},
+            providerExecuted: false,
+            toolCallId: "call-local",
+            toolName: "local_tool",
+            type: "tool-call",
+          } as TextStreamPart<ToolSet>,
+          {
+            input: {},
+            providerExecuted: true,
+            toolCallId: "call-provider",
+            toolName: "web_search",
+            type: "tool-call",
+          } as TextStreamPart<ToolSet>,
+          { error: raw, type: "error" } as TextStreamPart<ToolSet>,
+        ]),
+        {
+          excludedActionToolNames: new Set(),
+          tools: new Map([
+            [
+              "local_tool",
+              {
+                description: "Local tool",
+                execute: vi.fn(),
+                inputSchema: jsonSchema({ type: "object" }),
+                name: "local_tool",
+              },
+            ],
+          ]),
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+
+    expect((caught as Error).cause).toBe(raw);
+    expect(getModelStreamFailureState(caught)).toEqual({
+      pendingLocalActionRequests: [
+        {
+          callId: "call-local",
+          input: {},
+          kind: "tool-call",
+          toolName: "local_tool",
+        },
+      ],
+      providerExecutedActionObserved: true,
+      reasoningObserved: false,
+      textObserved: false,
+    });
   });
 
   it("falls back to a JSON-ish message for opaque plain-object throwables", async () => {

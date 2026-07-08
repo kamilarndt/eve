@@ -20,6 +20,14 @@ export default defineAgent({
 
 Compaction also preserves the framework's own tool state automatically. It resets read-before-write tracking (so a write afterward re-reads the file whose read evidence was summarized away) and re-injects the active todo list, so the model keeps its task list across the summary. There is no per-tool hook to configure.
 
+## Transient model failures
+
+The harness automatically retries transient model-call failures, including rate limits, timeouts, network failures, server errors, and provider overload events delivered inside a stream. It makes up to three attempts with exponential backoff and restarts only the current uncommitted model call. Earlier model steps, completed tool results, sandbox changes, and other durable session work remain intact.
+
+A recovered attempt stays within the same logical step and does not emit `step.failed` or `turn.failed`. Partial text or reasoning from the discarded attempt is replaced when the retry streams. A local tool call proposed by an incomplete response has not executed yet—the AI SDK executes local tools only after the provider finishes the model response—so the harness closes that proposal and lets the retry produce a fresh call. It does not automatically replay a request after provider-executed tool activity, where eve cannot guarantee that the upstream operation is safe to repeat.
+
+After all attempts fail, conversation sessions park so the user can try again. Task-mode runs, including subagents and schedules, return an error result to their caller because they cannot wait for new user input. Authentication failures, invalid requests, and other structural configuration errors are not retried.
+
 ## Built-in tools
 
 These ship with every agent, no imports. The harness shows the model the tool descriptors first, then executes only what the model actually calls; discovery never runs them. The shell and file tools (`bash`, `read_file`, `write_file`, `glob`, `grep`) live in the app runtime and proxy their work into the agent's single [sandbox](../sandbox); the rest run in the app runtime. The "Where it runs" column below names where each tool's effect lands.

@@ -1,14 +1,5 @@
-import type {
-  ModelMessage,
-  TextStreamPart,
-  ToolSet,
-  TypedToolCall,
-  TypedToolError,
-  TypedToolResult,
-} from "ai";
+import type { TextStreamPart, ToolSet, TypedToolCall, TypedToolError, TypedToolResult } from "ai";
 
-type ToolResponsePart = Extract<ModelMessage, { role: "tool" }>["content"][number];
-type InlineToolResultPart = Extract<ToolResponsePart, { type: "tool-result" }>;
 type InlineToolResultJsonValue = Extract<InlineToolResultPart["output"], { type: "json" }>["value"];
 
 import type { AssistantStepFinishReason, RuntimeIdentity } from "#protocol/message.js";
@@ -32,7 +23,6 @@ import {
 } from "#protocol/message.js";
 import type { RunMode } from "#shared/run-mode.js";
 import { hasEmptyDeliverySentinel } from "#shared/empty-delivery.js";
-import { toError } from "#shared/errors.js";
 import type { JsonObject } from "#shared/json.js";
 import {
   createRuntimeToolResultFromStepResult,
@@ -46,19 +36,21 @@ import {
 import { createInvalidToolCallInputError } from "#harness/tool-call-input-errors.js";
 import type {
   RuntimeActionRequest,
+  RuntimeToolCallActionRequest,
   RuntimeToolResultActionResult,
 } from "#runtime/actions/types.js";
 import { isAuthorizationSignal, isPendingAuthorizationToolOutput } from "#harness/authorization.js";
 import { contextStorage } from "#context/container.js";
 import { readToolInterrupt } from "#harness/tool-interrupts.js";
 import { createProviderStreamActionBatch } from "#harness/stream-actions.js";
-import type {
-  HarnessEmitFn,
-  HarnessSession,
-  HarnessToolMap,
-  SessionStateMap,
-  StepInput,
-} from "#harness/types.js";
+import {
+  type EmittedStreamContent,
+  type InlineToolResultPart,
+  normalizeModelStreamError,
+  setModelStreamFailureState,
+  type StreamActionEmissionOptions,
+} from "#harness/model-stream-attempt.js";
+import type { HarnessEmitFn, HarnessSession, SessionStateMap, StepInput } from "#harness/types.js";
 
 // ---------------------------------------------------------------------------
 // Emission state
@@ -324,27 +316,6 @@ export function normalizeAssistantStepFinishReason(
 // ---------------------------------------------------------------------------
 
 /**
- * Result of consuming one step's `fullStream`.
- *
- * Inline results avoid duplicate post-step events. Approval-resume results
- * also repair persisted history or route authorization back to the park
- * detector.
- */
-interface EmittedStreamContent {
-  readonly emittedActionCallIds: ReadonlySet<string>;
-  readonly handledInlineToolResultCallIds: ReadonlySet<string>;
-  readonly invalidInputToolCallIds: ReadonlySet<string>;
-  readonly inlineAuthorizationResults: readonly TypedToolResult<ToolSet>[];
-  readonly inlineToolResultParts: readonly InlineToolResultPart[];
-  readonly trailingInlineToolResultParts: readonly InlineToolResultPart[];
-}
-
-interface StreamActionEmissionOptions {
-  readonly excludedActionToolNames: ReadonlySet<string>;
-  readonly tools: HarnessToolMap;
-}
-
-/**
  * Consumes the AI SDK `fullStream` and emits real-time text and reasoning
  * events.
  *
@@ -360,12 +331,16 @@ export async function emitStreamContent(
 ): Promise<EmittedStreamContent> {
   let currentReasoning = "";
   let currentMessage = "";
+  let reasoningObserved = false;
+  let textObserved = false;
   let finishReason: AssistantStepFinishReason = "stop";
   let streamError: Error | undefined;
   const toolCallIdsSeenInStream = new Set<string>();
   const emittedActionCallIds = new Set<string>();
   const emittedActionResultCallIds = new Set<string>();
   const providerToolCallIdsSeen = new Set<string>();
+  const pendingLocalActionRequests = new Map<string, RuntimeToolCallActionRequest>();
+  let providerExecutedActionObserved = false;
   const providerActionBatch = createProviderStreamActionBatch({ emitFn, state });
   const handledInlineToolResultCallIds = new Set<string>();
   const invalidInputToolCallIds = new Set<string>();
@@ -399,6 +374,9 @@ export async function emitStreamContent(
     }
 
     emittedActionCallIds.add(action.callId);
+    if (action.kind === "tool-call") {
+      pendingLocalActionRequests.set(action.callId, action);
+    }
     await emitFn(
       createActionsRequestedEvent({
         actions: [action],
@@ -414,6 +392,7 @@ export async function emitStreamContent(
     readonly toolCallId: string;
     readonly toolName: string;
   }): Promise<void> => {
+    providerExecutedActionObserved = true;
     if (providerToolCallIdsSeen.has(toolCall.toolCallId)) {
       return;
     }
@@ -443,6 +422,7 @@ export async function emitStreamContent(
       return;
     }
     emittedActionResultCallIds.add(result.callId);
+    pendingLocalActionRequests.delete(result.callId);
     await emitFn(
       createActionResultEvent({
         result,
@@ -493,6 +473,7 @@ export async function emitStreamContent(
     switch (part.type) {
       case "reasoning-delta":
         await providerActionBatch.flush();
+        reasoningObserved = true;
         currentReasoning += part.text;
         await emitFn(
           createReasoningAppendedEvent({
@@ -506,6 +487,7 @@ export async function emitStreamContent(
         break;
       case "text-delta":
         await providerActionBatch.flush();
+        textObserved = true;
         // Flush accumulated reasoning before text begins.
         if (currentReasoning.trim().length > 0) {
           await emitFn(
@@ -619,7 +601,7 @@ export async function emitStreamContent(
         // so plain-object shapes (structured-clone survivors, typed
         // gateway payloads) keep their `message`, `name`, `stack`, and
         // `cause` instead of degrading to `new Error("[object Object]")`.
-        streamError = toError(part.error);
+        streamError = normalizeModelStreamError(part.error);
         break;
       case "abort":
         // The SDK does not resolve step results for aborted in-flight steps.
@@ -632,6 +614,12 @@ export async function emitStreamContent(
   await providerActionBatch.flush();
 
   if (streamError !== undefined) {
+    setModelStreamFailureState(streamError, {
+      pendingLocalActionRequests: [...pendingLocalActionRequests.values()],
+      providerExecutedActionObserved,
+      reasoningObserved,
+      textObserved,
+    });
     throw streamError;
   }
 
