@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { getWorld, resumeHook, start } from "#internal/workflow/runtime.js";
 
 import { captureTurnEvents, filterEventsByType } from "#internal/testing/events.js";
@@ -505,9 +505,9 @@ describe("workflowEntry integration", () => {
       try {
         await stream.nextTurn();
 
-        const world = await getWorld();
-        const persisted = await world.runs.get(run.runId);
-        const attrs = (persisted as { attributes?: Record<string, string> }).attributes ?? {};
+        const attrs = await waitForRunAttributes(run.runId, (attributes) => {
+          return attributes["$eve.session_status"] === "waiting";
+        });
 
         expect(attrs["$eve.type"]).toBe("session");
         expect(attrs["$eve.trigger"]).toBe("http");
@@ -669,4 +669,20 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
       clearTimeout(timeout);
     }
   }
+}
+
+async function waitForRunAttributes(
+  runId: string,
+  predicate: (attributes: Record<string, string>) => boolean,
+): Promise<Record<string, string>> {
+  let latest: Record<string, string> = {};
+
+  await vi.waitFor(async () => {
+    const world = await getWorld();
+    const persisted = await world.runs.get(runId);
+    latest = (persisted as { attributes?: Record<string, string> }).attributes ?? {};
+    expect(predicate(latest)).toBe(true);
+  });
+
+  return latest;
 }
