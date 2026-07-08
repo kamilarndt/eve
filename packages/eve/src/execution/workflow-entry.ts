@@ -13,6 +13,7 @@ import {
   readChannelRequestId,
   readRootSessionId,
 } from "#execution/eve-workflow-attributes.js";
+import type { EveSessionStatus } from "#execution/eve-workflow-attributes.js";
 import type { RunMode } from "#shared/run-mode.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { notifyDelegatedParentStep } from "#execution/delegated-parent-notification.js";
@@ -178,6 +179,7 @@ async function runDriverLoop(input: {
       await deliveryHook.rekey(input.sessionState.continuationToken);
     }
 
+    let sessionStatus: EveSessionStatus = "running";
     let action: NextDriverAction = await dispatchAndAwaitTurn({
       bufferedDeliveries,
       capabilities: input.capabilities,
@@ -214,7 +216,10 @@ async function runDriverLoop(input: {
         );
       }
 
-      await setEveAttributes(buildSessionStatusAttributes("waiting"));
+      if (sessionStatus !== "waiting") {
+        await setEveAttributes(buildSessionStatusAttributes("waiting"));
+        sessionStatus = "waiting";
+      }
 
       // Rekey to the parked turn's continuation token before awaiting the next
       // delivery — covers both the first turn's anchor and any later rekey.
@@ -231,8 +236,6 @@ async function runDriverLoop(input: {
             allPayloads.push(...next.value.payloads);
           }
         }
-
-        await setEveAttributes(buildSessionStatusAttributes("running"));
 
         action = await dispatchAndAwaitTurn({
           bufferedDeliveries,
@@ -271,8 +274,6 @@ async function runDriverLoop(input: {
         // Fully routed to a descendant; parent has no turn to run.
         continue;
       }
-
-      await setEveAttributes(buildSessionStatusAttributes("running"));
 
       action = await dispatchAndAwaitTurn({
         bufferedDeliveries,
