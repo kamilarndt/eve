@@ -2,6 +2,7 @@ import type { ModelMessage } from "ai";
 import { describe, expect, it } from "vitest";
 
 import {
+  closeDanglingToolCalls,
   INTERRUPTED_TOOL_CALL_RESULT,
   reconcileToolTranscript,
 } from "#harness/transcript-obligations.js";
@@ -233,5 +234,49 @@ describe("reconcileToolTranscript", () => {
     const result = reconcileToolTranscript(messages);
 
     expect(result.repaired).toEqual([{ toolCallId: "call-1", toolName: "bash" }]);
+  });
+});
+
+describe("closeDanglingToolCalls", () => {
+  it("closes only the calls the resolver supplies an output for, with that output", () => {
+    const messages: ModelMessage[] = [
+      assistantToolCall("call-invalid"),
+      assistantToolCall("call-parked"),
+    ];
+
+    const result = closeDanglingToolCalls(messages, (call) =>
+      call.toolCallId === "call-invalid"
+        ? { type: "error-text", value: "Failed to parse tool-call arguments" }
+        : undefined,
+    );
+
+    expect(result.closed).toEqual([{ toolCallId: "call-invalid", toolName: "bash" }]);
+    expect(result.messages).toEqual([
+      messages[0],
+      {
+        content: [
+          {
+            output: { type: "error-text", value: "Failed to parse tool-call arguments" },
+            toolCallId: "call-invalid",
+            toolName: "bash",
+            type: "tool-result",
+          },
+        ],
+        role: "tool",
+      },
+      messages[1],
+    ]);
+  });
+
+  it("does not re-close a call that already has a tool result", () => {
+    const messages: ModelMessage[] = [assistantToolCall("call-1"), toolResult("call-1")];
+
+    const result = closeDanglingToolCalls(messages, () => ({
+      type: "error-text",
+      value: "should not appear",
+    }));
+
+    expect(result.closed).toEqual([]);
+    expect(result.messages).toEqual(messages);
   });
 });

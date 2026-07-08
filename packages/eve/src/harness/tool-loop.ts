@@ -98,7 +98,10 @@ import {
 } from "#harness/input-extraction.js";
 import { createToolResultMessagePartFromToolError } from "#harness/action-result-helpers.js";
 import { closeApprovedActionBatch } from "#harness/approved-tool-execution.js";
-import { reconcileToolTranscript } from "#harness/transcript-obligations.js";
+import {
+  closeDanglingToolCalls,
+  reconcileToolTranscript,
+} from "#harness/transcript-obligations.js";
 import { buildTelemetryRuntimeContext } from "#harness/instrumentation-runtime-context.js";
 import {
   consumeDeferredStepInput,
@@ -1751,15 +1754,17 @@ async function handleStepResult(input: {
     ...(result.invalidInputToolCallIds ?? []),
     ...invalidInputToolErrors.map((toolError) => toolError.toolCallId),
   ]);
+  const invalidInputClosures = new Map(
+    invalidInputToolErrors.map((toolError) => [
+      toolError.toolCallId,
+      createToolResultMessagePartFromToolError(toolError).output,
+    ]),
+  );
   const rawResponseMessages = emptyDelivery
     ? []
-    : insertInlineToolResultMessages({
-        append: invalidInputToolErrors.map((toolError) =>
-          createToolResultMessagePartFromToolError(toolError),
-        ),
-        prepend: [],
-        responseMessages: result.response.messages,
-      });
+    : closeDanglingToolCalls(result.response.messages, (call) =>
+        invalidInputClosures.get(call.toolCallId),
+      ).messages;
   const stepOutput = emptyDelivery ? null : resolvedStepOutput;
 
   const providerExecutedOutcomeIds = new Set<string>();

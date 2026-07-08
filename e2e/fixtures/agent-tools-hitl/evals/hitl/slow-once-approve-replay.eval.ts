@@ -16,7 +16,7 @@ const TOOL_NAME = "guarded-slow-echo";
  * fixed: the follow-up turn succeeds.
  */
 export default defineEval({
-  description: "HITL red (#460): approved slow tool's result survives into replayed history.",
+  description: "#460: approved slow tool's result survives into replayed history.",
   async test(t) {
     const parked = await t.send(
       `Call the ${TOOL_NAME} tool with note "alpha". After its result arrives, call it again with note "beta" — strictly one call at a time, never in parallel. When both results are in, reply with exactly SLOW-DONE.`,

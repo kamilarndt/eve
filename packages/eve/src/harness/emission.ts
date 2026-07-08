@@ -478,7 +478,9 @@ export async function emitStreamContent(
         }
         await emitActionResult(createRuntimeToolResultFromToolError(toolError));
         handledInlineToolResultCallIds.add(toolCall.toolCallId);
-        trailingInlineToolResultParts.push(createToolResultMessagePartFromToolError(toolError));
+        // Transcript closure is owned by `handleStepResult`, which re-derives
+        // the same error via `getInvalidToolCallInputErrors` and closes the
+        // call through `closeDanglingToolCalls`. This site only observes.
         return;
       }
       throw error;

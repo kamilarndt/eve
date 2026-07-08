@@ -15,7 +15,7 @@ const TOOL_NAME = "dynamic_guarded_echo";
  * Expected once fixed: the follow-up turn succeeds.
  */
 export default defineEval({
-  description: "HITL red (#533): a resolved approval park replays cleanly on the next turn.",
+  description: "#533: resolved approval park replays cleanly on the next turn.",
   async test(t) {
     const parked = await t.send(`Call the \`${TOOL_NAME}\` tool with note "replay-probe".`);
     parked.calledTool(TOOL_NAME, { status: "pending", count: 1 });

@@ -546,14 +546,9 @@ describe("emitStreamContent action requests", () => {
       }),
     ]);
     expect([...result.invalidInputToolCallIds]).toEqual(["call-bad"]);
-    expect(result.trailingInlineToolResultParts).toEqual([
-      {
-        output: { type: "error-text", value: message },
-        toolCallId: "call-bad",
-        toolName: "web_search",
-        type: "tool-result",
-      },
-    ]);
+    // Transcript closure is owned by the step-result handler via
+    // `closeDanglingToolCalls`; the stream layer only emits the event.
+    expect(result.trailingInlineToolResultParts).toEqual([]);
   });
 });
 

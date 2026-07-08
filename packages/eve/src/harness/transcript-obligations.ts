@@ -3,6 +3,7 @@ import type { ModelMessage } from "ai";
 type ToolMessage = Extract<ModelMessage, { role: "tool" }>;
 type ToolResponsePart = ToolMessage["content"][number];
 type ToolResultPart = Extract<ToolResponsePart, { type: "tool-result" }>;
+type ToolResultOutput = ToolResultPart["output"];
 
 /**
  * Synthetic result recorded for a local tool call that reached a model call
@@ -12,36 +13,38 @@ type ToolResultPart = Extract<ToolResponsePart, { type: "tool-result" }>;
 export const INTERRUPTED_TOOL_CALL_RESULT =
   "Tool execution did not complete: the call was interrupted before a result was recorded. Treat this call as not executed.";
 
-/** One tool call the reconciler closed with a synthetic result. */
-export interface RepairedToolCall {
+/** One local tool call found without a terminal `tool-result`. */
+export interface DanglingToolCall {
   readonly toolCallId: string;
   readonly toolName: string;
 }
 
 /**
- * Enforces the transcript-closure invariant on an assembled model request:
- * every non-provider-executed `tool-call` must have a terminal `tool-result`
- * before the transcript reaches a provider, or the provider rejects the
- * replay (Anthropic: `tool_use` ids without `tool_result` blocks; OpenAI
- * Responses: `No tool output found for function call`).
+ * The one primitive that closes a local `tool-call`'s transcript obligation.
+ * Walks the messages, finds every non-provider-executed `tool-call` without
+ * a `tool-result`, and — when `resolveClosure` supplies an output for it —
+ * records that closure in the message immediately after the assistant
+ * message carrying the call (merged into an existing tool message, or
+ * inserted as a new one), satisfying provider adjacency rules. Calls whose
+ * closure resolves to `undefined` are left dangling, so legitimately open
+ * obligations (parked approvals, pending runtime actions) pass through
+ * untouched.
  *
- * Dangling calls are closed durably with a synthetic error result placed in
- * the message immediately after the assistant message that carries the call
- * (merged into an existing tool message, or inserted as a new one), so the
- * repair satisfies provider adjacency rules. This also heals sessions whose
- * durable history was already poisoned by a missed closure.
- *
- * There are no exemptions: the harness closes every parked local call at
- * resume (see `approved-tool-execution.ts`), so anything still dangling here
- * is an orphan nothing else will close.
+ * Every transcript closure the harness synthesizes goes through here: the
+ * step-time closure of invalid-input tool calls (detailed, model-actionable
+ * error text) and the request-assembly guard
+ * {@link reconcileToolTranscript} (generic interrupted text).
  */
-export function reconcileToolTranscript(messages: readonly ModelMessage[]): {
+export function closeDanglingToolCalls(
+  messages: readonly ModelMessage[],
+  resolveClosure: (call: DanglingToolCall) => ToolResultOutput | undefined,
+): {
+  readonly closed: readonly DanglingToolCall[];
   readonly messages: ModelMessage[];
-  readonly repaired: readonly RepairedToolCall[];
 } {
   const closedCallIds = collectClosedCallIds(messages);
 
-  const repaired: RepairedToolCall[] = [];
+  const closed: DanglingToolCall[] = [];
   const result: ModelMessage[] = [];
   let pendingClosures: ToolResultPart[] = [];
 
@@ -76,10 +79,16 @@ export function reconcileToolTranscript(messages: readonly ModelMessage[]): {
         continue;
       }
 
+      const call: DanglingToolCall = { toolCallId: part.toolCallId, toolName: part.toolName };
+      const output = resolveClosure(call);
+      if (output === undefined) {
+        continue;
+      }
+
       closedCallIds.add(part.toolCallId);
-      repaired.push({ toolCallId: part.toolCallId, toolName: part.toolName });
+      closed.push(call);
       pendingClosures.push({
-        output: { type: "error-text", value: INTERRUPTED_TOOL_CALL_RESULT },
+        output,
         toolCallId: part.toolCallId,
         toolName: part.toolName,
         type: "tool-result",
@@ -89,7 +98,35 @@ export function reconcileToolTranscript(messages: readonly ModelMessage[]): {
 
   flushPendingClosures(undefined);
 
-  return { messages: result, repaired };
+  return { closed, messages: result };
+}
+
+/**
+ * Enforces the transcript-closure invariant on an assembled model request:
+ * every non-provider-executed `tool-call` must have a terminal `tool-result`
+ * before the transcript reaches a provider, or the provider rejects the
+ * replay (Anthropic: `tool_use` ids without `tool_result` blocks; OpenAI
+ * Responses: `No tool output found for function call`).
+ *
+ * Dangling calls are closed durably with a synthetic error result via
+ * {@link closeDanglingToolCalls}. This also heals sessions whose durable
+ * history was already poisoned by a missed closure.
+ *
+ * There are no exemptions: the harness closes every parked local call at
+ * resume (see `approved-tool-execution.ts`) and every invalid-input call at
+ * step time (see `handleStepResult` in `tool-loop.ts`), so anything still
+ * dangling here is an orphan nothing else will close.
+ */
+export function reconcileToolTranscript(messages: readonly ModelMessage[]): {
+  readonly messages: ModelMessage[];
+  readonly repaired: readonly DanglingToolCall[];
+} {
+  const { closed, messages: reconciled } = closeDanglingToolCalls(messages, () => ({
+    type: "error-text",
+    value: INTERRUPTED_TOOL_CALL_RESULT,
+  }));
+
+  return { messages: reconciled, repaired: closed };
 }
 
 function collectClosedCallIds(messages: readonly ModelMessage[]): Set<string> {
