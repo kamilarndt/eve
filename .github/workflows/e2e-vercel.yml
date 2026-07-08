@@ -82,8 +82,10 @@ jobs:
             token_args=(--token "$VERCEL_TOKEN")
           fi
           team_args=()
+          scope_args=()
           if [ -n "${VERCEL_ORG_ID:-}" ]; then
             team_args=(--team "$VERCEL_ORG_ID")
+            scope_args=(--scope "$VERCEL_ORG_ID")
           fi
 
           pnpm exec vc link --yes --project "$VERCEL_PROJECT_ID" "${team_args[@]}" "${token_args[@]}"
@@ -100,6 +102,21 @@ jobs:
           DEPLOYMENT_URL="$(pnpm exec vc deploy --prebuilt --yes --target=preview "${token_args[@]}" | tail -n 1)"
 
           npx eve eval --strict --verbose --url "$DEPLOYMENT_URL" --junit "$EVE_EVAL_JUNIT_DIR/${{ matrix.name }}.xml"
+
+          # Redeploy-tagged evals rebuild and redeploy the fixture from inside
+          # the eval body, repointing a run-scoped alias at each new
+          # deployment. They run against the alias (immutable deployment URLs
+          # never change what they serve) and are skipped in the main suite
+          # above because EVE_E2E_REDEPLOY_ALIAS is unset there.
+          if npx eve eval --tag redeploy --list >/dev/null 2>&1; then
+            ALIAS="eve-e2e-${{ matrix.name }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.vercel.app"
+            # vc alias does not infer the team from the project link the way
+            # link/deploy do, so pass the scope explicitly.
+            pnpm exec vc alias set "$DEPLOYMENT_URL" "$ALIAS" "${token_args[@]}" "${scope_args[@]}"
+            EVE_E2E_REDEPLOY_ALIAS="$ALIAS" \
+              npx eve eval --tag redeploy --strict --verbose \
+              --url "https://$ALIAS" --junit "$EVE_EVAL_JUNIT_DIR/${{ matrix.name }}-redeploy.xml"
+          fi
 
       - name: Upload eval artifacts
         if: failure()

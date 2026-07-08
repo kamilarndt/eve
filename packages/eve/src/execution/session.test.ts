@@ -5,7 +5,6 @@ import {
   createCompactionConfig,
   createSession,
   DEFAULT_ROOT_MAX_INPUT_TOKENS_PER_SESSION,
-  DEFAULT_SUBAGENT_MAX_INPUT_TOKENS_PER_SESSION,
   hydrateDurableSession,
   mintSubagentContinuationToken,
   projectToDurableSession,
@@ -215,7 +214,7 @@ describe("createSession", () => {
     );
   });
 
-  it("defaults delegated subagent sessions to the subagent input token budget", () => {
+  it("leaves delegated subagent sessions uncapped by default", () => {
     const session = createSession({
       continuationToken: "subagent-token",
       sessionId: "sess-child",
@@ -223,12 +222,33 @@ describe("createSession", () => {
       turnAgent: createTestTurnAgent(),
     });
 
-    expect(session.limits?.maxInputTokensPerSession).toBe(
-      DEFAULT_SUBAGENT_MAX_INPUT_TOKENS_PER_SESSION,
-    );
+    expect(session.limits).toEqual({});
   });
 
-  it("applies the root input token budget when hydrating a durable session without a stored limit", () => {
+  it("uncaps a root session when the authored limit is false", () => {
+    const session = createSession({
+      continuationToken: "root-token",
+      limits: { maxInputTokensPerSession: false },
+      sessionId: "sess-root",
+      turnAgent: createTestTurnAgent(),
+    });
+
+    expect(session.limits).toEqual({});
+  });
+
+  it("uncaps a delegated subagent session when the authored limit is false", () => {
+    const session = createSession({
+      continuationToken: "subagent-token",
+      limits: { maxInputTokensPerSession: false },
+      sessionId: "sess-child",
+      subagentDepth: 1,
+      turnAgent: createTestTurnAgent(),
+    });
+
+    expect(session.limits).toEqual({});
+  });
+
+  it("treats a durable session without stored limits as uncapped on hydration", () => {
     const hydrated = hydrateDurableSession({
       durable: {
         agent: { system: "You are a helpful assistant." },
@@ -239,26 +259,25 @@ describe("createSession", () => {
       turnAgent: createTestTurnAgent(),
     });
 
-    expect(hydrated.limits?.maxInputTokensPerSession).toBe(
-      DEFAULT_ROOT_MAX_INPUT_TOKENS_PER_SESSION,
-    );
+    expect(hydrated.limits).toBeUndefined();
   });
 
-  it("applies the subagent input token budget when hydrating a durable child without a stored limit", () => {
+  it("rehydrates persisted limits verbatim without re-applying defaults", () => {
     const hydrated = hydrateDurableSession({
       durable: {
         agent: { system: "You are a helpful assistant." },
         continuationToken: "subagent-token",
         history: [],
+        limits: {},
         sessionId: "sess-child",
         subagentDepth: 1,
       },
       turnAgent: createTestTurnAgent(),
     });
 
-    expect(hydrated.limits?.maxInputTokensPerSession).toBe(
-      DEFAULT_SUBAGENT_MAX_INPUT_TOKENS_PER_SESSION,
-    );
+    // An uncapped session (resolved limits `{}`) must stay uncapped across
+    // rehydration instead of picking up the root default again.
+    expect(hydrated.limits).toEqual({});
   });
 
   it("persists run outputSchema through durable session projection and hydration", () => {
