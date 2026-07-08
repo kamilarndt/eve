@@ -102,7 +102,7 @@ Approvals and questions share one protocol:
 3. The turn parks at `session.waiting`, durably, for as long as it takes.
 4. The client answers with `inputResponses` (structured, keyed by `requestId`) or a normal follow-up `message`. A follow-up whose text matches an option ID, option label, or numeric option index resolves automatically, including approval options such as `approve` and `deny`.
 
-The run picks back up exactly where it parked. Because the pause is durable, nothing is held in memory while it waits — the process can restart and the parked turn survives.
+The run picks back up exactly where it parked. On an approval grant, eve executes the tool during the resume itself and records its result before the next model call; on a denial it records the denial the same way. A parked tool call is always resolved before the model sees the transcript again. Because the pause is durable, nothing is held in memory while it waits — the process can restart and the parked turn survives.
 
 For approval requests, unrelated follow-up text does not deny the tool call. eve keeps the approval pending and holds that text until the approval is answered, then replays it as the next message in the session.
 

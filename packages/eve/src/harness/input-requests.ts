@@ -54,6 +54,17 @@ export interface RejectedActionBatch {
   readonly results: readonly RuntimeToolResultActionResult[];
 }
 
+/**
+ * Approved tool-call actions from one resolved batch. The caller (the tool
+ * loop) executes them and appends their durable results before assembling
+ * the next model request; `event` carries the originating turn's stream
+ * coordinates for the resulting `action.result` emissions.
+ */
+export interface ApprovedActionBatch {
+  readonly calls: readonly RuntimeToolCallActionRequest[];
+  readonly event?: PendingInputBatchEvent;
+}
+
 type ApprovalTerminalStatus = "approved" | "denied" | "ignored" | "invalid";
 
 /**
@@ -121,13 +132,14 @@ export function hasDeferredStepInput(session: HarnessSession): boolean {
 /**
  * Resolves pending input at the start of a harness step.
  *
- * When the pending batch contains tool-approval requests and the step input
- * also carries a follow-up user message, the message is deferred to the next
- * internal harness step rather than appended to the current turn. This is
- * necessary because AI SDK cannot process tool-approval responses and a new
- * user message in the same request -- the approval must be resolved in
- * isolation first, and the user message replayed on the subsequent step via
- * {@link consumeDeferredStepInput}.
+ * When the pending batch contains tool-approval requests that the step input
+ * does not answer, the input is deferred to a later step via
+ * {@link consumeDeferredStepInput} and the batch stays parked — an unrelated
+ * follow-up must never auto-deny a pending approval. Once every approval is
+ * answered, the batch resolves in one pass: denials are closed inline with
+ * `execution-denied` results, and approved calls are returned on
+ * `approvedActions` for the tool loop to execute and close before the next
+ * model request.
  */
 export function resolvePendingInput(input: {
   readonly history?: readonly ModelMessage[];
@@ -206,31 +218,11 @@ export function resolvePendingInput(input: {
   }
 
   const rejectedActions = buildRejectedActionBatch(pendingBatch, responses);
+  const approvedActions = buildApprovedActionBatch(pendingBatch, responses);
   session = clearPendingInputBatch(session);
 
-  // AI SDK cannot process tool-approval responses and a new user message
-  // in the same request. Defer the message so the approval is resolved in
-  // isolation; `consumeDeferredStepInput` replays it on the next step.
-  if (
-    resolvedStepInput?.message !== undefined &&
-    pendingBatch.requests.some((request) => isApprovalRequest(request))
-  ) {
-    session = queueDeferredStepInput(session, {
-      message: resolvedStepInput.message,
-    });
-
-    return {
-      consumedMessage: resolvedStepInput?.messageConsumed,
-      deferredMessage: true,
-      limitContinuation,
-      outcome: "resolved",
-      messages,
-      rejectedActions,
-      session,
-    };
-  }
-
   return {
+    approvedActions,
     consumedMessage: resolvedStepInput?.messageConsumed,
     limitContinuation,
     outcome: "resolved",
@@ -306,6 +298,11 @@ function hasUnansweredApproval(input: {
 }
 
 type ResolvePendingInputResult = {
+  /**
+   * Approved tool-call actions the caller must execute and close before the
+   * next model request. Present only on a resolved approval batch.
+   */
+  readonly approvedActions?: ApprovedActionBatch;
   readonly consumedMessage?: boolean;
   readonly deferredMessage?: boolean;
   /**
@@ -551,6 +548,25 @@ function buildRejectedActionBatch(
   return results.length > 0 ? { event: batch.event, results } : undefined;
 }
 
+/**
+ * Extracts the approved tool-call actions from one resolved batch so the
+ * caller can execute them.
+ */
+function buildApprovedActionBatch(
+  batch: PendingInputBatch,
+  responses: readonly InputResponse[],
+): ApprovedActionBatch | undefined {
+  const approvedIds = new Set(
+    responses.filter((r) => r.optionId === "approve").map((r) => r.requestId),
+  );
+
+  const calls = batch.requests
+    .filter((request) => isApprovalRequest(request) && approvedIds.has(request.requestId))
+    .map((request) => request.action);
+
+  return calls.length > 0 ? { calls, event: batch.event } : undefined;
+}
+
 function buildToolResponseParts(
   batch: PendingInputBatch,
   responses: readonly InputResponse[],
@@ -589,17 +605,12 @@ function buildToolResponsePartsForRequest(
       },
     ];
     /*
-     * On denial (explicit "deny" or auto-deny when the user continues
-     * without responding), splice in the matching `execution-denied`
-     * tool-result. AI SDK's `streamText` synthesizes this for the
-     * current turn's `initialResponseMessages`, but that synthesis is
-     * gated on the input messages' last entry being a tool message —
-     * on subsequent turns (when a new user message is the tail of
-     * history) the synthesis is skipped, and the persisted
+     * The harness owns closing every parked tool call: providers reject a
+     * replayed `tool_use` without a `tool_result`, and the persisted
      * `tool-approval-response` is stripped during provider prompt
-     * conversion. Without an own `tool-result` in history, the prior
-     * `tool_use` block replays unmatched and some providers reject
-     * the request with 400.
+     * conversion, so it is not a closure. Denials are closed here with the
+     * matching `execution-denied` result; approved calls are executed and
+     * closed by the tool loop (see `approvedActions`).
      */
     if (!approved) {
       parts.push({

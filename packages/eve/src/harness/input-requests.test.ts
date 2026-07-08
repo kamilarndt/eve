@@ -252,7 +252,7 @@ describe("resolvePendingInput", () => {
     });
   });
 
-  it("defers a follow-up message until after tool approvals are resolved", () => {
+  it("resolves approvals and keeps a simultaneous follow-up message on the same step", () => {
     const session = setPendingInputBatch({
       requests: [
         {
@@ -305,18 +305,10 @@ describe("resolvePendingInput", () => {
     // The approval should be resolved immediately.
     expect(result.outcome).toBe("resolved");
 
-    // The follow-up message should be deferred.
-    expect(result.deferredMessage).toBe(true);
-    expect(hasDeferredStepInput(result.session)).toBe(true);
-
-    const deferred = consumeDeferredStepInput({
-      session: result.session,
-    });
-
-    expect(deferred.input).toEqual({
-      message: "Ignore that and say hi instead.",
-    });
-    expect(hasDeferredStepInput(deferred.session)).toBe(false);
+    // The harness closes the denied call inline, so the follow-up message
+    // rides the same model call instead of being deferred a step.
+    expect(result.deferredMessage).toBeUndefined();
+    expect(hasDeferredStepInput(result.session)).toBe(false);
   });
 
   it("resolves approval when follow-up text matches an option", () => {
