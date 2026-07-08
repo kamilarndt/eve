@@ -2180,6 +2180,45 @@ describe("EveTUIRunner boot setup detection", () => {
     expect(handle).not.toHaveBeenCalled();
   });
 
+  it("defers the boot-time setup warning until initial model onboarding settles it", async () => {
+    // Without the fix, the boot render paints "model provider not linked"
+    // immediately, then clears it once onboarding resolves the model
+    // provider: a visible flash. The fix defers that first paint so the
+    // warning never renders when onboarding settles the issue itself.
+    const renderSetupWarning = vi.fn();
+    const clearSetupWarning = vi.fn();
+    const detect = vi.fn(({ info }: { info?: AgentInfoResult }) =>
+      info?.agent.model.endpoint?.kind === "gateway" && !info.agent.model.endpoint.connected
+        ? [
+            {
+              kind: "attention" as const,
+              label: "model provider not linked",
+              command: "/model" as const,
+            },
+          ]
+        : [],
+    );
+    const { runner } = providerSetupRefreshRunner({
+      refreshInfo: async () => ({
+        ...disconnectedGatewayInfo,
+        agent: {
+          ...disconnectedGatewayInfo.agent,
+          model: {
+            ...disconnectedGatewayInfo.agent.model,
+            endpoint: { kind: "gateway", connected: true, credential: "api-key" },
+          },
+        },
+      }),
+      bootDetections: [{ id: "test", detect }],
+      renderer: { renderSetupWarning, clearSetupWarning },
+    });
+
+    await runner.run();
+    await vi.waitFor(() => expect(clearSetupWarning).toHaveBeenCalled());
+
+    expect(renderSetupWarning).not.toHaveBeenCalled();
+  });
+
   it("normalizes a committed local key after automatic provider setup", async () => {
     const clearSetupWarning = vi.fn();
     const headers: AgentTUIAgentHeader[] = [];

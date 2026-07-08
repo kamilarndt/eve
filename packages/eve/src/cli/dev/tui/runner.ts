@@ -552,12 +552,17 @@ export class EveTUIRunner {
    * Fetches the agent inspection payload (best-effort) and renders the startup
    * header. Never throws: a missing or unauthorized `/eve/v1/info` simply
    * yields a header without the agent's configuration detail.
+   *
+   * `deferSetupWarning` skips painting the boot-time setup warning: fresh
+   * `eve init` runs `/model` onboarding right after this, and that onboarding
+   * settles the real state, so painting here would flash a warning the
+   * onboarding flow is about to resolve or replace.
    */
-  async #renderAgentHeader(): Promise<void> {
+  async #renderAgentHeader(deferSetupWarning = false): Promise<void> {
     const serverUrl = this.#serverUrl;
     if (serverUrl === undefined) {
       this.#reportBeforeFirstPaint();
-      await this.#renderSetupIssues(undefined);
+      await this.#renderSetupIssues(undefined, deferSetupWarning);
       return;
     }
 
@@ -582,7 +587,7 @@ export class EveTUIRunner {
     }
     this.#reportBeforeFirstPaint();
     const headerInfo = this.#replaceAgentInfo(info);
-    await this.#renderSetupIssues(headerInfo);
+    await this.#renderSetupIssues(headerInfo, deferSetupWarning);
   }
 
   #replaceAgentInfo(info: AgentInfoResult | undefined): AgentInfoResult | undefined {
@@ -637,7 +642,19 @@ export class EveTUIRunner {
     // cleared so later prompts open empty.
     let initialDraft = this.#initialInput;
 
-    await this.#renderAgentHeader();
+    // Computed up front (it only reads constructor-set fields) so the header
+    // render below knows to defer its setup warning for this one flow.
+    const initialCommand =
+      this.#initialInput === undefined ? undefined : parsePromptCommand(this.#initialInput);
+    const initialModelOnboarding =
+      initialCommand?.type === "extension" &&
+      initialCommand.name === "model" &&
+      initialCommand.argument === "" &&
+      this.#appRoot !== undefined &&
+      this.#promptCommandHandler !== undefined &&
+      this.#renderer.setupFlow !== undefined;
+
+    await this.#renderAgentHeader(initialModelOnboarding);
     if (this.#remoteConnection?.current().connection.state === "auth-required") {
       await this.#executeExtensionCommand(
         { type: "extension", name: "vc:login", argument: "" },
@@ -651,18 +668,13 @@ export class EveTUIRunner {
     this.#vercelStatus?.refreshIdentity();
     this.#mcpConnectionStatus?.refresh();
 
-    const initialCommand =
-      this.#initialInput === undefined ? undefined : parsePromptCommand(this.#initialInput);
-    const initialModelOnboarding =
-      initialCommand?.type === "extension" &&
-      initialCommand.name === "model" &&
-      initialCommand.argument === "" &&
-      this.#appRoot !== undefined &&
-      this.#promptCommandHandler !== undefined &&
-      this.#renderer.setupFlow !== undefined;
     if (initialModelOnboarding) {
       initialDraft = undefined;
       await this.#runInitialModelOnboarding(title);
+      // The deferred header paint above skipped the boot-time warning;
+      // settle on the real post-onboarding state now. Fire-and-forget, like
+      // the boot auth probe: it must not delay the first prompt.
+      void this.#refreshSetupAttention(this.#agentInfo);
     }
 
     while (true) {
@@ -1048,7 +1060,10 @@ export class EveTUIRunner {
     };
   }
 
-  async #renderSetupIssues(info: AgentInfoResult | undefined): Promise<void> {
+  async #renderSetupIssues(
+    info: AgentInfoResult | undefined,
+    deferPaint = false,
+  ): Promise<void> {
     if (this.#appRoot === undefined) return;
     const context: BootDetectionContext = {
       appRoot: this.#appRoot,
@@ -1057,6 +1072,9 @@ export class EveTUIRunner {
     if (info !== undefined) context.info = info;
     this.#bootIssues = await detectSetupIssues(context, this.#bootDetections);
     if (this.#renderer.renderSetupWarning === undefined) return;
+    // Initial `eve init` model onboarding is about to run and will settle
+    // the real state itself; skip the transient paint so it can't flash.
+    if (deferPaint) return;
     this.#paintSetupAttention();
     // Login state is a `vercel whoami` round-trip — too costly for the
     // cheap-and-local boot detections above — so it rides its own probe off
