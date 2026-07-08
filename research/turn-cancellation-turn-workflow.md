@@ -1,10 +1,28 @@
 ---
 issue: https://github.com/vercel/eve/issues/483
-status: complete
-last_updated: "2026-07-06"
+status: blocked
+last_updated: "2026-07-07"
 ---
 
 # Turn cancellation, layer 1: turn-workflow ownership
+
+> **Ship status: blocked on upstream performance**
+> (eve#573, draft). The `e2e-local` stress suite exposed that serializing
+> the durable `AbortSignal` into `turnStep` costs ~0.5 s fixed per step on
+> world-local and opens an abort-stream tail reader whose 100 ms polling
+> does a full `readdir` of the world-global chunks directory — a 100-turn
+> session compounds from ~0.9 s/turn into a 240 s replay timeout. The
+> Vercel world is unaffected. Bisection proved the cancel hook and the
+> controller creation are free; the signal-in-step is 100% of the
+> regression (bare step 84 ms → 600 ms; with 20k chunk files on disk,
+> 24–38 s). Filed as
+> [workflow#2795](https://github.com/vercel/workflow/issues/2795) (fixed
+> cost) and
+> [workflow#2797](https://github.com/vercel/workflow/issues/2797)
+> (scaling). Fallback if upstream stalls: ship without the per-step
+> signal — cancellation immediate during runtime-action waits, next-step-
+> boundary otherwise — and restore real-time mid-step abort when the
+> primitive is cheap.
 
 ## Summary
 
