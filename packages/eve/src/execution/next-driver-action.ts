@@ -31,15 +31,11 @@ export type NextDriverAction =
       readonly serializedContext: Record<string, unknown>;
       readonly authorizationNames?: readonly string[];
       /**
-       * Set when the parked turn was cancelled rather than parked by the
-       * model. The action carries the turn's last settled (unsettled by
-       * the epilogue) state; the driver runs `settleCancelledTurnStep`
-       * to emit `turn.cancelled` → `session.waiting` and clear pending
-       * runtime-action state, then follows the normal park playbook.
-       * Reuses the `park` arm because new arms break pinned drivers
-       * while optional fields are forward-compatible (an older pinned
-       * driver simply parks without the epilogue — harmless, since no
-       * cancel trigger predates this field).
+       * Set when the parked turn was cancelled. The action carries the
+       * turn's last settled state; the driver runs
+       * `settleCancelledTurnStep` before the normal park playbook. An
+       * optional field on `park` rather than a new arm so pinned drivers
+       * that predate it keep working.
        */
       readonly cancelled?: true;
     }

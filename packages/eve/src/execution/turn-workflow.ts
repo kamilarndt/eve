@@ -31,11 +31,11 @@ export type { TurnWorkflowInput };
 /**
  * Runs one complete logical turn, including child-agent waits when supported.
  *
- * The turn-owned path also owns turn cancellation: it registers a per-turn
- * cancel hook (`{completionToken}:cancel`) and serializes a durable abort
- * signal into every `turnStep`. Resuming that hook mid-turn settles the
- * turn as cancelled (`turn.cancelled` → `session.waiting`) — never as a
- * failure; resuming it after the turn settled is a benign no-op.
+ * The turn-owned path also owns turn cancellation: resuming the per-turn
+ * cancel hook (`{completionToken}:cancel`) mid-turn aborts a durable
+ * signal serialized into every `turnStep` and settles the turn as
+ * `turn.cancelled` → `session.waiting` — never as a failure. Resuming it
+ * after the turn settled is a benign no-op.
  */
 export async function turnWorkflow(rawInput: unknown): Promise<void> {
   "use workflow";
@@ -80,26 +80,20 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
       throw error;
     }
 
-    // Created only after the inbox claim so a losing duplicate run never
-    // registers the (per-turn, conflict-free) cancel token.
+    // Created after the inbox claim so a losing duplicate run never
+    // registers the cancel token.
     cancellation = createTurnCancellationControl(input.completionToken);
 
     while (true) {
-      // No race here: a cancel payload aborts the durable signal from the
-      // hook-read continuation (see TurnCancellationControl), and the
-      // runtime delivers that abort to the in-flight step attempt in
-      // real time. The step then settles on its own with `cancelled`.
+      // No race needed: the runtime delivers the abort to the in-flight
+      // step attempt, which settles itself as `cancelled`.
       const result = await turnStep(cursor.createStepInput(nextStepInput, cancellation.signal));
 
       if (result.action === "cancelled") {
-        // Report the cancellation to the driver and exit; the state in
-        // the control payload is the last state the turn actually
-        // settled. The epilogue must NOT run as a step in this run:
-        // queued cancel-payload wakes can re-dispatch an in-flight step
-        // here, and two racing attempts would double-emit it. The driver
-        // — whose wake sources exclude the cancel hook — runs
-        // `settleCancelledTurnStep` instead. The `canPark` gate below is
-        // intentionally bypassed.
+        // The epilogue must not run as a step in this run: queued cancel
+        // wakes can re-dispatch in-flight steps here and double-emit it.
+        // The driver runs `settleCancelledTurnStep` instead; the `canPark`
+        // gate below is bypassed on purpose.
         await cursor.finish(
           { sessionState: cursor.sessionState },
           { cancelled: true, kind: "park" },
@@ -156,11 +150,9 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
           pendingActionKeys,
         });
         if (results === "cancelled") {
-          // The signal is aborted; the next turnStep settles the
-          // cancelled epilogue before its park-resume stages run, then
-          // the loop finishes through the `cancelled` arm above.
-          // Descendants are not cascaded to (layer 3); their late
-          // results land on this turn's disposed inbox and are dropped.
+          // The signal is aborted; the next turnStep settles through the
+          // `cancelled` arm above. Descendants are not cascaded to
+          // (layer 3); their late results are dropped.
           nextStepInput = undefined;
           continue;
         }
@@ -194,12 +186,9 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
     await cursor.send({ error: normalizeSerializableError(error), kind: "turn-error" });
     throw error;
   } finally {
-    // Dispose-only teardown: the inbox iterator can hold a dangling
-    // `next()` (the cancelled path's raced read) and the cancel hook
-    // always holds one, so `iterator.return()` would suspend forever —
-    // an async generator processes `return()` only after its in-flight
-    // durable read settles. Disposal drops those reads; this run must
-    // still reach `run_completed` so the world sweeps its hooks.
+    // Dispose-only teardown: `iterator.return()` would await a pending
+    // durable read that never settles, leaving this run `running` forever
+    // and its hooks unswept by the world.
     if (cancellation !== undefined) await cancellation.dispose();
     if (ownsInbox) await disposeHook(inbox);
   }
@@ -255,15 +244,14 @@ async function waitForRuntimeActionResults(input: {
     ]);
     if (winner === "cancel") {
       if (pendingDeliveryRequest !== undefined) {
-        // Mirror the resolved-wait path: release the raced public input
-        // back to the driver so it stays available for the next turn.
+        // Release the raced public input back to the driver so it stays
+        // available for the next turn.
         await input.cursor.send({
           kind: "turn-delivery-cancelled",
           requestId: pendingDeliveryRequest,
         });
       }
-      // The dangling inbox `next()` follows the established
-      // dispose-with-outstanding-read pattern (see waitForNextDeliver).
+      // The dangling inbox `next()` is dropped by disposal in teardown.
       return "cancelled";
     }
 

@@ -13,30 +13,17 @@ export function turnCancelHookToken(completionToken: string): string {
  * per-turn cancel hook and the durable `AbortController` whose signal is
  * serialized into every `turnStep`.
  *
- * The token derives from the driver's already-indexed completion token
- * (`{sessionId}:turn-control:{n}`), so it is unique per turn workflow run
- * and never reused — which sidesteps the upstream dispose-ordering bugs
- * (workflow#2777, workflow#2778) by construction.
- *
- * The abort fires in the continuation of the cancel-hook read itself, so
- * its durable side effect is replay-deterministic: it is keyed to the
- * `hook_received` event in the run's log, never to live signal state or
- * to the winner of a promise race (both of which can differ between the
- * first run and a replay and would corrupt the event log). The runtime
- * delivers the abort to an in-flight step attempt in real time; the
- * workflow body itself never needs to observe the signal.
- *
- * Must be created inside a `"use workflow"` body: both `createHook` and
- * the hook-backed `AbortController` are workflow-runtime constructs.
+ * The abort fires in the continuation of the cancel-hook read, keying it
+ * to the `hook_received` journal event so it is replay-deterministic.
+ * Must be created inside a `"use workflow"` body.
  */
 export interface TurnCancellationControl {
   /** Turn signal to serialize into each `turnStep` input. */
   readonly signal: AbortSignal;
   /**
-   * Resolves `"cancel"` once the cancel payload has been consumed and
-   * the turn signal aborted (or when the hook closes at disposal; races
-   * only happen before then). Race this against turn-owned awaits —
-   * never `await` it alone.
+   * Resolves `"cancel"` once the cancel payload is consumed and the turn
+   * signal aborted. Race it against turn-owned awaits — never `await` it
+   * alone.
    */
   readonly requested: Promise<"cancel">;
   /** Disposes the hook; an outstanding cancel read is abandoned. */
@@ -57,14 +44,10 @@ export function createTurnCancellationControl(completionToken: string): TurnCanc
     signal: controller.signal,
     requested,
     async dispose(): Promise<void> {
-      // Dispose-only, never `iterator.return()`: for a turn that was
-      // never cancelled the iterator is suspended inside its pending
-      // durable read, and an async generator only honors `return()`
-      // after that read settles — which it never does. The runtime's
-      // dispose drops the pending read (the sanctioned
-      // dispose-with-outstanding-read pattern); a run that closed this
-      // iterator instead would hang forever, never reach
-      // `run_completed`, and leak its hooks in the world.
+      // Dispose-only, never `iterator.return()`: the iterator is suspended
+      // in a pending durable read that `return()` would wait on forever,
+      // leaving the run `running` and its hooks unswept. Disposal drops
+      // the read.
       await disposeHook(hook);
     },
   };

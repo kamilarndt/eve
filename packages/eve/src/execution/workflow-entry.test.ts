@@ -11,6 +11,7 @@ import { fireSessionCallbackStep } from "#execution/session-callback-step.js";
 import type { TurnControlPayload } from "#execution/turn-control-protocol.js";
 import { workflowEntry } from "#execution/workflow-entry.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
+import { settleCancelledTurnStep } from "#execution/settle-cancelled-turn-step.js";
 import { dispatchTurnStep } from "#execution/workflow-steps.js";
 import { emitTerminalSessionFailureStep } from "#execution/terminal-session-failure-step.js";
 
@@ -476,6 +477,71 @@ describe("workflowEntry", () => {
       requestId: undefined,
     });
     expect(resumeHook).not.toHaveBeenCalled();
+  });
+
+  it("settles a cancelled turn in the driver and starts the next turn from the settled state", async () => {
+    const sessionState = createBaseSessionState();
+    const settledState = createBaseSessionState({
+      emissionState: { sequence: 1, sessionStarted: true, stepIndex: 0, turnId: "" },
+    });
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    vi.mocked(settleCancelledTurnStep).mockResolvedValue({
+      serializedContext: { "eve.sessionId": "wrun_test_123", settled: true },
+      sessionState: settledState,
+    });
+    installHookMocks({
+      deliveryHooks: [
+        {
+          token: "http:test",
+          values: [{ kind: "deliver", payloads: [{ message: "after cancel" }] }],
+        },
+      ],
+      turnControls: [
+        {
+          action: {
+            cancelled: true,
+            kind: "park",
+            serializedContext: { "eve.sessionId": "wrun_test_123" },
+            sessionState,
+          },
+          kind: "turn-result",
+        },
+        turnResult({ action: "done", output: "ok", sessionState: settledState }),
+      ],
+    });
+
+    const result = await workflowEntry({
+      input: { message: "hello" },
+      serializedContext: createSerializedContext(),
+    });
+
+    expect(result).toEqual({ output: "ok" });
+    expect(settleCancelledTurnStep).toHaveBeenCalledExactlyOnceWith({
+      parentWritable: expect.any(WritableStream),
+      serializedContext: { "eve.sessionId": "wrun_test_123" },
+      sessionState,
+    });
+    expect(vi.mocked(dispatchTurnStep).mock.calls[1]?.[0]).toMatchObject({
+      serializedContext: { settled: true },
+      sessionState: settledState,
+    });
+  });
+
+  it("does not settle an ordinary park as cancelled", async () => {
+    const sessionState = createBaseSessionState();
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    installHookMocks({
+      deliveryHooks: [{ token: "http:test", values: [] }],
+      turnControls: [turnResult({ action: "park", sessionState })],
+    });
+
+    const result = await workflowEntry({
+      input: { message: "hello" },
+      serializedContext: createSerializedContext(),
+    });
+
+    expect(result).toEqual({ output: "" });
+    expect(settleCancelledTurnStep).not.toHaveBeenCalled();
   });
 
   it("skips child routing when a turn completes without yielding to a delivery", async () => {

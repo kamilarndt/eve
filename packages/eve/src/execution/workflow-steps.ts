@@ -76,12 +76,10 @@ import { resumeHook } from "#internal/workflow/runtime.js";
  * {@link import("#execution/next-driver-action.js").NextDriverAction}
  * arm without re-reading the session.
  *
- * `cancelled` is the settled outcome of an aborted turn: the harness's
- * cancellation throw is converted into a *returned* result inside the
- * step so workflow-core never classifies the abort as a step failure and
- * never retries it. The result is a pure marker (its context/state
- * fields pass the step input through unchanged); the turn workflow runs
- * {@link settleCancelledTurnStep} to emit the epilogue exactly once.
+ * `cancelled` converts the harness's cancellation throw into a *returned*
+ * result so workflow-core never classifies the abort as a step failure or
+ * retries it. It is a pure marker (context/state echo the step input);
+ * the epilogue runs once in `settleCancelledTurnStep`.
  */
 export type DurableStepResult =
   | {
@@ -310,22 +308,17 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
 
   let stepResult: StepResult;
   try {
-    // A signal already aborted at entry (e.g. cancellation observed during
-    // an in-line runtime-action wait) must settle before the park-resume
-    // stages run, or the still-pending batch would re-park — and later
-    // re-dispatch — instead of cancelling.
+    // A signal already aborted at entry (cancellation during an in-line
+    // runtime-action wait) must settle before the park-resume stages run,
+    // or the pending batch would re-park and later re-dispatch.
     throwIfTurnAborted(input.abortSignal);
     stepResult = await runTurnHarnessStep();
   } catch (error) {
     if (!isTurnCancellation(error)) throw error;
-    // The layer-0 harness rethrows the canonical cancellation with no
-    // failure events. Settle it as a *pure* returned result — a thrown
-    // step error would be retried by workflow-core, and any cancel-path
-    // side effect here could be duplicated: the runtime may supersede an
-    // aborted attempt and re-dispatch this step under the same
-    // correlation id, letting two attempts race. The cancelled epilogue
-    // (emission + persistence) runs exactly once in the workflow-owned
-    // {@link settleCancelledTurnStep} instead.
+    // Settle as a returned result, not a throw: a thrown step error would
+    // be retried, and any side effect here could duplicate when the
+    // runtime supersedes an aborted attempt with a re-dispatched one. The
+    // epilogue runs exactly once in `settleCancelledTurnStep`.
     writer.releaseLock();
     return {
       action: "cancelled",

@@ -219,12 +219,9 @@ async function runDriverLoop(input: {
       }
 
       if (action.cancelled === true) {
-        // A cancelled turn parks with unsettled state: the epilogue
-        // (turn.cancelled → session.waiting) and pending-state cleanup
-        // run here, in the driver, because steps in the turn's own run
-        // can be re-dispatched by queued cancel-payload wakes and would
-        // double-emit. The driver's wake sources exclude the cancel
-        // hook, so this settles exactly once.
+        // A cancelled turn parks with unsettled state: the epilogue and
+        // pending-state cleanup run here in the driver, whose wake
+        // sources exclude the cancel hook — see settleCancelledTurnStep.
         const settled = await settleCancelledTurnStep({
           parentWritable: input.driverWritable,
           serializedContext: action.serializedContext,

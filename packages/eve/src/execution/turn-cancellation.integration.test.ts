@@ -191,12 +191,9 @@ describe("turn cancellation integration", () => {
 
         const cancelledTurn = await stream.nextTurn();
 
-        // A duplicate cancel after the turn settled is a benign no-op:
-        // it lands on a consumed/disposed hook and must not disturb the
-        // session. (Same-instant duplicates are serialized by the
-        // trigger in layer 2: an extra payload racing the settle can
-        // re-dispatch in-flight steps under the runtime's at-least-once
-        // execution and double-emit the epilogue.)
+        // A duplicate cancel after the turn settled is a benign no-op: it
+        // lands on a consumed/disposed hook and must not disturb the
+        // session. (Layer 2's trigger serializes same-instant duplicates.)
         await resumeHook(cancelToken, {}).catch(() => undefined);
 
         expect(cancelledTurn.at(-1)?.type).toBe("session.waiting");
