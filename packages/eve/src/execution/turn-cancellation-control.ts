@@ -1,6 +1,6 @@
 import { createHook } from "#compiled/@workflow/core/index.js";
 
-import { closeHookIterator, disposeHook } from "#execution/hook-ownership.js";
+import { disposeHook } from "#execution/hook-ownership.js";
 import { TurnCancelledError } from "#harness/turn-cancellation.js";
 
 /** Derives the per-turn cancel hook token from the turn's completion token. */
@@ -39,7 +39,7 @@ export interface TurnCancellationControl {
    * never `await` it alone.
    */
   readonly requested: Promise<"cancel">;
-  /** Closes the hook iterator and disposes the hook. */
+  /** Disposes the hook; an outstanding cancel read is abandoned. */
   dispose(): Promise<void>;
 }
 
@@ -57,7 +57,14 @@ export function createTurnCancellationControl(completionToken: string): TurnCanc
     signal: controller.signal,
     requested,
     async dispose(): Promise<void> {
-      await closeHookIterator(iterator);
+      // Dispose-only, never `iterator.return()`: for a turn that was
+      // never cancelled the iterator is suspended inside its pending
+      // durable read, and an async generator only honors `return()`
+      // after that read settles — which it never does. The runtime's
+      // dispose drops the pending read (the sanctioned
+      // dispose-with-outstanding-read pattern); a run that closed this
+      // iterator instead would hang forever, never reach
+      // `run_completed`, and leak its hooks in the world.
       await disposeHook(hook);
     },
   };

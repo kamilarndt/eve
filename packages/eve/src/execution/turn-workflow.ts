@@ -9,12 +9,7 @@ import {
   type TurnStepInput,
   type TurnWorkflowInput,
 } from "#execution/durable-session-migrations/turn-workflow.js";
-import {
-  claimHookOwnership,
-  closeHookIterator,
-  disposeHook,
-  isHookConflictError,
-} from "#execution/hook-ownership.js";
+import { claimHookOwnership, disposeHook, isHookConflictError } from "#execution/hook-ownership.js";
 import type { NextDriverAction } from "#execution/next-driver-action.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
 import { runProxySubagentEventStep } from "#execution/subagent-event-proxy-step.js";
@@ -199,7 +194,12 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
     await cursor.send({ error: normalizeSerializableError(error), kind: "turn-error" });
     throw error;
   } finally {
-    await closeHookIterator(iterator);
+    // Dispose-only teardown: the inbox iterator can hold a dangling
+    // `next()` (the cancelled path's raced read) and the cancel hook
+    // always holds one, so `iterator.return()` would suspend forever —
+    // an async generator processes `return()` only after its in-flight
+    // durable read settles. Disposal drops those reads; this run must
+    // still reach `run_completed` so the world sweeps its hooks.
     if (cancellation !== undefined) await cancellation.dispose();
     if (ownsInbox) await disposeHook(inbox);
   }

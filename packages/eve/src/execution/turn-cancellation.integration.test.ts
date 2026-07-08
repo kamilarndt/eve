@@ -361,4 +361,66 @@ describe("turn cancellation integration", () => {
       }
     });
   });
+
+  it("completes settled turn runs so the world sweeps their hooks", async () => {
+    const runtime = createTestRuntime({ agent: { name: "turn-cancel-sweep" } });
+    const continuationToken = "http:turn-cancel-sweep";
+
+    await runtime.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "first turn" },
+          serializedContext: buildSerializedContext({
+            channelKind: "http",
+            continuationToken,
+            mode: "conversation",
+          }),
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+
+      try {
+        expect((await stream.nextTurn()).at(-1)?.type).toBe("session.waiting");
+
+        await waitForHook({ runId: run.runId }, { token: continuationToken });
+        await resumeHook(continuationToken, {
+          kind: "deliver",
+          payloads: [{ message: "second turn" }],
+        });
+        expect((await stream.nextTurn()).at(-1)?.type).toBe("session.waiting");
+
+        // The turn run's teardown must not await the cancel hook's
+        // outstanding read: a turn run that never returns stays
+        // `running` forever and its hooks (inbox, cancel, durable-abort)
+        // are never swept — one leaked run and three leaked hooks per
+        // turn, and O(live hooks) token scans slow every resume.
+        const world = await getWorld();
+        const deadline = Date.now() + 15_000;
+        let completedTurnRuns = 0;
+        let cancelHooks = 0;
+        while (Date.now() < deadline) {
+          const cancelToken0 = firstTurnCancelToken(run.runId);
+          const cancelHook0 = await world.hooks.getByToken(cancelToken0).catch(() => null);
+          cancelHooks = cancelHook0 === null ? 0 : 1;
+
+          const runsPage = await world.runs.list({ pagination: { limit: 100 } });
+          completedTurnRuns = runsPage.data.filter(
+            (row: { status?: string; workflowName?: string }) =>
+              row.workflowName?.includes("turnWorkflow") === true && row.status === "completed",
+          ).length;
+
+          if (completedTurnRuns >= 1 && cancelHooks === 0) break;
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        // The first turn settled a full turn ago: its run must have
+        // completed and its cancel hook must be gone from the world.
+        expect(completedTurnRuns).toBeGreaterThanOrEqual(1);
+        expect(cancelHooks).toBe(0);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  }, 60_000);
 });

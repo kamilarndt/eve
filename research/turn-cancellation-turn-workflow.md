@@ -142,6 +142,17 @@ Integration against the real runtime (vendored `@workflow/core`
    `{sessionId}:turn-cancelled:{sequence}` collapses them. A distributed
    re-execution (crash recovery on another instance) can still duplicate
    the epilogue; see upstream notes.
+6. **Turn-run teardown is dispose-only — never `iterator.return()`.** The
+   cancel hook always has an outstanding durable read (the abort
+   continuation), and an async generator honors `return()` only after its
+   in-flight `await` settles — never, for a turn that wasn't cancelled.
+   Closing the iterator therefore suspends the turn run forever: it never
+   reaches `run_completed`, so the world never sweeps its hooks, leaking
+   one running run and three hooks (inbox, cancel, durable-abort) per
+   turn, and `getByToken`'s O(live hooks) scan slows every resume in the
+   session. Hook disposal alone is the runtime's sanctioned pattern:
+   pending reads are dropped and the run proceeds to completion, where
+   terminal-run cleanup deletes the run's hooks.
 
 ## Runtime findings (filed upstream)
 
