@@ -3248,6 +3248,60 @@ describe("createToolLoopHarness", () => {
     expect(types).toContain("session.failed");
   });
 
+  it("rethrows a non-terminal model-call error in task mode for durable step retry", async () => {
+    setupMockAgentError(new Error("Model blew up"));
+
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(createTestConfig("task", emit));
+
+    // A task run cannot park (`next: null`) for a user retry, so a
+    // non-terminal failure rethrows instead of ending the run: the
+    // turn step runs inside a durable workflow step, and the engine
+    // retries a thrown step from the last committed session snapshot.
+    await expect(runStep(createTestSession(), { message: "Delegated task" })).rejects.toThrow(
+      "Model blew up",
+    );
+
+    // No terminal or park events — the failed attempt must stay
+    // invisible so an engine retry can replay the step cleanly.
+    const types = events.map((e) => e.type);
+    expect(types).not.toContain("step.failed");
+    expect(types).not.toContain("turn.failed");
+    expect(types).not.toContain("session.failed");
+    expect(types).not.toContain("session.waiting");
+  });
+
+  it("rethrows a mid-stream provider overload in task mode instead of failing the run", async () => {
+    // Anthropic overload arrives as a stream `error` part on an already
+    // open HTTP 200 stream — no status code, no `isRetryable` flag — so
+    // it classifies as "recoverable" rather than "retry". In task mode
+    // that must rethrow for the engine's durable step retry, not become
+    // the subagent's terminal error result.
+    vi.mocked(ToolLoopAgent).mockImplementation(function (this: ToolLoopAgent) {
+      this.stream = vi.fn().mockImplementation(async () => ({
+        fullStream: (async function* () {
+          yield { text: "partial answer", type: "text-delta" };
+          yield { error: { message: "Overloaded", type: "overloaded_error" }, type: "error" };
+        })(),
+        steps: new Promise<never>(() => {}),
+      }));
+      return this;
+    } as MockAgentConstructor);
+
+    const { emit, events } = createEventCollector();
+    const runStep = createToolLoopHarness(createTestConfig("task", emit));
+
+    await expect(runStep(createTestSession(), { message: "Delegated task" })).rejects.toThrow(
+      "Overloaded",
+    );
+
+    const types = events.map((e) => e.type);
+    expect(types).not.toContain("step.failed");
+    expect(types).not.toContain("turn.failed");
+    expect(types).not.toContain("session.failed");
+    expect(types).not.toContain("session.waiting");
+  });
+
   it("emits the full terminal failure cascade on an explicit Gateway invalid-request error", async () => {
     setupMockAgentError(
       createGatewayModelCallError({
@@ -4141,7 +4195,7 @@ describe("createToolLoopHarness", () => {
       }
     });
 
-    it("fails a task run terminally when the reissue also comes back empty", async () => {
+    it("rethrows a task run's empty response when the reissue also comes back empty", async () => {
       setupMockAgent(emptyResult);
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
       const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -4149,22 +4203,19 @@ describe("createToolLoopHarness", () => {
       const runStep = createToolLoopHarness(createTestConfig("task", emit));
 
       try {
-        const result = await runStep(createTestSession(), { message: "Hi" });
+        // A task cannot park for a user retry; after the in-harness
+        // reissue is exhausted the failure rethrows so the durable
+        // workflow engine retries the step from committed state.
+        await expect(runStep(createTestSession(), { message: "Hi" })).rejects.toThrow(
+          "did not return a response",
+        );
 
         expect(vi.mocked(ToolLoopAgent).mock.calls.length).toBe(2);
-        // A task cannot park for a user retry; the failure is the task's
-        // terminal result instead of a `next: null` park that turnWorkflow
-        // would reject.
-        expect(result.next).toEqual({
-          done: true,
-          isError: true,
-          output: expect.stringContaining("did not return a response"),
-        });
 
         const types = events.map((event) => event.type);
         expect(types).not.toContain("session.waiting");
-        expect(types).toContain("step.failed");
-        expect(types).toContain("session.failed");
+        expect(types).not.toContain("step.failed");
+        expect(types).not.toContain("session.failed");
       } finally {
         warnSpy.mockRestore();
         errorSpy.mockRestore();

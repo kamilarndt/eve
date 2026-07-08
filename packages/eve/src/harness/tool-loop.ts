@@ -1141,23 +1141,22 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
         if (config.mode === "task") {
           // A task run cannot park for a user retry (turnWorkflow rejects
-          // `next: null` in task mode), so the failure is the task's
-          // terminal result, mirroring finishTaskTurn's unfulfilled-schema
-          // shape.
-          log.error(
-            requestSummary?.message ?? "model call failed; failing the task run",
+          // `next: null` in task mode), but its step runs inside a durable
+          // workflow step: rethrowing lets the engine retry the model call
+          // from the last committed session snapshot with fresh harness
+          // hooks, preserving the work of every completed step. Exhausted
+          // engine retries flow through the driver's terminal safety net
+          // (emitTerminalSessionFailureStep + the delegated-parent error
+          // notification), so the task still ends with the failed
+          // `subagent-result` it produced here before — now only after
+          // transient failures like a mid-stream provider overload had a
+          // chance to clear.
+          log.warn(
+            requestSummary?.message ??
+              "model call failed transiently in task mode — rethrowing for durable step retry",
             modelCallLogFields,
           );
-          await emitFailedStep(emit, emissionState, {
-            code: "MODEL_CALL_FAILED",
-            details,
-            message: errorMessage,
-            sessionId: session.sessionId,
-          });
-          return {
-            next: { done: true, isError: true, output: errorMessage },
-            session,
-          };
+          throw finalError;
         }
 
         log.error(
