@@ -21,19 +21,26 @@ export interface DanglingToolCall {
 
 /**
  * The one primitive that closes a local `tool-call`'s transcript obligation.
- * Walks the messages, finds every non-provider-executed `tool-call` without
- * a `tool-result`, and — when `resolveClosure` supplies an output for it —
- * records that closure in the message immediately after the assistant
- * message carrying the call (merged into an existing tool message, or
- * inserted as a new one), satisfying provider adjacency rules. Calls whose
- * closure resolves to `undefined` are left dangling, so legitimately open
- * obligations (parked approvals, pending runtime actions) pass through
- * untouched.
+ *
+ * Providers reject a replayed `tool_use` without a `tool_result` (Anthropic:
+ * `tool_use` ids without `tool_result` blocks; OpenAI Responses: `No tool
+ * output found for function call`), so every non-provider-executed
+ * `tool-call` must be closed before the transcript reaches a provider.
+ *
+ * Walks the messages, finds every local `tool-call` without a `tool-result`,
+ * and — when `resolveClosure` supplies an output for it — records that
+ * closure in the message immediately after the assistant message carrying
+ * the call (merged into an existing tool message, or inserted as a new one),
+ * satisfying provider adjacency rules. Calls whose closure resolves to
+ * `undefined` are left dangling, so legitimately open obligations (parked
+ * approvals, pending runtime actions) pass through untouched.
  *
  * Every transcript closure the harness synthesizes goes through here: the
  * step-time closure of invalid-input tool calls (detailed, model-actionable
- * error text) and the request-assembly guard
- * {@link reconcileToolTranscript} (generic interrupted text).
+ * error text) and the request-assembly guard in the tool loop, which closes
+ * any remaining orphan with {@link INTERRUPTED_TOOL_CALL_RESULT} — durably,
+ * so histories poisoned by a missed closure heal instead of replaying the
+ * same provider rejection forever.
  */
 export function closeDanglingToolCalls(
   messages: readonly ModelMessage[],
@@ -43,90 +50,68 @@ export function closeDanglingToolCalls(
   readonly messages: ModelMessage[];
 } {
   const closedCallIds = collectClosedCallIds(messages);
-
   const closed: DanglingToolCall[] = [];
   const result: ModelMessage[] = [];
-  let pendingClosures: ToolResultPart[] = [];
 
-  const flushPendingClosures = (next: ModelMessage | undefined): ModelMessage | undefined => {
-    if (pendingClosures.length === 0) {
-      return next;
-    }
-    const closures = pendingClosures;
-    pendingClosures = [];
-    if (next !== undefined && next.role === "tool" && Array.isArray(next.content)) {
-      return { ...next, content: [...closures, ...next.content] };
-    }
-    result.push({ content: closures, role: "tool" });
-    return next;
-  };
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index] as ModelMessage;
+    result.push(message);
 
-  for (const message of messages) {
-    const merged = flushPendingClosures(message);
-    if (merged !== undefined) {
-      result.push(merged);
-    }
-
-    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    const closures = collectClosures(message, closedCallIds, resolveClosure, closed);
+    if (closures.length === 0) {
       continue;
     }
 
-    for (const part of message.content) {
-      if (part.type !== "tool-call" || part.providerExecuted === true) {
-        continue;
-      }
-      if (closedCallIds.has(part.toolCallId)) {
-        continue;
-      }
-
-      const call: DanglingToolCall = { toolCallId: part.toolCallId, toolName: part.toolName };
-      const output = resolveClosure(call);
-      if (output === undefined) {
-        continue;
-      }
-
-      closedCallIds.add(part.toolCallId);
-      closed.push(call);
-      pendingClosures.push({
-        output,
-        toolCallId: part.toolCallId,
-        toolName: part.toolName,
-        type: "tool-result",
-      });
+    // Providers require a call's result in the message immediately after the
+    // assistant message that carries the call.
+    const next = messages[index + 1];
+    if (next !== undefined && next.role === "tool" && Array.isArray(next.content)) {
+      result.push({ ...next, content: [...closures, ...next.content] });
+      index += 1;
+    } else {
+      result.push({ content: closures, role: "tool" });
     }
   }
-
-  flushPendingClosures(undefined);
 
   return { closed, messages: result };
 }
 
-/**
- * Enforces the transcript-closure invariant on an assembled model request:
- * every non-provider-executed `tool-call` must have a terminal `tool-result`
- * before the transcript reaches a provider, or the provider rejects the
- * replay (Anthropic: `tool_use` ids without `tool_result` blocks; OpenAI
- * Responses: `No tool output found for function call`).
- *
- * Dangling calls are closed durably with a synthetic error result via
- * {@link closeDanglingToolCalls}. This also heals sessions whose durable
- * history was already poisoned by a missed closure.
- *
- * There are no exemptions: the harness closes every parked local call at
- * resume (see `approved-tool-execution.ts`) and every invalid-input call at
- * step time (see `handleStepResult` in `tool-loop.ts`), so anything still
- * dangling here is an orphan nothing else will close.
- */
-export function reconcileToolTranscript(messages: readonly ModelMessage[]): {
-  readonly messages: ModelMessage[];
-  readonly repaired: readonly DanglingToolCall[];
-} {
-  const { closed, messages: reconciled } = closeDanglingToolCalls(messages, () => ({
-    type: "error-text",
-    value: INTERRUPTED_TOOL_CALL_RESULT,
-  }));
+function collectClosures(
+  message: ModelMessage,
+  closedCallIds: Set<string>,
+  resolveClosure: (call: DanglingToolCall) => ToolResultOutput | undefined,
+  closed: DanglingToolCall[],
+): ToolResultPart[] {
+  if (message.role !== "assistant" || !Array.isArray(message.content)) {
+    return [];
+  }
 
-  return { messages: reconciled, repaired: closed };
+  const closures: ToolResultPart[] = [];
+  for (const part of message.content) {
+    if (part.type !== "tool-call" || part.providerExecuted === true) {
+      continue;
+    }
+    if (closedCallIds.has(part.toolCallId)) {
+      continue;
+    }
+
+    const call: DanglingToolCall = { toolCallId: part.toolCallId, toolName: part.toolName };
+    const output = resolveClosure(call);
+    if (output === undefined) {
+      continue;
+    }
+
+    closedCallIds.add(part.toolCallId);
+    closed.push(call);
+    closures.push({
+      output,
+      toolCallId: part.toolCallId,
+      toolName: part.toolName,
+      type: "tool-result",
+    });
+  }
+
+  return closures;
 }
 
 function collectClosedCallIds(messages: readonly ModelMessage[]): Set<string> {

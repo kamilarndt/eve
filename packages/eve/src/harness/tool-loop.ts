@@ -100,7 +100,7 @@ import { createToolResultMessagePartFromToolError } from "#harness/action-result
 import { closeApprovedActionBatch } from "#harness/approved-tool-execution.js";
 import {
   closeDanglingToolCalls,
-  reconcileToolTranscript,
+  INTERRUPTED_TOOL_CALL_RESULT,
 } from "#harness/transcript-obligations.js";
 import { buildTelemetryRuntimeContext } from "#harness/instrumentation-runtime-context.js";
 import {
@@ -693,10 +693,13 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     // resolution, context/message appends, compaction) so any dangling call
     // here is an orphan; closing it durably also heals histories poisoned
     // before this invariant existed.
-    const reconciliation = reconcileToolTranscript(messages);
-    if (reconciliation.repaired.length > 0) {
+    const reconciliation = closeDanglingToolCalls(messages, () => ({
+      type: "error-text",
+      value: INTERRUPTED_TOOL_CALL_RESULT,
+    }));
+    if (reconciliation.closed.length > 0) {
       log.warn("closed dangling tool calls before model call", {
-        repaired: reconciliation.repaired,
+        repaired: reconciliation.closed,
         sessionId: session.sessionId,
         turnId: emissionState.turnId,
       });

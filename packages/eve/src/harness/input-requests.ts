@@ -201,11 +201,13 @@ export function resolvePendingInput(input: {
     responses,
   });
 
+  const approvedRequestIds = collectApprovedRequestIds(responses);
+
   // Record approved tools before clearing the batch.
   session = recordApprovedTools({
+    approvedRequestIds,
     pendingBatch,
     resolveApprovalKey: input.resolveApprovalKey,
-    responses,
     session,
   });
 
@@ -218,7 +220,7 @@ export function resolvePendingInput(input: {
   }
 
   const rejectedActions = buildRejectedActionBatch(pendingBatch, responses);
-  const approvedActions = buildApprovedActionBatch(pendingBatch, responses);
+  const approvedActions = buildApprovedActionBatch(pendingBatch, approvedRequestIds);
   session = clearPendingInputBatch(session);
 
   return {
@@ -427,23 +429,24 @@ export function getApprovedTools(session: HarnessSession): ReadonlySet<string> {
   return new Set(value as string[]);
 }
 
+/** The single definition of an approved response in one resolved batch. */
+function collectApprovedRequestIds(responses: readonly InputResponse[]): ReadonlySet<string> {
+  return new Set(responses.filter((r) => r.optionId === "approve").map((r) => r.requestId));
+}
+
 /**
  * Resolves the approval key for a request. When a `resolveApprovalKey`
  * function is provided and returns a string, that compound key is recorded
  * instead of the bare tool name.
  */
 function recordApprovedTools(input: {
+  readonly approvedRequestIds: ReadonlySet<string>;
   readonly pendingBatch: PendingInputBatch;
   readonly resolveApprovalKey?: (request: InputRequest) => string | undefined;
-  readonly responses: readonly InputResponse[];
   readonly session: HarnessSession;
 }): HarnessSession {
-  const approvedIds = new Set(
-    input.responses.filter((r) => r.optionId === "approve").map((r) => r.requestId),
-  );
-
   const newKeys = input.pendingBatch.requests
-    .filter((r) => approvedIds.has(r.requestId))
+    .filter((r) => input.approvedRequestIds.has(r.requestId))
     .map((r) => input.resolveApprovalKey?.(r) ?? r.action.toolName);
 
   if (newKeys.length === 0) {
@@ -554,14 +557,10 @@ function buildRejectedActionBatch(
  */
 function buildApprovedActionBatch(
   batch: PendingInputBatch,
-  responses: readonly InputResponse[],
+  approvedRequestIds: ReadonlySet<string>,
 ): ApprovedActionBatch | undefined {
-  const approvedIds = new Set(
-    responses.filter((r) => r.optionId === "approve").map((r) => r.requestId),
-  );
-
   const calls = batch.requests
-    .filter((request) => isApprovalRequest(request) && approvedIds.has(request.requestId))
+    .filter((request) => isApprovalRequest(request) && approvedRequestIds.has(request.requestId))
     .map((request) => request.action);
 
   return calls.length > 0 ? { calls, event: batch.event } : undefined;

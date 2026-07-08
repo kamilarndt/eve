@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   closeDanglingToolCalls,
+  type DanglingToolCall,
   INTERRUPTED_TOOL_CALL_RESULT,
-  reconcileToolTranscript,
 } from "#harness/transcript-obligations.js";
 
 function assistantToolCall(toolCallId: string, providerExecuted?: boolean): ModelMessage {
@@ -40,7 +40,19 @@ function toolResult(toolCallId: string): ModelMessage {
   };
 }
 
-describe("reconcileToolTranscript", () => {
+/** The request-assembly guard's closure policy, as wired in the tool loop. */
+function reconcileToolTranscript(messages: ModelMessage[]): {
+  messages: ModelMessage[];
+  repaired: readonly DanglingToolCall[];
+} {
+  const { closed, messages: reconciled } = closeDanglingToolCalls(messages, () => ({
+    type: "error-text",
+    value: INTERRUPTED_TOOL_CALL_RESULT,
+  }));
+  return { messages: reconciled, repaired: closed };
+}
+
+describe("closeDanglingToolCalls with the guard policy", () => {
   it("passes a balanced transcript through unchanged", () => {
     const messages: ModelMessage[] = [
       { content: "run pwd", role: "user" },
