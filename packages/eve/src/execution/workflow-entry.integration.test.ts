@@ -512,6 +512,7 @@ describe("workflowEntry integration", () => {
         expect(attrs["$eve.type"]).toBe("session");
         expect(attrs["$eve.trigger"]).toBe("http");
         expect(attrs["$eve.title"]).toContain("session tag round-trip");
+        expect(attrs["$eve.session_status"]).toBe("waiting");
         // Top-level sessions have no parent or subagent name on the root run.
         expect(attrs["$eve.parent"]).toBeUndefined();
         expect(attrs["$eve.subagent"]).toBeUndefined();
@@ -574,6 +575,7 @@ describe("workflowEntry integration", () => {
       expect(attrs["$eve.parent_call"]).toBe("call-subagent-1");
       expect(attrs["$eve.parent_turn"]).toBe("turn-parent");
       expect(attrs["$eve.root"]).toBe("root-session");
+      expect(attrs["$eve.session_status"]).toBe("completed");
       expect(attrs["$eve.trigger"]).toBe("subagent");
     });
   });

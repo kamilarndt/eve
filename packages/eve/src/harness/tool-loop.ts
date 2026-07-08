@@ -77,6 +77,12 @@ import {
   type TokenUsageDelta,
 } from "#harness/turn-tag-state.js";
 import {
+  accumulateObservabilityIssues,
+  getObservabilityIssueState,
+  observabilityIssueAttributes,
+  setObservabilityIssueState,
+} from "#harness/observability-issues.js";
+import {
   applySessionLimitContinuation,
   enforceSessionTokenLimit,
 } from "#harness/session-limit-enforcement.js";
@@ -433,7 +439,6 @@ function resolveStepOtelContext(
 }
 
 export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
-  const emit = config.handleEvent;
   const telemetryConfig = getInstrumentationConfig();
   if (telemetryConfig !== undefined) {
     ensureOtelIntegration();
@@ -484,6 +489,21 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     turnSpan?: Span,
   ): Promise<StepResult> {
     let session = initialSession;
+    const baseEmit = config.handleEvent;
+    const emit: ToolLoopHarnessConfig["handleEvent"] = baseEmit
+      ? async (event, messages) => {
+          const previousIssueState = getObservabilityIssueState(session.state);
+          const nextIssueState = accumulateObservabilityIssues({
+            event,
+            previous: previousIssueState,
+          });
+          if (nextIssueState !== previousIssueState) {
+            session = setObservabilityIssueState(session, nextIssueState);
+            await setEveAttributes(observabilityIssueAttributes(nextIssueState));
+          }
+          await baseEmit(event, messages);
+        }
+      : undefined;
 
     // Store the turn span context on the session so continuation steps
     // can restore the parent trace across step boundaries.

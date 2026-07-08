@@ -180,6 +180,7 @@ describe("createWorkflowRuntime#run", () => {
       {
         allowReservedAttributes: true,
         attributes: {
+          "$eve.session_status": "running",
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
@@ -236,6 +237,7 @@ describe("createWorkflowRuntime#run", () => {
         allowReservedAttributes: true,
         attributes: {
           "$eve.channel_request_id": "req_run",
+          "$eve.session_status": "running",
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
@@ -277,6 +279,7 @@ describe("createWorkflowRuntime#run", () => {
         "$eve.parent_call": "call-1",
         "$eve.parent_turn": "turn-1",
         "$eve.root": "root-session",
+        "$eve.session_status": "running",
         "$eve.subagent": "researcher",
         "$eve.trigger": "subagent",
         "$eve.type": "subagent",
@@ -302,6 +305,7 @@ describe("createWorkflowRuntime#run", () => {
     expect(startMock).toHaveBeenNthCalledWith(1, workflowEntryReference, expect.any(Array), {
       allowReservedAttributes: true,
       attributes: {
+        "$eve.session_status": "running",
         "$eve.title": "hello",
         "$eve.trigger": "http",
         "$eve.type": "session",
@@ -311,6 +315,7 @@ describe("createWorkflowRuntime#run", () => {
     expect(startMock).toHaveBeenNthCalledWith(2, workflowEntryReference, expect.any(Array), {
       allowReservedAttributes: true,
       attributes: {
+        "$eve.session_status": "running",
         "$eve.title": "hello",
         "$eve.trigger": "http",
         "$eve.type": "session",
@@ -345,6 +350,7 @@ describe("createWorkflowRuntime#run", () => {
       expect(startMock).toHaveBeenCalledWith(workflowEntryReference, expect.any(Array), {
         allowReservedAttributes: true,
         attributes: {
+          "$eve.session_status": "running",
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
