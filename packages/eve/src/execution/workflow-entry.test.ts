@@ -11,7 +11,8 @@ import { fireSessionCallbackStep } from "#execution/session-callback-step.js";
 import type { TurnControlPayload } from "#execution/turn-control-protocol.js";
 import { workflowEntry } from "#execution/workflow-entry.js";
 import { routeDeliverToChildren } from "#execution/route-child-delivery.js";
-import { dispatchTurnStep, emitTerminalSessionFailureStep } from "#execution/workflow-steps.js";
+import { dispatchTurnStep } from "#execution/workflow-steps.js";
+import { emitTerminalSessionFailureStep } from "#execution/terminal-session-failure-step.js";
 
 vi.mock("#compiled/@workflow/core/index.js", () => ({
   createHook: vi.fn(),
