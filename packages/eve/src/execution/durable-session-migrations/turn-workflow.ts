@@ -39,7 +39,7 @@ export interface TurnWorkflowInput {
    * proves the driver settles `park + cancelled` results.
    */
   readonly driverCapabilities?: {
-    readonly turnInbox?: true;
+    readonly turnInbox?: boolean;
     readonly cancelledTurnSettle?: boolean;
   };
   readonly mode: RunMode;
