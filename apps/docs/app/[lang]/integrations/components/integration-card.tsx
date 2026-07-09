@@ -29,6 +29,11 @@ export const IntegrationCard = ({ integration }: IntegrationCardProps) => {
               {integration.badge}
             </span>
           ) : null}
+          {integration.provenance?.label === "Vendor official" ? (
+            <span className="rounded-full border px-2.5 py-0.5 text-gray-900 text-xs">
+              {integration.provenance.label}
+            </span>
+          ) : null}
           {integration.protocols?.map((protocol) => (
             <span
               className={`rounded-full px-2 py-0.5 font-medium text-xs ${protocolBadgeClassName[protocol]}`}

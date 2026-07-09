@@ -62,6 +62,8 @@ export interface Integration {
   logo: LogoKey;
   /** Optional pill (e.g. "Chat SDK") shown next to the type label. */
   badge?: string;
+  /** Maintainer provenance shown on adapter-backed channel detail pages. */
+  provenance?: IntegrationProvenance;
   /** Canonical reference doc for deeper details. */
   docsHref: string;
   /** Searchable keywords beyond the name. */
@@ -86,11 +88,21 @@ interface Presentation {
   badge?: string;
 }
 
+/** Who builds and maintains an adapter-backed channel. */
+export interface IntegrationProvenance {
+  /** Pill label, e.g. "Official" or "Vendor official". */
+  label: string;
+  /** One-line note shown on the detail page. */
+  note: string;
+}
+
 /** Channel overlay: presentation plus hand-authored setup markdown. */
 interface ChannelPresentation extends Presentation {
   install: string;
   quickStart: string;
   configure: string;
+  /** Maintainer provenance shown on adapter-backed channels. */
+  provenance?: IntegrationProvenance;
 }
 
 /** Connection overlay: presentation plus Connect auth/config details. */
@@ -307,6 +319,10 @@ Point your frontend at the session routes eve serves (\`/eve/v1/session\`) and s
     logo: "googlechat",
     docsHref: "/docs/channels/chat-sdk",
     badge: "Chat SDK",
+    provenance: {
+      label: "Official",
+      note: "Built and maintained by Vercel.",
+    },
     keywords: ["chat sdk", "google chat", "spaces", "bot"],
     install: `Install eve, the Chat SDK core (\`chat\`), the Google Chat adapter, and a state adapter:
 
@@ -348,6 +364,10 @@ Credentials come from the \`createGoogleChatAdapter\` config or the adapter's en
     logo: "whatsapp",
     docsHref: "/docs/channels/chat-sdk",
     badge: "Chat SDK",
+    provenance: {
+      label: "Official",
+      note: "Built and maintained by Vercel.",
+    },
     keywords: ["chat sdk", "whatsapp", "business cloud", "messaging"],
     install: `Install eve, the Chat SDK core (\`chat\`), the WhatsApp adapter, and a state adapter:
 
@@ -389,6 +409,10 @@ Credentials come from the \`createWhatsAppAdapter\` config or the adapter's envi
     logo: "x",
     docsHref: "/docs/channels/chat-sdk",
     badge: "Chat SDK",
+    provenance: {
+      label: "Official",
+      note: "Built and maintained by Vercel.",
+    },
     keywords: ["chat sdk", "x", "twitter", "mentions", "dms"],
     install: `Install eve, the Chat SDK core (\`chat\`), the X adapter, and a state adapter:
 
@@ -430,6 +454,10 @@ Credentials come from the \`createXAdapter\` config or the adapter's environment
     logo: "messenger",
     docsHref: "/docs/channels/chat-sdk",
     badge: "Chat SDK",
+    provenance: {
+      label: "Official",
+      note: "Built and maintained by Vercel.",
+    },
     keywords: ["chat sdk", "messenger", "facebook", "bot"],
     install: `Install eve, the Chat SDK core (\`chat\`), the Messenger adapter, and a state adapter:
 
@@ -466,6 +494,604 @@ export default channel;
 
 Credentials come from the \`createMessengerAdapter\` config or the adapter's environment variables; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
     configure: `The adapter mounts its webhook at \`/eve/v1/messenger\`. Point your Messenger webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-liveblocks": {
+    logo: "liveblocks",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "liveblocks", "comments", "threads"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Liveblocks adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @liveblocks/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/liveblocks.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/liveblocks.ts
+import { createLiveblocksAdapter } from "@liveblocks/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { liveblocks: createLiveblocksAdapter({
+      apiKey: process.env.LIVEBLOCKS_API_KEY!,
+      webhookSecret: process.env.LIVEBLOCKS_WEBHOOK_SECRET!,
+      botUserId: "my-agent",
+    }) },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createLiveblocksAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/liveblocks\`. Point your Liveblocks webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-resend": {
+    logo: "resend",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "resend", "email", "threads"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Resend adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @resend/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/resend.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/resend.ts
+import { createResendAdapter } from "@resend/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { resend: createResendAdapter({ fromAddress: "agent@yourdomain.com" }) },
+  state: createMemoryState(),
+  streaming: false,
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createResendAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/resend\`. Point your Resend inbound webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-sendblue": {
+    logo: "sendblue",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "sendblue", "imessage", "sms", "rcs"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Sendblue adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat chat-adapter-sendblue @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/sendblue.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/sendblue.ts
+import { createSendblueAdapter } from "chat-adapter-sendblue";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { sendblue: createSendblueAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createSendblueAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/sendblue\`. Point your Sendblue webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-zernio": {
+    logo: "zernio",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "zernio", "instagram", "bluesky", "reddit", "dms"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Zernio adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @zernio/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/zernio.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/zernio.ts
+import { createZernioAdapter } from "@zernio/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { zernio: createZernioAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createZernioAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/zernio\`. Point your Zernio webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-matrix": {
+    logo: "matrix",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "matrix", "beeper", "rooms"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Beeper Matrix adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @beeper/chat-adapter-matrix @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/matrix.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/matrix.ts
+import { createMatrixAdapter } from "@beeper/chat-adapter-matrix";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { matrix: createMatrixAdapter({
+      baseURL: "https://matrix.example.org",
+      auth: {
+        // Matrix credentials; see the adapter README
+      },
+    }) },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createMatrixAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/matrix\`. Connect it to your Matrix homeserver per the adapter's setup. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-agentphone": {
+    logo: "agentphone",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "agentphone", "sms", "imessage", "voice"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the AgentPhone adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @agentphone/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/agentphone.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/agentphone.ts
+import { createAgentPhoneAdapter } from "@agentphone/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { agentphone: createAgentPhoneAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createAgentPhoneAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/agentphone\`. Point your AgentPhone webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-lark": {
+    logo: "lark",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "lark", "feishu", "cards"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Lark / Feishu adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @larksuite/vercel-chat-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/lark.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/lark.ts
+import { createLarkAdapter } from "@larksuite/vercel-chat-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { lark: createLarkAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createLarkAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/lark\`. Point your Lark app's event subscription at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-velt": {
+    logo: "velt",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "velt", "comments", "annotations"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Velt adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @veltdev/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/velt.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/velt.ts
+import { createVeltAdapter } from "@veltdev/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { velt: createVeltAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createVeltAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/velt\`. Point your Velt webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-kapso": {
+    logo: "kapso",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "kapso", "whatsapp"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Kapso adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @kapso/chat-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/kapso.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/kapso.ts
+import { createKapsoAdapter } from "@kapso/chat-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { kapso: createKapsoAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createKapsoAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/kapso\`. Point your Kapso webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-novu": {
+    logo: "novu",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "novu", "multi-channel", "notifications"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Novu adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @novu/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/novu.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/novu.ts
+import { createNovuAdapter } from "@novu/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { novu: createNovuAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createNovuAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/novu\`. Point your Novu webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-linq": {
+    logo: "linq",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "linq", "imessage", "sms"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Linq adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @linqapp/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/linq.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/linq.ts
+import { createLinqAdapter } from "@linqapp/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { linq: createLinqAdapter({
+      apiKey: process.env.LINQ_API_KEY!,
+      signingSecret: process.env.LINQ_SIGNING_SECRET!,
+    }) },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createLinqAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/linq\`. Point your Linq webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-photon": {
+    logo: "photon",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "photon", "imessage"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Photon adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @photon-ai/chat-adapter-imessage @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/photon.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/photon.ts
+import { createiMessageAdapter } from "@photon-ai/chat-adapter-imessage";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { photon: createiMessageAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createiMessageAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/photon\`. Point your Photon webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
+  },
+  "chat-sdk-dial": {
+    logo: "dial",
+    docsHref: "/docs/channels/chat-sdk",
+    badge: "Chat SDK",
+    provenance: {
+      label: "Vendor official",
+      note: "Built and maintained by the platform vendor.",
+    },
+    keywords: ["chat sdk", "dial", "sms", "imessage", "voice"],
+    install: `Install eve, the Chat SDK core (\`chat\`), the Dial adapter, and a state adapter:
+
+\`\`\`bash
+npm install eve@latest chat @getdial/chat-sdk-adapter @chat-adapter/state-memory
+\`\`\`
+
+The in-memory state store is fine for local development; use a durable state adapter (Redis, PostgreSQL) in production so thread subscriptions survive restarts.`,
+    quickStart: `Create \`agent/channels/dial.ts\`. Register Chat SDK handlers on \`bot\`, call \`send\` to hand each turn to eve, and export the channel:
+
+\`\`\`ts
+// agent/channels/dial.ts
+import { createDialAdapter } from "@getdial/chat-sdk-adapter";
+import { createMemoryState } from "@chat-adapter/state-memory";
+import { chatSdkChannel } from "eve/channels/chat-sdk";
+
+export const { bot, channel, send } = chatSdkChannel({
+  userName: "My Agent",
+  adapters: { dial: createDialAdapter() },
+  state: createMemoryState(),
+});
+
+bot.onNewMention(async (thread, message) => {
+  await thread.subscribe();
+  await send(message.text, { thread });
+});
+
+bot.onSubscribedMessage(async (thread, message) => {
+  await send(message.text, { thread });
+});
+
+export default channel;
+\`\`\`
+
+Credentials come from the \`createDialAdapter\` config or the adapter's environment; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+    configure: `The adapter mounts its webhook at \`/eve/v1/dial\`. Point your Dial webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
   },
 };
 
@@ -718,6 +1344,7 @@ function buildChannel(entry: IntegrationEntry): Integration {
     tagline: entry.tagline,
     logo: presentation.logo,
     badge: presentation.badge,
+    provenance: presentation.provenance,
     docsHref: presentation.docsHref,
     keywords: presentation.keywords,
     install: presentation.install,

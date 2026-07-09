@@ -96,6 +96,11 @@ const IntegrationDetailPage = async ({ params }: PageProps<"/[lang]/integrations
                 {integration.badge}
               </span>
             ) : null}
+            {integration.provenance ? (
+              <span className="rounded-full border px-2.5 py-0.5 text-gray-900 text-xs">
+                {integration.provenance.label}
+              </span>
+            ) : null}
             {integration.protocols?.map((protocol) => (
               <span
                 className={`rounded-full px-2 py-0.5 font-medium text-xs ${protocolBadgeClassName[protocol]}`}
@@ -106,6 +111,9 @@ const IntegrationDetailPage = async ({ params }: PageProps<"/[lang]/integrations
             ))}
           </div>
           <p className="text-gray-900 text-lg">{integration.tagline}</p>
+          {integration.provenance ? (
+            <p className="text-gray-800 text-sm">{integration.provenance.note}</p>
+          ) : null}
         </div>
         <Link
           className="inline-flex w-fit items-center gap-1 text-gray-900 text-sm transition-colors hover:text-gray-1000"

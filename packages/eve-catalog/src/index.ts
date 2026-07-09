@@ -172,6 +172,102 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     surfaces: { scaffoldable: false, gallery: true },
   },
   {
+    slug: "chat-sdk-liveblocks",
+    name: "Liveblocks",
+    kind: "channel",
+    tagline: "Conversational bots on Liveblocks rooms, threads, and comments via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-resend",
+    name: "Resend",
+    kind: "channel",
+    tagline: "Bidirectional email with threading, rich HTML, and attachments via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-sendblue",
+    name: "Sendblue",
+    kind: "channel",
+    tagline: "iMessage, SMS, and RCS messaging through Sendblue via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-zernio",
+    name: "Zernio",
+    kind: "channel",
+    tagline:
+      "Unified social DMs across Instagram, Facebook, Telegram, WhatsApp, X, Bluesky, and Reddit via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-matrix",
+    name: "Beeper Matrix",
+    kind: "channel",
+    tagline: "Matrix rooms and DMs through Beeper's adapter via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-agentphone",
+    name: "AgentPhone",
+    kind: "channel",
+    tagline:
+      "SMS, MMS, iMessage, and voice with call transcripts through AgentPhone via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-lark",
+    name: "Lark / Feishu",
+    kind: "channel",
+    tagline: "Lark and Feishu chats with cardkit streaming and interactive cards via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-velt",
+    name: "Velt",
+    kind: "channel",
+    tagline:
+      "Bots in anchored comments across documents, editors, canvases, PDFs, and video via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-kapso",
+    name: "Kapso",
+    kind: "channel",
+    tagline:
+      "WhatsApp messaging through Kapso with buttons, media, and reactions via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-novu",
+    name: "Novu",
+    kind: "channel",
+    tagline:
+      "Multi-channel agents with one-click channel setup and multi-tenancy via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-linq",
+    name: "Linq",
+    kind: "channel",
+    tagline: "iMessage and SMS messaging through Linq via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-photon",
+    name: "Photon",
+    kind: "channel",
+    tagline: "iMessage via cloud, self-hosted, or on-device through Photon via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
+    slug: "chat-sdk-dial",
+    name: "Dial",
+    kind: "channel",
+    tagline: "SMS, MMS, iMessage, and inbound voice transcripts through Dial via the Chat SDK.",
+    surfaces: { scaffoldable: false, gallery: true },
+  },
+  {
     slug: "linear",
     name: "Linear",
     kind: "connection",
