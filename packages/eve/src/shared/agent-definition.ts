@@ -152,13 +152,13 @@ export interface AgentLimitsDefinition {
   /**
    * Maximum number of delegated child-session levels from the root session.
    *
-   * Root sessions are depth 0. A `maxSubagentDepth` of 3 allows child sessions at
-   * depths 1, 2, and 3; sessions already at depth 3 cannot delegate again.
+   * Root sessions are depth 0. A `maxSubagentDepth` of 1 allows child sessions at
+   * depth 1; sessions already at depth 1 cannot delegate again.
    *
    * Delegated subagent sessions resolve this against the cap inherited from
    * the delegating parent; the tighter value wins.
    *
-   * @default 3
+   * @default 1
    */
   readonly maxSubagentDepth?: number;
   /**

@@ -78,7 +78,7 @@ describe("getAdvertisedTools", () => {
     ]) satisfies HarnessToolMap;
 
     const advertisedTools = getAdvertisedTools({
-      session: { rootSessionId: "root-session", subagentDepth: 1 },
+      session: { rootSessionId: "root-session", subagentDepth: 1, subagentMaxDepth: 2 },
       tools,
     });
 
@@ -90,7 +90,11 @@ describe("getAdvertisedTools", () => {
 
     const advertisedTools = await getAdvertisedTools({
       modelTools: buildToolSet({ tools }),
-      session: createSession({ rootSessionId: "root-session", subagentDepth: 1 }),
+      session: createSession({
+        rootSessionId: "root-session",
+        subagentDepth: 1,
+        subagentMaxDepth: 2,
+      }),
       tools,
       workflow: {},
     });
