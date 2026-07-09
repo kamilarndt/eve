@@ -35,9 +35,12 @@ export interface TurnWorkflowInput {
   /**
    * Additive driver feature negotiation. Older pinned drivers omit this,
    * which keeps runtime-action orchestration on the legacy entry-owned path.
+   * `cancelledTurnSettle` must originate in the pinned driver body: it
+   * proves the driver settles `park + cancelled` results.
    */
   readonly driverCapabilities?: {
     readonly turnInbox?: true;
+    readonly cancelledTurnSettle?: boolean;
   };
   readonly mode: RunMode;
   readonly stepInput: TurnStepInput;
@@ -47,6 +50,8 @@ export interface TurnWorkflowDispatchInput {
   readonly capabilities: SessionCapabilities | undefined;
   readonly completionToken: string;
   readonly delivery: HookPayload;
+  /** Set by driver bodies that settle `park + cancelled` turn results. */
+  readonly driverCancelledTurnSettle?: boolean;
   readonly mode: RunMode;
   readonly parentWritable: WritableStream<Uint8Array>;
   readonly serializedContext: Record<string, unknown>;
@@ -59,7 +64,10 @@ export function createTurnWorkflowInput(input: TurnWorkflowDispatchInput): TurnW
   return {
     capabilities: input.capabilities,
     completionToken: input.completionToken,
-    driverCapabilities: { turnInbox: true },
+    driverCapabilities: {
+      turnInbox: true,
+      cancelledTurnSettle: input.driverCancelledTurnSettle ?? false,
+    },
     mode: input.mode,
     stepInput: {
       input: input.delivery,

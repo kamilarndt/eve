@@ -42,6 +42,7 @@ describe("turn workflow wire migrations", () => {
         capabilities: undefined,
         completionToken: "turn-token",
         delivery,
+        driverCancelledTurnSettle: true,
         mode: "conversation",
         parentWritable,
         serializedContext: { state: "driver" },
@@ -50,7 +51,7 @@ describe("turn workflow wire migrations", () => {
     ).toEqual({
       capabilities: undefined,
       completionToken: "turn-token",
-      driverCapabilities: { turnInbox: true },
+      driverCapabilities: { cancelledTurnSettle: true, turnInbox: true },
       mode: "conversation",
       stepInput: {
         input: delivery,
@@ -60,6 +61,20 @@ describe("turn workflow wire migrations", () => {
       },
       version: TURN_WORKFLOW_INPUT_VERSION,
     });
+  });
+
+  it("omits cancelled-park settlement unless the driver body advertises it", () => {
+    const input = createTurnWorkflowInput({
+      capabilities: undefined,
+      completionToken: "turn-token",
+      delivery: createDelivery(),
+      mode: "conversation",
+      parentWritable: new WritableStream<Uint8Array>(),
+      serializedContext: { state: "driver" },
+      sessionState: createSessionState(),
+    });
+
+    expect(input.driverCapabilities).toEqual({ cancelledTurnSettle: false, turnInbox: true });
   });
 
   it("migrates pre-version (unversioned) workflow input into the current shape", () => {

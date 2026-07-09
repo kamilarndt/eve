@@ -44,6 +44,7 @@ export async function dispatchAndAwaitTurn(input: {
       capabilities: input.capabilities,
       completionToken: control.token,
       delivery: input.delivery,
+      driverCancelledTurnSettle: true,
       mode: input.mode,
       parentWritable: input.parentWritable,
       serializedContext: input.serializedContext,

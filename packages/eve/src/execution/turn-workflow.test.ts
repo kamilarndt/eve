@@ -263,7 +263,7 @@ describe("turnWorkflow", () => {
 
     // Task mode on purpose: cancellation bypasses the `canPark` gate.
     const { input } = createInput({
-      driverCapabilities: { turnInbox: true },
+      driverCapabilities: { cancelledTurnSettle: true, turnInbox: true },
       mode: "task",
       sessionState,
     });
@@ -282,6 +282,44 @@ describe("turnWorkflow", () => {
       kind: "turn-result",
     });
     expect(resumeHookMock.mock.calls.filter((call) => call[1]?.kind === "turn-error")).toEqual([]);
+  });
+
+  it("registers no cancel hook when the driver cannot settle cancelled parks", async () => {
+    const sessionState = createSessionState();
+    installInbox([]);
+    vi.mocked(turnStep).mockResolvedValueOnce({
+      action: "done",
+      output: "ok",
+      serializedContext: { state: "done" },
+      sessionState,
+    });
+
+    const { input } = createInput({ driverCapabilities: { turnInbox: true }, sessionState });
+    await turnWorkflow(input);
+
+    expect(vi.mocked(turnStep).mock.calls[0]?.[0].abortSignal).toBeUndefined();
+    expect(cancelHookTokens()).toEqual([]);
+  });
+
+  it("registers no cancel hook when the session cannot park", async () => {
+    const sessionState = createSessionState({ continuationToken: "" });
+    installInbox([]);
+    vi.mocked(turnStep).mockResolvedValueOnce({
+      action: "done",
+      output: "ok",
+      serializedContext: { state: "done" },
+      sessionState,
+    });
+
+    const { input } = createInput({
+      driverCapabilities: { cancelledTurnSettle: true, turnInbox: true },
+      mode: "task",
+      sessionState,
+    });
+    await turnWorkflow(input);
+
+    expect(vi.mocked(turnStep).mock.calls[0]?.[0].abortSignal).toBeUndefined();
+    expect(cancelHookTokens()).toEqual([]);
   });
 
   it("deduplicates concurrent turn workflows through inbox ownership", async () => {
@@ -805,6 +843,12 @@ function installHookDispatch(inboxes: readonly InboxMock[]): void {
   createHookMock.mockImplementation((input: { token: string }) =>
     input.token.endsWith(":cancel") ? createCancelHookMock(input.token) : queue.shift()?.hook,
   );
+}
+
+function cancelHookTokens(): string[] {
+  return createHookMock.mock.calls
+    .map((call) => (call[0] as { token: string }).token)
+    .filter((token) => token.endsWith(":cancel"));
 }
 
 function createCancelHookMock(token: string): unknown {

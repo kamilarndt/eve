@@ -102,6 +102,19 @@ function firstTurnCancelToken(sessionId: string): string {
   return turnCancelHookToken(`${sessionId}:turn-control:0`);
 }
 
+/** Polls the world until the given run reaches `completed`. */
+async function waitForRunCompletion(runId: string, timeout = 15_000): Promise<void> {
+  const world = await getWorld();
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const page = await world.runs.list({ pagination: { limit: 100 } });
+    const row = page.data.find((entry: { runId?: string }) => entry.runId === runId);
+    if (row?.status === "completed") return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Timed out waiting for run "${runId}" to complete.`);
+}
+
 /** Polls the world for a hook row by token (hooks are per-run; the token is global). */
 async function waitForHookByToken(token: string, timeout = 15_000): Promise<{ runId: string }> {
   const world = await getWorld();
@@ -301,6 +314,92 @@ describe("turn cancellation integration", () => {
               event.data.message?.includes("follow up after subagent cancel") === true,
           ),
         ).toBe(true);
+      } finally {
+        stream.dispose();
+        await run.cancel();
+      }
+    });
+  }, 60_000);
+
+  it("cancels a turn parked on a child HITL request without corrupting the stream", async () => {
+    const runtime = createTestRuntime({ agent: { name: "turn-cancel-hitl" } });
+    const continuationToken = "http:turn-cancel-hitl";
+
+    await runtime.run(async () => {
+      const run = await start(workflowEntry, [
+        {
+          input: { message: "Delegate to a subagent: Use the ask_question tool exactly once." },
+          serializedContext: {
+            ...buildSerializedContext({
+              channelKind: "http",
+              continuationToken,
+              mode: "conversation",
+            }),
+            "eve.capabilities": { requestInput: true },
+          },
+        },
+      ]);
+      const stream = captureTurnEvents(run);
+
+      try {
+        // The child asks a question; the proxy epilogue emits this turn's
+        // waiting boundary while the parent keeps waiting on the child.
+        const hitlTurn = await stream.nextTurn();
+        expect(hitlTurn.at(-1)?.type).toBe("session.waiting");
+        const requested = filterEventsByType(hitlTurn, "input.requested");
+        expect(requested).toHaveLength(1);
+        const requestId = requested[0]?.data.requests[0]?.requestId;
+        expect(requestId).toBeDefined();
+        const childSessionId = filterEventsByType(hitlTurn, "subagent.called")[0]?.data
+          .childSessionId;
+        expect(childSessionId).toBeDefined();
+
+        const cancelToken = firstTurnCancelToken(run.runId);
+        const cancelHook = await waitForHookByToken(cancelToken);
+        await resumeHook(cancelToken, {});
+        // Barrier: the answer must not race the cancel — a delivery that
+        // beats the cancel is legitimately routed to the still-live child.
+        await waitForRunCompletion(cancelHook.runId);
+
+        // The boundary is already on the stream: settling must not emit a
+        // fabricated turn.cancelled or a second session.waiting.
+        const world = await getWorld();
+        const answer = {
+          kind: "deliver",
+          payloads: [
+            {
+              inputResponses: [{ requestId: requestId ?? "", text: "blue" }],
+              message: "answer after hitl cancel",
+            },
+          ],
+        };
+        await waitForHook({ runId: run.runId }, { token: continuationToken });
+        await resumeHook(continuationToken, answer);
+
+        const followUpTurn = await stream.nextTurn();
+
+        expect(followUpTurn.at(-1)?.type).toBe("session.waiting");
+        expect(filterEventsByType(followUpTurn, "turn.cancelled")).toHaveLength(0);
+        expect(filterEventsByType(followUpTurn, "turn.started")).toHaveLength(1);
+        expect(filterEventsByType(followUpTurn, "session.waiting")).toHaveLength(1);
+        expectNoFailureEvents(followUpTurn);
+        expect(
+          followUpTurn.some(
+            (event) =>
+              event.type === "message.completed" &&
+              event.data.message?.includes("answer after hitl cancel") === true,
+          ),
+        ).toBe(true);
+
+        // The cleared proxy map must not route the answer to the orphaned
+        // child: the child never starts a second turn.
+        const childSecondTurnInbox = `${childSessionId ?? ""}:turn-control:1:inbox`;
+        const deadline = Date.now() + 1_500;
+        while (Date.now() < deadline) {
+          const hook = await world.hooks.getByToken(childSecondTurnInbox).catch(() => null);
+          expect(hook ?? null).toBeNull();
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
       } finally {
         stream.dispose();
         await run.cancel();

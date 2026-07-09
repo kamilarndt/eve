@@ -228,6 +228,7 @@ export interface ChannelEvents<TCtx = void> {
   readonly "input.requested"?: ChannelEventHandler<"input.requested", TCtx>;
   readonly "turn.failed"?: ChannelEventHandler<"turn.failed", TCtx>;
   readonly "turn.completed"?: ChannelEventHandler<"turn.completed", TCtx>;
+  readonly "turn.cancelled"?: ChannelEventHandler<"turn.cancelled", TCtx>;
   readonly "session.failed"?: ChannelSessionFailedHandler<TCtx>;
   readonly "session.completed"?: ChannelEventHandler<"session.completed", TCtx>;
   readonly "session.waiting"?: ChannelEventHandler<"session.waiting", TCtx>;
@@ -341,6 +342,7 @@ function buildAdapter<TState, TCtx, TReceiveTarget, TMetadata extends Record<str
     "input.requested",
     "turn.failed",
     "turn.completed",
+    "turn.cancelled",
     "session.failed",
     "session.completed",
     "session.waiting",

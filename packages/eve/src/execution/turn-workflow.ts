@@ -81,13 +81,20 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
     }
 
     // Created after the inbox claim so a losing duplicate run never
-    // registers the cancel token.
-    cancellation = createTurnCancellationControl(input.completionToken);
+    // registers the cancel token. Gated on the pinned driver settling
+    // `park + cancelled` and on the session being parkable — cancellation
+    // settles as a park, and an unparkable session would fail instead.
+    if (
+      input.driverCapabilities?.cancelledTurnSettle === true &&
+      (input.mode === "conversation" || input.stepInput.sessionState.continuationToken !== "")
+    ) {
+      cancellation = createTurnCancellationControl(input.completionToken);
+    }
 
     while (true) {
       // No race needed: the runtime delivers the abort to the in-flight
       // step attempt, which settles itself as `cancelled`.
-      const result = await turnStep(cursor.createStepInput(nextStepInput, cancellation.signal));
+      const result = await turnStep(cursor.createStepInput(nextStepInput, cancellation?.signal));
 
       if (result.action === "cancelled") {
         // The epilogue must not run as a step in this run: queued cancel
@@ -196,7 +203,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
 
 async function waitForRuntimeActionResults(input: {
   readonly bufferedDeliveries: DeliverHookPayload[];
-  readonly cancellation: TurnCancellationControl;
+  readonly cancellation: TurnCancellationControl | undefined;
   readonly cursor: TurnExecutionCursor;
   readonly inboxToken: string;
   readonly iterator: AsyncIterator<TurnInboxPayload>;
@@ -235,13 +242,13 @@ async function waitForRuntimeActionResults(input: {
     }
 
     const nextPromise = input.iterator.next();
-    const winner = await Promise.race([
-      nextPromise.then(
-        () => "payload" as const,
-        () => "payload" as const,
-      ),
-      input.cancellation.requested,
-    ]);
+    const settled = nextPromise.then(
+      () => "payload" as const,
+      () => "payload" as const,
+    );
+    const winner = await (input.cancellation === undefined
+      ? settled
+      : Promise.race([settled, input.cancellation.requested]));
     if (winner === "cancel") {
       if (pendingDeliveryRequest !== undefined) {
         // Release the raced public input back to the driver so it stays

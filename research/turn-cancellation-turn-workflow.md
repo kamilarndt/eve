@@ -65,6 +65,23 @@ trigger is resuming the cancel hook, which tests do directly.
 - **Partial content is kept.** Whatever the harness emitted before the abort
   stays on the stream, and durable history persists exactly what the harness
   had settled at abort time — no rollback, no synthesis.
+- **Cancellation is driver-negotiated and parkable-only.** The pinned driver
+  body advertises `cancelledTurnSettle` through the dispatch input; the turn
+  workflow registers the cancel hook only when it is set _and_ the session
+  can park (conversation mode, or an anchored continuation token — delegated
+  children always have one). Drivers pinned before the capability get no
+  cancel hook, so a layer-2 trigger cannot strand them with an unsettled
+  cancelled park; unparkable root task runs get no hook, so cancellation can
+  never decay into `session.failed`. Task-mode terminal semantics arrive
+  with layer 2.
+- **Cancel during a descendant HITL wait**: the proxy epilogue has already
+  streamed the turn's waiting boundary, so the settle emits nothing extra
+  (no fabricated turn id, no duplicate `session.waiting`) and clears the
+  proxy input-request map — later HITL answers stay with the parent instead
+  of routing to the orphaned child.
+- **The settle epilogue runs the authored-hook pipeline.** `turn.cancelled`
+  and its `session.waiting` dispatch stream-event hooks like any turn-step
+  emission.
 - **Parked sessions cannot be cancelled** in this layer: parking terminates
   the turn workflow, so there is no turn to cancel. The session-scoped story
   stays in `research/channel-session-reset.md`.
@@ -203,10 +220,11 @@ make the stable-token shape claimable.
    crosses the step boundary — the turn workflow run records no
    `step_failed`/`step_retrying` events and at most one `step_completed`
    per correlation id.
-2. `turn.cancelled` is emitted exactly once per cancelled turn, always
-   followed by `session.waiting`; zero failure events on the cancelled path;
-   the aborted tool executes exactly once; the cancelled turn streams
-   exactly one `step.started`.
+2. `turn.cancelled` is emitted once per cancelled turn under normal
+   operation (single-flighted against duplicate step dispatch; at-least-once
+   under crash retry, like every stream emission), always followed by
+   `session.waiting`; zero failure events on the cancelled path; the aborted
+   tool executes once; the cancelled turn streams one `step.started`.
 3. The cancel hook token is never reused: one hook per turn workflow run,
    derived from the already-indexed completion token.
 4. A cancelled subagent wait is not re-dispatched: the next turn runs

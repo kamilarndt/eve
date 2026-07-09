@@ -266,6 +266,17 @@ function reduceMessageData(data: EveMessageData, event: EveAgentReducerEvent): E
     case "turn.completed":
       return updateAssistantMetadata(data, event.data.turnId, { status: "complete" });
 
+    case "turn.cancelled":
+      // Finalize whatever the cancelled turn streamed: no message.completed
+      // will follow a partial message.appended.
+      return updateAssistantMessage(data, event.data.turnId, (message) => ({
+        ...message,
+        metadata: { ...message.metadata, status: "complete" },
+        parts: message.parts.map((part) =>
+          part.type === "text" && part.state === "streaming" ? { ...part, state: "done" } : part,
+        ),
+      }));
+
     case "turn.failed":
     case "session.failed":
       return data;

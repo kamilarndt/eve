@@ -1,5 +1,7 @@
 import { buildAdapterContext } from "#channel/adapter-context.js";
 import { callAdapterEventHandler } from "#channel/adapter.js";
+import { dispatchStreamEventHooks } from "#context/hook-lifecycle.js";
+import { withContextScope } from "#context/run-step.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
 import { setChannelContext } from "#execution/channel-context.js";
 import {
@@ -11,6 +13,10 @@ import { hydrateDurableSession } from "#execution/session.js";
 import { reconcileSessionContinuationToken } from "#execution/reconcile-session-continuation-token.js";
 import { emitCancelledTurn } from "#harness/cancelled-turn-emission.js";
 import { getHarnessEmissionState, setHarnessEmissionState } from "#harness/emission.js";
+import {
+  clearAllProxyInputRequests,
+  hasProxyInputRequests,
+} from "#harness/proxy-input-requests.js";
 import { clearPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
 import { clearPendingWorkflowInterrupt } from "#harness/workflow-interrupt-state.js";
 import {
@@ -92,32 +98,54 @@ async function runSettleCancelledTurn(input: {
   const adapter = ctx.require(ChannelKey);
   const adapterCtx = buildAdapterContext(adapter, ctx);
   const bundle = ctx.require(BundleKey);
-  const writer = input.parentWritable.getWriter();
 
-  let emissionState;
-  try {
-    const emit = async (event: HandleMessageStreamEvent): Promise<void> => {
-      const transformed = await callAdapterEventHandler(adapter, event, adapterCtx);
-      await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(transformed)));
-    };
-    emissionState = await emitCancelledTurn(emit, getHarnessEmissionState(durableSession.state));
-  } finally {
-    writer.releaseLock();
-  }
-
-  setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
-
-  const session = hydrateDurableSession({
+  let session = hydrateDurableSession({
     compactionOverrides: {
       thresholdPercent: bundle.resolvedAgent.config.compaction?.thresholdPercent,
     },
     durable: durableSession,
     turnAgent: bundle.turnAgent,
   });
+
+  let emissionState = getHarnessEmissionState(durableSession.state);
+  // A descendant HITL wait already streamed this turn's waiting boundary
+  // (the proxy epilogue clears the turn id); re-emitting would fabricate
+  // a turn id and duplicate the boundary.
+  const alreadyEpilogued =
+    emissionState.turnId === "" && hasProxyInputRequests(durableSession.state);
+
+  if (!alreadyEpilogued) {
+    const writer = input.parentWritable.getWriter();
+    try {
+      const scoped = await withContextScope(ctx, session, async (enrichedSession) => {
+        const emit = async (event: HandleMessageStreamEvent): Promise<void> => {
+          const transformed = await callAdapterEventHandler(adapter, event, adapterCtx);
+          await writer.write(
+            encodeMessageStreamEvent(timestampHandleMessageStreamEvent(transformed)),
+          );
+          await dispatchStreamEventHooks({
+            ctx,
+            event: transformed,
+            registry: bundle.hookRegistry,
+          });
+        };
+        return { result: await emitCancelledTurn(emit, emissionState), session: enrichedSession };
+      });
+      emissionState = scoped.result;
+      session = scoped.session;
+    } finally {
+      writer.releaseLock();
+    }
+  }
+
+  setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
+
   const cancelledSession = reconcileSessionContinuationToken(
     ctx,
     setHarnessEmissionState(
-      clearPendingWorkflowInterrupt(clearPendingRuntimeActionBatch(session)),
+      clearAllProxyInputRequests(
+        clearPendingWorkflowInterrupt(clearPendingRuntimeActionBatch(session)),
+      ),
       emissionState,
     ),
   );
