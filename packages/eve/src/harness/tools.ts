@@ -89,7 +89,29 @@ export function buildToolSet(input: {
             }: {
               readonly output: unknown;
               readonly toolCallId?: string;
-            }) => resolveExecutedToolModelOutput({ definition, output, toolCallId }),
+            }) => {
+              if (isAuthorizationPendingModelOutput(output)) {
+                return {
+                  type: "text" as const,
+                  value: authorizationPendingModelText(output.connections),
+                };
+              }
+              if (authorToModelOutput !== undefined) {
+                return normalizeToolModelOutput({
+                  output: await authorToModelOutput(output),
+                  toolCallId,
+                  toolName: definition.name,
+                });
+              }
+              if (typeof output === "string") {
+                return { type: "text" as const, value: output };
+              }
+              return normalizeToolModelOutput({
+                output: { type: "json" as const, value: output ?? null },
+                toolCallId,
+                toolName: definition.name,
+              });
+            },
           }
         : authorToModelOutput !== undefined
           ? {
@@ -168,42 +190,6 @@ export function wrapToolExecute(
       toolName: definition.name,
     });
   };
-}
-
-/**
- * Model-facing output projection for an executed tool's raw output. The
- * single normalization point shared by the AI SDK `toModelOutput` hook (via
- * {@link buildToolSet}) and the harness's own resume-time execution of
- * approved tool calls, so both paths record identical durable results.
- */
-export async function resolveExecutedToolModelOutput(input: {
-  readonly definition: HarnessToolDefinition;
-  readonly output: unknown;
-  readonly toolCallId?: string;
-}): Promise<ToolModelOutputValue> {
-  const { definition, output, toolCallId } = input;
-
-  if (isAuthorizationPendingModelOutput(output)) {
-    return {
-      type: "text",
-      value: authorizationPendingModelText(output.connections),
-    };
-  }
-  if (definition.toModelOutput !== undefined) {
-    return normalizeToolModelOutput({
-      output: await definition.toModelOutput(output),
-      toolCallId,
-      toolName: definition.name,
-    });
-  }
-  if (typeof output === "string") {
-    return { type: "text", value: output };
-  }
-  return normalizeToolModelOutput({
-    output: { type: "json", value: output ?? null },
-    toolCallId,
-    toolName: definition.name,
-  });
 }
 
 function normalizeToolJsonOutput(input: {

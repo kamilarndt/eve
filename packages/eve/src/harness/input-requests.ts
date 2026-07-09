@@ -12,7 +12,6 @@ import {
   isSessionLimitContinuationRequest,
   resolveSessionLimitContinuation,
 } from "#harness/session-limit-continuation.js";
-import { closeDanglingToolCalls } from "#harness/transcript-obligations.js";
 import type { HarnessSession, SessionStateMap, StepInput } from "#harness/types.js";
 
 const PENDING_INPUT_BATCH_KEY = "eve.runtime.pendingInputBatch";
@@ -26,7 +25,6 @@ const TOOL_EXECUTION_DENIED_MESSAGE = "Tool execution was denied.";
 const TOOL_EXECUTION_INVALID_APPROVAL_MESSAGE = "Invalid approval response.";
 
 type ToolResponsePart = Extract<ModelMessage, { role: "tool" }>["content"][number];
-type ToolResultOutput = Extract<ToolResponsePart, { type: "tool-result" }>["output"];
 
 /**
  * Stream-emit coordinates carried so a parked batch's resolution can attribute
@@ -54,17 +52,6 @@ interface PendingInputBatch {
 export interface RejectedActionBatch {
   readonly event: PendingInputBatchEvent;
   readonly results: readonly RuntimeToolResultActionResult[];
-}
-
-/**
- * Approved tool-call actions from one resolved batch. The caller (the tool
- * loop) executes them and appends their durable results before assembling
- * the next model request; `event` carries the originating turn's stream
- * coordinates for the resulting `action.result` emissions.
- */
-export interface ApprovedActionBatch {
-  readonly calls: readonly RuntimeToolCallActionRequest[];
-  readonly event?: PendingInputBatchEvent;
 }
 
 type ApprovalTerminalStatus = "approved" | "denied" | "ignored" | "invalid";
@@ -134,14 +121,13 @@ export function hasDeferredStepInput(session: HarnessSession): boolean {
 /**
  * Resolves pending input at the start of a harness step.
  *
- * When the pending batch contains tool-approval requests that the step input
- * does not answer, the input is deferred to a later step via
- * {@link consumeDeferredStepInput} and the batch stays parked — an unrelated
- * follow-up must never auto-deny a pending approval. Once every approval is
- * answered, the batch resolves in one pass: denials are closed inline with
- * `execution-denied` results, and approved calls are returned on
- * `approvedActions` for the tool loop to execute and close before the next
- * model request.
+ * When the pending batch contains tool-approval requests and the step input
+ * also carries a follow-up user message, the message is deferred to the next
+ * internal harness step rather than appended to the current turn. This is
+ * necessary because AI SDK cannot process tool-approval responses and a new
+ * user message in the same request -- the approval must be resolved in
+ * isolation first, and the user message replayed on the subsequent step via
+ * {@link consumeDeferredStepInput}.
  */
 export function resolvePendingInput(input: {
   readonly history?: readonly ModelMessage[];
@@ -180,7 +166,11 @@ export function resolvePendingInput(input: {
     // A follow-up message arrived for question-only input with no explicit
     // responses. Keep the existing question semantics: mark unanswered
     // question requests ignored so the model can continue with the message.
-    const messages = buildResolvedInputMessages(baseHistory, pendingBatch, []);
+    const toolParts = buildToolResponseParts(pendingBatch, []);
+    const messages: ModelMessage[] = [...baseHistory, ...pendingBatch.responseMessages];
+    if (toolParts.length > 0) {
+      messages.push({ content: toolParts, role: "tool" });
+    }
 
     const rejectedActions = buildRejectedActionBatch(pendingBatch, []);
     session = clearPendingInputBatch(session);
@@ -199,24 +189,48 @@ export function resolvePendingInput(input: {
     responses,
   });
 
-  const approvedRequestIds = collectApprovedRequestIds(responses);
-
   // Record approved tools before clearing the batch.
   session = recordApprovedTools({
-    approvedRequestIds,
     pendingBatch,
     resolveApprovalKey: input.resolveApprovalKey,
+    responses,
     session,
   });
 
-  const messages = buildResolvedInputMessages(baseHistory, pendingBatch, responses);
+  // Build tool result messages from responses.
+  const toolParts = buildToolResponseParts(pendingBatch, responses);
+
+  const messages: ModelMessage[] = [...baseHistory, ...pendingBatch.responseMessages];
+  if (toolParts.length > 0) {
+    messages.push({ content: toolParts, role: "tool" });
+  }
 
   const rejectedActions = buildRejectedActionBatch(pendingBatch, responses);
-  const approvedActions = buildApprovedActionBatch(pendingBatch, approvedRequestIds);
   session = clearPendingInputBatch(session);
 
+  // AI SDK cannot process tool-approval responses and a new user message
+  // in the same request. Defer the message so the approval is resolved in
+  // isolation; `consumeDeferredStepInput` replays it on the next step.
+  if (
+    resolvedStepInput?.message !== undefined &&
+    pendingBatch.requests.some((request) => isApprovalRequest(request))
+  ) {
+    session = queueDeferredStepInput(session, {
+      message: resolvedStepInput.message,
+    });
+
+    return {
+      consumedMessage: resolvedStepInput?.messageConsumed,
+      deferredMessage: true,
+      limitContinuation,
+      outcome: "resolved",
+      messages,
+      rejectedActions,
+      session,
+    };
+  }
+
   return {
-    approvedActions,
     consumedMessage: resolvedStepInput?.messageConsumed,
     limitContinuation,
     outcome: "resolved",
@@ -292,11 +306,6 @@ function hasUnansweredApproval(input: {
 }
 
 type ResolvePendingInputResult = {
-  /**
-   * Approved tool-call actions the caller must execute and close before the
-   * next model request. Present only on a resolved approval batch.
-   */
-  readonly approvedActions?: ApprovedActionBatch;
   readonly consumedMessage?: boolean;
   readonly deferredMessage?: boolean;
   /**
@@ -421,24 +430,23 @@ export function getApprovedTools(session: HarnessSession): ReadonlySet<string> {
   return new Set(value as string[]);
 }
 
-/** The single definition of an approved response in one resolved batch. */
-function collectApprovedRequestIds(responses: readonly InputResponse[]): ReadonlySet<string> {
-  return new Set(responses.filter((r) => r.optionId === "approve").map((r) => r.requestId));
-}
-
 /**
  * Resolves the approval key for a request. When a `resolveApprovalKey`
  * function is provided and returns a string, that compound key is recorded
  * instead of the bare tool name.
  */
 function recordApprovedTools(input: {
-  readonly approvedRequestIds: ReadonlySet<string>;
   readonly pendingBatch: PendingInputBatch;
   readonly resolveApprovalKey?: (request: InputRequest) => string | undefined;
+  readonly responses: readonly InputResponse[];
   readonly session: HarnessSession;
 }): HarnessSession {
+  const approvedIds = new Set(
+    input.responses.filter((r) => r.optionId === "approve").map((r) => r.requestId),
+  );
+
   const newKeys = input.pendingBatch.requests
-    .filter((r) => input.approvedRequestIds.has(r.requestId))
+    .filter((r) => approvedIds.has(r.requestId))
     .map((r) => input.resolveApprovalKey?.(r) ?? r.action.toolName);
 
   if (newKeys.length === 0) {
@@ -543,82 +551,81 @@ function buildRejectedActionBatch(
   return results.length > 0 ? { event: batch.event, results } : undefined;
 }
 
-/**
- * Extracts the approved tool-call actions from one resolved batch so the
- * caller can execute them.
- */
-function buildApprovedActionBatch(
-  batch: PendingInputBatch,
-  approvedRequestIds: ReadonlySet<string>,
-): ApprovedActionBatch | undefined {
-  const calls = batch.requests
-    .filter((request) => isApprovalRequest(request) && approvedRequestIds.has(request.requestId))
-    .map((request) => request.action);
-
-  return calls.length > 0 ? { calls, event: batch.event } : undefined;
-}
-
-/** Resolves input metadata and closes every answered or denied tool call. */
-function buildResolvedInputMessages(
-  baseHistory: readonly ModelMessage[],
+function buildToolResponseParts(
   batch: PendingInputBatch,
   responses: readonly InputResponse[],
-): ModelMessage[] {
-  const { closures, responseParts } = buildInputResolutionParts(batch, responses);
-  const messages: ModelMessage[] = [...baseHistory, ...batch.responseMessages];
-  if (responseParts.length > 0) {
-    messages.push({ content: [...responseParts], role: "tool" });
+): ToolResponsePart[] {
+  const responseMap = new Map(responses.map((r) => [r.requestId, r]));
+
+  const parts: ToolResponsePart[] = [];
+  for (const request of batch.requests) {
+    parts.push(...buildToolResponsePartsForRequest(request, responseMap.get(request.requestId)));
+  }
+  return parts;
+}
+
+function buildToolResponsePartsForRequest(
+  request: InputRequest,
+  response: InputResponse | undefined,
+): ToolResponsePart[] {
+  // A session-limit continuation prompt is harness-authored: no matching
+  // tool call exists in model history, so resolving it must not append a
+  // tool message the provider would reject as unmatched. This is currently
+  // the only harness-authored request type; if another appears, replace this
+  // toolName predicate with a generic synthetic-request marker instead of
+  // stacking a second special case here.
+  if (isSessionLimitContinuationRequest(request)) {
+    return [];
   }
 
-  return closeDanglingToolCalls(messages, (call) => closures.get(call.toolCallId), {
-    placement: "after-existing",
-  }).messages;
-}
-
-function buildInputResolutionParts(
-  batch: PendingInputBatch,
-  responses: readonly InputResponse[],
-): {
-  readonly closures: ReadonlyMap<string, ToolResultOutput>;
-  readonly responseParts: readonly ToolResponsePart[];
-} {
-  const responseMap = new Map(responses.map((r) => [r.requestId, r]));
-  const closures = new Map<string, ToolResultOutput>();
-  const responseParts: ToolResponsePart[] = [];
-
-  for (const request of batch.requests) {
-    // A session-limit continuation prompt is harness-authored: no matching
-    // tool call exists in model history, so resolving it must not append a
-    // tool message the provider would reject as unmatched.
-    if (isSessionLimitContinuationRequest(request)) {
-      continue;
-    }
-
-    const response = responseMap.get(request.requestId);
-    if (isApprovalRequest(request)) {
-      const { approved, reason } = resolveApprovalOutcome(response);
-      responseParts.push({
+  if (isApprovalRequest(request)) {
+    const { approved, reason } = resolveApprovalOutcome(response);
+    const parts: ToolResponsePart[] = [
+      {
         approvalId: request.requestId,
         approved,
         reason,
         type: "tool-approval-response",
+      },
+    ];
+    /*
+     * On denial (explicit "deny" or auto-deny when the user continues
+     * without responding), splice in the matching `execution-denied`
+     * tool-result. AI SDK's `streamText` synthesizes this for the
+     * current turn's `initialResponseMessages`, but that synthesis is
+     * gated on the input messages' last entry being a tool message —
+     * on subsequent turns (when a new user message is the tail of
+     * history) the synthesis is skipped, and the persisted
+     * `tool-approval-response` is stripped during provider prompt
+     * conversion. Without an own `tool-result` in history, the prior
+     * `tool_use` block replays unmatched and some providers reject
+     * the request with 400.
+     */
+    if (!approved) {
+      parts.push({
+        output: { type: "execution-denied", reason },
+        toolCallId: request.action.callId,
+        toolName: request.action.toolName,
+        type: "tool-result",
       });
-      if (!approved) {
-        closures.set(request.action.callId, { type: "execution-denied", reason });
-      }
-      continue;
     }
-
-    closures.set(request.action.callId, {
-      type: "json",
-      value:
-        response !== undefined
-          ? { optionId: response.optionId, text: response.text, status: "answered" }
-          : { status: "ignored" },
-    });
+    return parts;
   }
 
-  return { closures, responseParts };
+  return [
+    {
+      output: {
+        type: "json",
+        value:
+          response !== undefined
+            ? { optionId: response.optionId, text: response.text, status: "answered" }
+            : { status: "ignored" },
+      },
+      toolCallId: request.action.callId,
+      toolName: request.action.toolName,
+      type: "tool-result",
+    },
+  ];
 }
 
 function isApprovalRequest(request: InputRequest): boolean {

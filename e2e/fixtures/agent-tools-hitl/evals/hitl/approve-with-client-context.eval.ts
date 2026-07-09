@@ -14,7 +14,7 @@ import { GUARDED_ECHO_TOKEN } from "./shared.js";
  * prevent the approved tool from executing.
  */
 export default defineEval({
-  description: "#529: approval answered with channel context still executes the tool.",
+  description: "HITL red (#529): approval answered with channel context still executes the tool.",
   async test(t) {
     const parked = await t.send('Call the guarded-echo tool with note "context-approve".');
     parked.calledTool("guarded-echo", { status: "pending", count: 1 });

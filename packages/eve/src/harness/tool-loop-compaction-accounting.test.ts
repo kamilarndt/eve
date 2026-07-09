@@ -250,19 +250,7 @@ describe("tool-loop structured compaction accounting", () => {
           requestId: "question-call",
         },
       ],
-      responseMessages: [
-        {
-          content: [
-            {
-              input: { prompt: "Pick one." },
-              toolCallId: "question-call",
-              toolName: "ask_question",
-              type: "tool-call",
-            },
-          ],
-          role: "assistant",
-        },
-      ],
+      responseMessages: [],
       session: createTestSession({
         compaction: {
           lastKnownInputTokens: 100,

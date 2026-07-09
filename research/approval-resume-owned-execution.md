@@ -1,6 +1,6 @@
 ---
 issue: https://github.com/vercel/eve/issues/460
-status: in-review
+status: proposed
 last_updated: "2026-07-07"
 ---
 
@@ -32,18 +32,6 @@ resume path, the AI SDK's replay mechanics, the stream-capture path, and the
 message-assembly ordering in the tool loop. Because the logic is decoupled,
 the invariant is never stated and never checked — each seam holds only as
 long as its neighbors behave.
-
-Tiny examples of the mismatch:
-
-- Deny: eve writes `tool-result(call_1, execution-denied)` during resume.
-- Approve: eve writes `tool-approval-response(call_1)` during resume and
-  waits for the AI SDK to later produce `tool-result(call_1, output)`.
-- Approve with a follow-up `message`: eve defers the message so the approval
-  tool message stays last, because the SDK only scans the tail.
-- Approve with `context`: eve appends the context after the approval, so the
-  SDK tail scan sees a user message and runs no tool.
-- Approved tool execution: the durable `tool-result` reaches history through
-  stream capture, not through the resume code that accepted the approval.
 
 ### Seam 1: the deny arm closes in eve, the approve arm closes in the AI SDK
 
@@ -180,28 +168,25 @@ Each prior fix patched one seam without owning the obligation:
   _message_ to keep the approval message the tail (seam 3, `message` only —
   `context` was missed).
 - `bd287b17` (#576) — spliced synthetic results for invalid-input tool calls
-  through a separate append path. This branch folds that sibling obligation
-  into the same `closeDanglingToolCalls` primitive used by the replay guard,
-  while preserving the invalid-input error text the model can act on.
+  (a sibling obligation, closed in yet another place).
 
-The pattern is the diagnosis: each point fix added one more closure site, in a
-different module, guarding one more entry point. Before this branch, the
-invariant — one terminal result per parked call before any replay — existed
-nowhere as an owned harness rule, so each new entry point (a channel adding
-context, a slower `execute`, a stricter provider) could break it again.
+The pattern is the diagnosis: every fix adds one more closure site, in a
+different module, guarding one more entry point. The invariant — one terminal
+result per parked call before any replay — still exists nowhere in code, so
+each new entry point (a channel adding context, a slower `execute`, a
+stricter provider) breaks it again.
 
 ## Direction
 
 Centralize both halves of the obligation in the harness:
 
-1. **One closure primitive.** eve closes every parked local tool call itself at
+1. **One closure moment.** eve closes every parked local tool call itself at
    resume — executing approved tools directly (the execution wrapper already
    exists: `wrapToolExecute` in `harness/tools.ts`) and appending the durable
-   `tool-result`/`tool-error` alongside the existing denial synthesis. The
-   same primitive closes invalid-input calls at step time with their specific
-   parse error. No dependency on the SDK's tail scan or on stream capture for
-   obligation-closing results. This also removes the reason the message/context
-   deferral machinery exists.
+   `tool-result`/`tool-error` alongside the existing denial synthesis. No
+   dependency on the SDK's tail scan or on stream capture for
+   obligation-closing results. This also removes the reason the
+   message/context deferral machinery exists.
 2. **One guard.** A single pure reconciliation pass over the assembled
    messages, immediately before every model call: no local `tool-call`
    without a terminal `tool-result` may reach the wire. Dangling calls are

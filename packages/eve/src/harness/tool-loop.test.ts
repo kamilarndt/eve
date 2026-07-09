@@ -404,7 +404,6 @@ function finalOutputResult(text: string, structured: unknown): Record<string, un
 
 function createPendingBashApprovalSession(): HarnessSession {
   return setPendingInputBatch({
-    event: { sequence: 7, stepIndex: 0, turnId: "turn-1" },
     requests: [
       {
         action: {
@@ -455,7 +454,6 @@ function createPendingBashApprovalSession(): HarnessSession {
 
 function createPendingProtectedActionApprovalSession(): HarnessSession {
   return setPendingInputBatch({
-    event: { sequence: 7, stepIndex: 0, turnId: "turn-1" },
     requests: [
       {
         action: {
@@ -4803,12 +4801,14 @@ describe("createToolLoopHarness", () => {
     });
   });
 
-  it("executes an approved tool call at resume and persists its result before the model call, so the next turn replays a balanced tool_use / tool_result pair", async () => {
+  it("persists the inline approval-resume tool-result into session history so the next turn replays a balanced tool_use / tool_result pair", async () => {
     /*
-     * Closing a parked tool call is owned by the harness: the approved
-     * tool executes at resume time and its durable result lands in the
-     * same tool message as the approval response, before any model
-     * request is assembled. Without this, the next turn replays a
+     * When a previously-parked tool call is approved, the AI SDK
+     * enqueues its tool-result onto the parent stream before re-
+     * entering the LLM call. The result is absent from
+     * `stepResult.response.messages` / `toolCalls` / `toolResults`,
+     * so the harness must capture it from the stream and splice it
+     * into persisted history. Without this, the next turn replays a
      * `tool_use` block with no matching `tool_result` and Anthropic
      * rejects the request with 400.
      */
@@ -4816,6 +4816,12 @@ describe("createToolLoopHarness", () => {
       content: [],
       finishReason: "stop",
       fullStreamParts: [
+        {
+          output: { exitCode: 0, stderr: "", stdout: "/workspace\n", truncated: false },
+          toolCallId: "call-1",
+          toolName: "bash",
+          type: "tool-result",
+        },
         { id: "text-1", text: "`/workspace`", type: "text-delta" },
         { finishReason: "stop", type: "finish-step" },
       ],
@@ -4827,179 +4833,43 @@ describe("createToolLoopHarness", () => {
       toolResults: [],
     });
 
-    const { emit, events } = createEventCollector();
+    const { emit } = createEventCollector();
     const session = createPendingBashApprovalSession();
 
-    const bashExecute = vi
-      .fn()
-      .mockResolvedValue({ exitCode: 0, stderr: "", stdout: "/workspace\n", truncated: false });
     const harness = createToolLoopHarness(
-      createTestConfig("conversation", emit, {
-        tools: new Map([
-          [
-            "bash",
-            {
-              description: "Run shell commands",
-              execute: bashExecute,
-              inputSchema: jsonSchema({ type: "object" }),
-              name: "bash",
-            },
-          ],
-        ]),
-      }),
+      createTestConfig("conversation", emit, { tools: new Map() }),
     );
     const result = await harness(session, {
       inputResponses: [{ optionId: "approve", requestId: "approval-1" }],
     });
 
-    expect(bashExecute).toHaveBeenCalledWith(
-      { command: "pwd" },
-      expect.objectContaining({ toolCallId: "call-1" }),
-    );
-
     expect(result.session.history.map((msg) => msg.role)).toEqual([
       "assistant",
       "tool",
+      "tool",
       "assistant",
     ]);
-    const resolutionMessage = result.session.history[1];
-    expect(Array.isArray(resolutionMessage?.content)).toBe(true);
-    const resolutionParts = resolutionMessage?.content as Array<Record<string, unknown>>;
-    expect(resolutionParts).toHaveLength(2);
-    expect(resolutionParts[0]).toEqual({
+    const approvalMessage = result.session.history[1];
+    expect(Array.isArray(approvalMessage?.content)).toBe(true);
+    const approvalParts = approvalMessage?.content as Array<Record<string, unknown>>;
+    expect(approvalParts).toHaveLength(1);
+    expect(approvalParts[0]).toEqual({
       approvalId: "approval-1",
       approved: true,
       reason: undefined,
       type: "tool-approval-response",
     });
-    expect(resolutionParts[1]).toMatchObject({
+
+    const toolResultMessage = result.session.history[2];
+    expect(Array.isArray(toolResultMessage?.content)).toBe(true);
+    const toolResultParts = toolResultMessage?.content as Array<Record<string, unknown>>;
+    expect(toolResultParts).toHaveLength(1);
+    expect(toolResultParts[0]).toMatchObject({
       toolCallId: "call-1",
       toolName: "bash",
       type: "tool-result",
     });
     expect(result.session.history.at(-1)?.role).toBe("assistant");
-
-    const actionResults = events.filter((event) => event.type === "action.result");
-    expect(actionResults).toHaveLength(1);
-    expect(actionResults[0]?.data).toMatchObject({
-      result: { callId: "call-1", kind: "tool-result", toolName: "bash" },
-      status: "completed",
-    });
-  });
-
-  it("executes an approved tool call even when channel context rides the approving prompt", async () => {
-    // https://github.com/vercel/eve/issues/529 — the Linear channel sends
-    // `context` on every prompt, including the one answering an approval.
-    // Owned resume-time execution must not depend on the approval message
-    // being the request tail.
-    setupMockAgent({
-      content: [],
-      finishReason: "stop",
-      response: { messages: [{ content: "Done.", role: "assistant" }] },
-      text: "Done.",
-      toolCalls: [],
-      toolResults: [],
-    });
-
-    const session = createPendingBashApprovalSession();
-    const bashExecute = vi.fn().mockResolvedValue("ok");
-    const harness = createToolLoopHarness(
-      createTestConfig("conversation", undefined, {
-        tools: new Map([
-          [
-            "bash",
-            {
-              description: "Run shell commands",
-              execute: bashExecute,
-              inputSchema: jsonSchema({ type: "object" }),
-              name: "bash",
-            },
-          ],
-        ]),
-      }),
-    );
-
-    const result = await harness(session, {
-      context: ["<linear_context>Issue ENG-123</linear_context>"],
-      inputResponses: [{ optionId: "approve", requestId: "approval-1" }],
-    });
-
-    expect(bashExecute).toHaveBeenCalledTimes(1);
-
-    // The closed resolution precedes the context; the context stays on the
-    // same call.
-    const roles = result.session.history.map((msg) => msg.role);
-    expect(roles).toEqual(["assistant", "tool", "user", "assistant"]);
-    const resolutionParts = result.session.history[1]?.content as Array<Record<string, unknown>>;
-    expect(resolutionParts.map((part) => part.type)).toEqual([
-      "tool-approval-response",
-      "tool-result",
-    ]);
-    expect(result.session.history[2]).toEqual({
-      content: "<linear_context>Issue ENG-123</linear_context>",
-      role: "user",
-    });
-  });
-
-  it("heals a history poisoned by a dangling local tool call before the model call", async () => {
-    // A dangling `tool_use` in durable history (the #460/#533 poison shape)
-    // must be closed with a synthetic error result instead of being replayed
-    // verbatim and 400ing forever.
-    const generateCalls: unknown[][] = [];
-    vi.mocked(ToolLoopAgent).mockImplementation(function (
-      this: MockAgentInstance,
-      settings: MockAgentSettings,
-    ) {
-      const result = {
-        finishReason: "stop",
-        response: { messages: [{ content: "Recovered.", role: "assistant" }] },
-        text: "Recovered.",
-        toolCalls: [],
-        toolResults: [],
-      };
-      const { onStepFinish } = settings;
-      this.generate = vi.fn().mockImplementation(async (input: { messages: unknown[] }) => {
-        generateCalls.push(input.messages);
-        if (onStepFinish) await onStepFinish(result);
-        return result;
-      });
-      return this;
-    } as MockAgentConstructor);
-
-    const session = createTestSession({
-      history: [
-        { content: "create the object", role: "user" },
-        {
-          content: [
-            {
-              input: { command: "pwd" },
-              toolCallId: "dangling-1",
-              toolName: "bash",
-              type: "tool-call",
-            },
-          ],
-          role: "assistant",
-        },
-      ],
-    });
-
-    const harness = createToolLoopHarness(createTestConfig("conversation", undefined));
-    const result = await harness(session, { message: "try again" });
-
-    const sent = generateCalls[0] as Array<{ role: string; content: unknown }>;
-    const toolMessage = sent.find((msg) => msg.role === "tool");
-    expect(toolMessage?.content).toEqual([
-      {
-        output: { type: "error-text", value: expect.stringContaining("did not complete") },
-        toolCallId: "dangling-1",
-        toolName: "bash",
-        type: "tool-result",
-      },
-    ]);
-
-    // The repair is durable: the closed transcript persists into history.
-    const persistedTool = result.session.history.find((msg) => msg.role === "tool");
-    expect(persistedTool).toBeDefined();
   });
 
   it("does not persist provider-executed deferred tool-results as generic tool messages", async () => {
@@ -6444,7 +6314,7 @@ describe("createToolLoopHarness", () => {
     expect(events.filter((event) => event.type === "action.result")).toHaveLength(1);
   });
 
-  it("resolves a queued follow-up message in the same step as the approval denial", async () => {
+  it("queues a follow-up user message until the pending tool approval resolves", async () => {
     const generateCalls: unknown[] = [];
     const agentResults = [
       {
@@ -6563,9 +6433,7 @@ describe("createToolLoopHarness", () => {
       inputResponses: [{ requestId: "approval-1", optionId: "deny" }],
     });
 
-    // The denial is closed inline, so the queued message rides the same
-    // model call instead of costing another step.
-    expect(deniedResult.next).toBeNull();
+    expect(typeof deniedResult.next).toBe("function");
     expect(generateCalls[0]).toEqual([
       {
         content: [
@@ -6603,18 +6471,21 @@ describe("createToolLoopHarness", () => {
         ],
         role: "tool",
       },
-      {
-        content: "Hi instead.",
-        role: "user",
-      },
     ]);
-    expect(hasDeferredStepInput(deniedResult.session)).toBe(false);
-    expect(deniedResult.session.history.at(-2)).toEqual({
+
+    const secondResult = await createToolLoopHarness(config)(deniedResult.session);
+
+    expect(secondResult.next).toBeNull();
+    expect((generateCalls[1] as { role: string; content: unknown }[]).at(-1)).toEqual({
       content: "Hi instead.",
       role: "user",
     });
-    expect(deniedResult.session.history.at(-1)).toEqual({
-      content: "Okay, I will not run that command.",
+    expect(secondResult.session.history.at(-2)).toEqual({
+      content: "Hi instead.",
+      role: "user",
+    });
+    expect(secondResult.session.history.at(-1)).toEqual({
+      content: "Hello!",
       role: "assistant",
     });
   });
@@ -6746,24 +6617,17 @@ describe("createToolLoopHarness", () => {
             reason: undefined,
             type: "tool-approval-response",
           },
-          {
-            output: { type: "text", value: "ok" },
-            toolCallId: "call-1",
-            toolName: "guarded_echo",
-            type: "tool-result",
-          },
         ],
         role: "tool",
       },
     ]);
   });
 
-  it("deferred message lands as last non-system message in the approval-denial step", async () => {
+  it("deferred message lands as last non-system message after explicit approval denial", async () => {
     // Step 1: pending approval + user sends a follow-up message. The approval
     // remains pending and the message is deferred. Step 2: the user denies the
-    // approval; the denial is closed inline, so the deferred message is
-    // consumed in the same step and appears as the last message the model
-    // sees.
+    // approval. Step 3: the deferred message is consumed and appears as the
+    // last message the model sees.
     const generateCalls: Array<Array<{ role: string; content: unknown }>> = [];
     const agentResults = [
       {
@@ -6881,18 +6745,25 @@ describe("createToolLoopHarness", () => {
     expect(firstResult.next).toBeNull();
     expect(generateCalls).toEqual([]);
 
-    // Step 2: user denies the approval; the deferred message is consumed in
-    // the same step and is the last message the model sees.
+    // Step 2: user denies the approval; the deferred message is NOT in this call.
     const deniedResult = await createToolLoopHarness(config)(firstResult.session, {
       inputResponses: [{ requestId: "approval-1", optionId: "deny" }],
     });
-    expect(deniedResult.next).toBeNull();
+    expect(typeof deniedResult.next).toBe("function");
     const step2Last = generateCalls[0]?.at(-1);
-    expect(step2Last).toEqual({ content: "Do something else", role: "user" });
+    expect(step2Last?.role).toBe("tool");
+
+    // Step 3: harness consumes the deferred message.
+    const secondResult = await createToolLoopHarness(config)(deniedResult.session);
+    expect(secondResult.next).toBeNull();
+
+    // The deferred user message is the last message the model sees.
+    const step3Last = generateCalls[1]?.at(-1);
+    expect(step3Last).toEqual({ content: "Do something else", role: "user" });
 
     // History reflects the full conversation.
-    expect(deniedResult.session.history.at(-1)).toEqual({
-      content: "I will not run that command.",
+    expect(secondResult.session.history.at(-1)).toEqual({
+      content: "Sure, here you go.",
       role: "assistant",
     });
   });

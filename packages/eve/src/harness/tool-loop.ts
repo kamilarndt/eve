@@ -97,11 +97,6 @@ import {
   extractToolApprovalInputRequests,
 } from "#harness/input-extraction.js";
 import { createToolResultMessagePartFromToolError } from "#harness/action-result-helpers.js";
-import { closeApprovedActionBatch } from "#harness/approved-tool-execution.js";
-import {
-  closeDanglingToolCalls,
-  INTERRUPTED_TOOL_CALL_RESULT,
-} from "#harness/transcript-obligations.js";
 import { buildTelemetryRuntimeContext } from "#harness/instrumentation-runtime-context.js";
 import {
   consumeDeferredStepInput,
@@ -575,40 +570,6 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     session = pending.session;
     let messages: ModelMessage[] = pending.messages;
 
-    // Direct harness unit tests may run without an ambient context.
-    const ctx = contextStorage.getStore();
-
-    // --- Owned closure of approved tool calls -------------------------------
-    //
-    // The harness executes approved parked tool calls itself and appends
-    // their durable results before assembling the model request. Closure of
-    // a parked `tool_use` must not depend on the AI SDK's last-message
-    // approval scan (anything appended after the approval message silently
-    // disables it) nor on stream capture for result persistence.
-    if (pending.approvedActions !== undefined) {
-      const closure = await closeApprovedActionBatch({
-        abortSignal: config.abortSignal,
-        batch: pending.approvedActions,
-        ctx,
-        emit,
-        messages,
-        tools: config.tools,
-      });
-      messages = closure.messages;
-
-      // Owned execution parks on authorization exactly like in-stream
-      // execution: the redacted pending output already closed the call.
-      if (closure.authorizationSignal !== undefined) {
-        return parkOnAuthorization({
-          challenges: closure.authorizationSignal.challenges,
-          emit,
-          emissionState,
-          history: messages,
-          session,
-        });
-      }
-    }
-
     // A resolved session-limit continuation prompt grants a fresh token
     // budget or ends the session; see session-limit-enforcement.
     const continuation = await applySessionLimitContinuation({
@@ -645,6 +606,8 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
     // --- Model + tools ------------------------------------------------------
 
+    // Direct harness unit tests may run without an ambient context.
+    const ctx = contextStorage.getStore();
     if (ctx !== undefined && config.dispatchDynamicModelEvent !== undefined) {
       await config.dispatchDynamicModelEvent({
         ctx,
@@ -685,26 +648,6 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       session,
       telemetry: enrichTelemetry(telemetryConfig, agentName) ?? undefined,
     }));
-
-    // --- Transcript-closure invariant ----------------------------------------
-    //
-    // The single guard: no local `tool-call` may reach a provider without a
-    // terminal `tool-result`. Runs after all message assembly (pending
-    // resolution, context/message appends, compaction) so any dangling call
-    // here is an orphan; closing it durably also heals histories poisoned
-    // before this invariant existed.
-    const reconciliation = closeDanglingToolCalls(messages, () => ({
-      type: "error-text",
-      value: INTERRUPTED_TOOL_CALL_RESULT,
-    }));
-    if (reconciliation.closed.length > 0) {
-      log.warn("closed dangling tool calls before model call", {
-        repaired: reconciliation.closed,
-        sessionId: session.sessionId,
-        turnId: emissionState.turnId,
-      });
-      messages = reconciliation.messages;
-    }
 
     const approvedTools = getApprovedTools(session);
 
@@ -1757,17 +1700,15 @@ async function handleStepResult(input: {
     ...(result.invalidInputToolCallIds ?? []),
     ...invalidInputToolErrors.map((toolError) => toolError.toolCallId),
   ]);
-  const invalidInputClosures = new Map(
-    invalidInputToolErrors.map((toolError) => [
-      toolError.toolCallId,
-      createToolResultMessagePartFromToolError(toolError).output,
-    ]),
-  );
   const rawResponseMessages = emptyDelivery
     ? []
-    : closeDanglingToolCalls(result.response.messages, (call) =>
-        invalidInputClosures.get(call.toolCallId),
-      ).messages;
+    : insertInlineToolResultMessages({
+        append: invalidInputToolErrors.map((toolError) =>
+          createToolResultMessagePartFromToolError(toolError),
+        ),
+        prepend: [],
+        responseMessages: result.response.messages,
+      });
   const stepOutput = emptyDelivery ? null : resolvedStepOutput;
 
   const providerExecutedOutcomeIds = new Set<string>();
@@ -1910,13 +1851,35 @@ async function handleStepResult(input: {
 
   const authSignal = findAuthorizationSignalFromToolResults(result.toolResults);
   if (authSignal) {
-    return parkOnAuthorization({
-      challenges: authSignal.challenges,
-      emit,
-      emissionState,
-      history: promptMessages,
-      session: baseSession,
-    });
+    const { challenges } = authSignal;
+
+    if (emit) {
+      for (const ch of challenges) {
+        await emit(
+          createAuthorizationRequiredEvent({
+            authorization: ch.challenge,
+            name: ch.name,
+            description: ch.challenge.instructions ?? `Authorization required for ${ch.name}`,
+            webhookUrl: ch.hookUrl,
+            sequence: emissionState.sequence,
+            stepIndex: emissionState.stepIndex,
+            turnId: emissionState.turnId,
+          }),
+        );
+      }
+    }
+
+    return {
+      next: null,
+      session: setHarnessEmissionState(
+        {
+          ...baseSession,
+          history: [...promptMessages],
+          state: setPendingAuthorization(baseSession.state, { challenges }),
+        },
+        emissionState,
+      ),
+    };
   }
 
   // --- Continue or terminate ------------------------------------------------
@@ -2419,49 +2382,6 @@ async function runModelCallWithRetries<T>(
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
-}
-
-/**
- * Emits `authorization.required` for each challenge and parks the session on
- * the pending authorization. Shared by resume-time owned execution and the
- * post-step in-stream path.
- */
-async function parkOnAuthorization(input: {
-  readonly challenges: AuthorizationSignal["challenges"];
-  readonly emit?: ToolLoopHarnessConfig["handleEvent"];
-  readonly emissionState: ReturnType<typeof getHarnessEmissionState>;
-  readonly history: readonly ModelMessage[];
-  readonly session: HarnessSession;
-}): Promise<StepResult> {
-  const { challenges, emissionState } = input;
-
-  if (input.emit) {
-    for (const ch of challenges) {
-      await input.emit(
-        createAuthorizationRequiredEvent({
-          authorization: ch.challenge,
-          name: ch.name,
-          description: ch.challenge.instructions ?? `Authorization required for ${ch.name}`,
-          webhookUrl: ch.hookUrl,
-          sequence: emissionState.sequence,
-          stepIndex: emissionState.stepIndex,
-          turnId: emissionState.turnId,
-        }),
-      );
-    }
-  }
-
-  return {
-    next: null,
-    session: setHarnessEmissionState(
-      {
-        ...input.session,
-        history: [...input.history],
-        state: setPendingAuthorization(input.session.state, { challenges }),
-      },
-      emissionState,
-    ),
-  };
 }
 
 function findAuthorizationSignalFromToolResults(
