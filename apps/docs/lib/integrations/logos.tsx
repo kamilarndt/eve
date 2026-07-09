@@ -12,17 +12,14 @@ import {
   SiMake,
   SiMessenger,
   SiMiro,
-  SiMatrix,
   SiMixpanel,
   SiNetlify,
   SiNotion,
-  SiNovu,
   SiOreilly,
   SiPlanetscale,
   SiPosthog,
   SiPostman,
   SiRazorpay,
-  SiResend,
   SiSentry,
   SiSimilarweb,
   SiStripe,
@@ -302,57 +299,6 @@ export const messengerLogo = (props: LogoProps) => <SiMessenger color="default" 
 
 export const xLogo = (props: LogoProps) => <SiX {...props} />;
 
-// Resend, Novu, and Matrix brand marks are black, so they follow the theme
-// via currentColor like Notion and X.
-export const resendLogo = (props: LogoProps) => <SiResend {...props} />;
-
-export const novuLogo = (props: LogoProps) => <SiNovu {...props} />;
-
-export const matrixLogo = (props: LogoProps) => <SiMatrix {...props} />;
-
-/**
- * Fallback tile for vendors without a vendored brand mark: a bordered rounded
- * square with the vendor's initial. Swap for the real mark when one lands.
- */
-const lettermarkLogo = (letter: string) => {
-  const Lettermark = (props: LogoProps) => (
-    <svg fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" {...props}>
-      <rect
-        height="21"
-        rx="5.5"
-        stroke="currentColor"
-        strokeWidth="1.5"
-        width="21"
-        x="1.5"
-        y="1.5"
-      />
-      <text
-        fill="currentColor"
-        fontFamily="inherit"
-        fontSize="11"
-        fontWeight="600"
-        textAnchor="middle"
-        x="12"
-        y="16"
-      >
-        {letter}
-      </text>
-    </svg>
-  );
-  return Lettermark;
-};
-
-export const liveblocksLogo = lettermarkLogo("L");
-export const sendblueLogo = lettermarkLogo("S");
-export const zernioLogo = lettermarkLogo("Z");
-export const agentphoneLogo = lettermarkLogo("A");
-export const larkLogo = lettermarkLogo("L");
-export const veltLogo = lettermarkLogo("V");
-export const kapsoLogo = lettermarkLogo("K");
-export const linqLogo = lettermarkLogo("L");
-export const photonLogo = lettermarkLogo("P");
-export const dialLogo = lettermarkLogo("D");
-
 export const logos = {
   eve: eveLogo,
   web: webLogo,
@@ -404,19 +350,6 @@ export const logos = {
   whatsapp: whatsappLogo,
   messenger: messengerLogo,
   x: xLogo,
-  liveblocks: liveblocksLogo,
-  resend: resendLogo,
-  sendblue: sendblueLogo,
-  zernio: zernioLogo,
-  matrix: matrixLogo,
-  agentphone: agentphoneLogo,
-  lark: larkLogo,
-  velt: veltLogo,
-  kapso: kapsoLogo,
-  novu: novuLogo,
-  linq: linqLogo,
-  photon: photonLogo,
-  dial: dialLogo,
 } as const;
 
 export type LogoKey = keyof typeof logos;
