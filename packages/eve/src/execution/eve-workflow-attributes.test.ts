@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildObservabilityIssueAttributes,
   buildSessionAttributes,
-  buildSessionStatusAttributes,
   buildSubagentRootAttributes,
   buildTurnAttributes,
   deriveSessionTitle,
@@ -149,7 +147,6 @@ describe("buildSessionAttributes", () => {
 
     expect(attrs).toEqual({
       "$eve.channel_request_id": undefined,
-      "$eve.session_status": "running",
       "$eve.type": "session",
       "$eve.trigger": "slack",
       "$eve.title": "ship the thing please",
@@ -201,7 +198,6 @@ describe("buildSubagentRootAttributes", () => {
       "$eve.parent_call": "call_subagent_0",
       "$eve.parent_turn": "turn_0",
       "$eve.root": "wrun_top_level_session",
-      "$eve.session_status": "running",
       "$eve.subagent": "subagents/linear",
       "$eve.trigger": "slack",
       "$eve.version": "1.2.3",
@@ -221,50 +217,6 @@ describe("buildSubagentRootAttributes", () => {
     });
 
     expect(attrs["$eve.channel_request_id"]).toBe("req_subagent");
-  });
-});
-
-describe("buildSessionStatusAttributes", () => {
-  it("emits the current Eve session lifecycle status", () => {
-    expect(buildSessionStatusAttributes("waiting")).toEqual({
-      "$eve.session_status": "waiting",
-    });
-  });
-});
-
-describe("buildObservabilityIssueAttributes", () => {
-  it("emits sparse issue summary fields", () => {
-    expect(
-      buildObservabilityIssueAttributes({
-        errorCount: 3,
-        failedActionCount: 2,
-        failedStepCount: 1,
-        failedTurnCount: 1,
-        issueCount: 3,
-        lastIssueAt: "2026-07-07T12:00:00.000Z",
-        lastIssueCode: "ETIMEDOUT",
-        lastIssueSource: "tool",
-        lastIssueTool: "linear.createIssue",
-        lastIssueToolCallId: "call_linear",
-        lastIssueTurnId: "turn_1",
-        lastIssueType: "action_failed",
-        rejectedActionCount: 0,
-      }),
-    ).toEqual({
-      "$eve.error_count": 3,
-      "$eve.failed_action_count": 2,
-      "$eve.failed_step_count": 1,
-      "$eve.failed_turn_count": 1,
-      "$eve.issue_count": 3,
-      "$eve.last_issue_at": "2026-07-07T12:00:00.000Z",
-      "$eve.last_issue_code": "ETIMEDOUT",
-      "$eve.last_issue_source": "tool",
-      "$eve.last_issue_tool": "linear.createIssue",
-      "$eve.last_issue_tool_call_id": "call_linear",
-      "$eve.last_issue_turn_id": "turn_1",
-      "$eve.last_issue_type": "action_failed",
-      "$eve.rejected_action_count": 0,
-    });
   });
 });
 

@@ -8,12 +8,7 @@ import type {
   SessionCapabilities,
 } from "#channel/types.js";
 import { coalesceDeliveries } from "#harness/messages.js";
-import {
-  buildSessionStatusAttributes,
-  readChannelRequestId,
-  readRootSessionId,
-} from "#execution/eve-workflow-attributes.js";
-import type { EveSessionStatus } from "#execution/eve-workflow-attributes.js";
+import { readChannelRequestId, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import type { RunMode } from "#shared/run-mode.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { notifyDelegatedParentStep } from "#execution/delegated-parent-notification.js";
@@ -35,7 +30,6 @@ import {
   type SessionDeliveryHook,
 } from "#execution/session-delivery-hook.js";
 import { readSerializedSubagentDepth } from "#harness/subagent-depth.js";
-import { setEveAttributes } from "#runtime/attributes/emit.js";
 
 // workflow-entry.ts is the durable workflow body — the bundler rejects
 // node built-ins here, so `internal/logging.ts` cannot be imported.
@@ -130,7 +124,6 @@ export async function workflowEntry(input: WorkflowEntryInput): Promise<Workflow
     // surface as `session.failed` (deserialization, runtime-action
     // throws, adapter `deliver` throws, staging errors, etc.) so the
     // channel still sees a terminal event.
-    await setEveAttributes(buildSessionStatusAttributes("failed"));
     await emitTerminalSessionFailureStep({
       error: normalizeSerializableError(error),
       parentWritable: driverWritable,
@@ -179,7 +172,6 @@ async function runDriverLoop(input: {
       await deliveryHook.rekey(input.sessionState.continuationToken);
     }
 
-    let sessionStatus: EveSessionStatus = "running";
     let action: NextDriverAction = await dispatchAndAwaitTurn({
       bufferedDeliveries,
       capabilities: input.capabilities,
@@ -214,11 +206,6 @@ async function runDriverLoop(input: {
             "session) or `send()` must be called with an explicit " +
             "continuationToken.",
         );
-      }
-
-      if (sessionStatus !== "waiting") {
-        await setEveAttributes(buildSessionStatusAttributes("waiting"));
-        sessionStatus = "waiting";
       }
 
       // Rekey to the parked turn's continuation token before awaiting the next
@@ -305,8 +292,6 @@ async function finalizeDone(input: {
 }): Promise<WorkflowEntryResult> {
   const { output, serializedContext } = input.action;
   const failed = input.action.isError === true;
-
-  await setEveAttributes(buildSessionStatusAttributes(failed ? "failed" : "completed"));
 
   await fireSessionCallbackStep({
     error: failed ? output : undefined,

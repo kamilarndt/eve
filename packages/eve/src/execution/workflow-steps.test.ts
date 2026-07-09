@@ -7,6 +7,7 @@ import { ContextKey } from "#context/key.js";
 import { AuthKey, ContinuationTokenKey, ModeKey, SessionIdKey } from "#context/keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { serializeContext } from "#context/serialize.js";
+import { setEveAttributes } from "#runtime/attributes/emit.js";
 import { setPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
 import { DEFAULT_SUBAGENT_MAX_DEPTH } from "#harness/subagent-depth.js";
 import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
@@ -113,6 +114,10 @@ vi.mock("#compiled/@workflow/core/runtime.js", () => ({
   getRun: (...args: unknown[]) => getRunMock(...args),
   resumeHook: vi.fn(),
   start: (...args: unknown[]) => startMock(...args),
+}));
+
+vi.mock("#runtime/attributes/emit.js", () => ({
+  setEveAttributes: vi.fn().mockResolvedValue(undefined),
 }));
 
 const ThreadKey = new ContextKey<string>("test.workflow.thread");
@@ -1084,6 +1089,9 @@ describe("emitTerminalSessionFailureStep", () => {
     expect(data.code).toBe("EveAttachmentError");
     expect(data.message).toContain("attachment staging failed");
     expect(typeof data.details?.errorId).toBe("string");
+    expect(setEveAttributes).toHaveBeenCalledWith({
+      "$eve.issue": expect.stringContaining('"c":"EveAttachmentError"'),
+    });
 
     // The terminal step must also write the event to the durable
     // stream so event-stream consumers see a canonical tail instead

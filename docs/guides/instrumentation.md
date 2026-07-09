@@ -129,29 +129,30 @@ Structural tags describe each run's place in the tree:
 - `$eve.subagent`: compiled graph node id (subagent runs only)
 - `$eve.trigger`: the channel kind that started the run
 - `$eve.title`: truncated title derived from the first user message
-- `$eve.session_status`: Eve session lifecycle for session and subagent roots (`"running"`, `"waiting"`, `"completed"`, or `"failed"`)
 - `$eve.version`: installed Eve package version that emitted the run
 
 Per-turn usage tags are written on each step of a turn, accumulating cumulative totals (last write wins):
 
 - `$eve.model`: model id for the turn
-- `$eve.input_tokens`, `$eve.output_tokens`, `$eve.cache_read_tokens`: running token counts
+- `$eve.input_tokens`, `$eve.output_tokens`, `$eve.cache_read_tokens`, `$eve.cache_write_tokens`: running token counts
+- `$eve.cost_usd`: cumulative turn cost reported by AI Gateway when available
 - `$eve.tool_count`: number of tools available to the turn
 
-Issue tags describe actionable problems inside a run without storing prompt,
-output, or error-message content:
+Issue tags describe individual actionable problems inside a run without storing prompt,
+output, or error-message content. Each occurrence writes `$eve.issue` as compact,
+versioned JSON:
 
-- `$eve.issue_count`: count of diagnostic issues recorded on the current run, including rejected actions
-- `$eve.error_count`: count of non-rejection errors recorded on the current run
-- `$eve.failed_action_count`, `$eve.rejected_action_count`: failed or rejected action results
-- `$eve.failed_step_count`, `$eve.failed_turn_count`: failed model steps or turns
-- `$eve.last_issue_type`: the most recent issue category, such as `action_failed` or `step_failed`
-- `$eve.last_issue_code`: stable error code for grouping, such as `OUTPUT_SCHEMA_NOT_FULFILLED`
-- `$eve.last_issue_source`: where the issue occurred, such as `tool`, `workflow`, `subagent`, or `remote_subagent` for remote agent call failures
-- `$eve.last_issue_tool`: tool or subagent name when the issue came from an action
-- `$eve.last_issue_turn_id`: turn id for deep-linking to the affected turn
-- `$eve.last_issue_tool_call_id`: tool-call id for deep-linking to the affected tool call when available
-- `$eve.last_issue_at`: ISO timestamp for the most recent issue
+- `v`: schema version (`1`)
+- `t`: issue type, such as `action_failed`, `action_rejected`, or `step_failed`
+- `c`: stable error code, such as `OUTPUT_SCHEMA_NOT_FULFILLED`
+- `s`: source, such as `tool`, `workflow`, `subagent`, `skill`, or `remote_subagent`
+- `tool`: tool or subagent name when the issue came from an action
+- `turn`: turn id for deep-linking to the affected turn
+- `call`: tool-call id for deep-linking to the affected tool call when available
+- `at`: ISO timestamp for the issue
+
+Session state, issue counts, last-seen timestamps, and error-rate metrics are
+derived by the Vercel platform from workflow state and these issue facts.
 
 Tag writes are best-effort: a failure is logged once per process and then swallowed, so a broken tag emit never breaks the agent.
 

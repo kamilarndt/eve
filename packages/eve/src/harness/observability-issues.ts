@@ -1,5 +1,8 @@
 import type { HandleMessageStreamEvent } from "#protocol/message.js";
-import type { EveAttributeValue } from "#runtime/attributes/normalize.js";
+import {
+  EVE_ATTRIBUTE_VALUE_MAX_BYTES,
+  type EveAttributeValue,
+} from "#runtime/attributes/normalize.js";
 import type { HarnessSession, SessionStateMap } from "#harness/types.js";
 
 const HARNESS_OBSERVABILITY_ISSUES_STATE_KEY = "eve.harness.observabilityIssues";
@@ -18,36 +21,21 @@ export type EveObservabilityIssueSource =
   | "tool"
   | "workflow";
 
-export interface EveObservabilityIssueSummary {
-  readonly errorCount: number;
-  readonly failedActionCount: number;
-  readonly failedStepCount: number;
-  readonly failedTurnCount: number;
-  readonly issueCount: number;
-  readonly lastIssueAt?: string;
-  readonly lastIssueCode?: string;
-  readonly lastIssueSource?: EveObservabilityIssueSource;
-  readonly lastIssueTool?: string;
-  readonly lastIssueToolCallId?: string;
-  readonly lastIssueTurnId?: string;
-  readonly lastIssueType?: EveObservabilityIssueType;
-  readonly rejectedActionCount: number;
+export interface EveObservabilityIssue {
+  readonly at?: string;
+  readonly code: string;
+  readonly source: EveObservabilityIssueSource;
+  readonly tool?: string;
+  readonly toolCallId?: string;
+  readonly turnId?: string;
+  readonly type: EveObservabilityIssueType;
 }
 
-export interface EveObservabilityIssueState extends EveObservabilityIssueSummary {
+export interface EveObservabilityIssueState {
+  readonly issue: EveObservabilityIssue;
   readonly seenIssueInTurn: boolean;
-  readonly session: EveObservabilityIssueSummary;
   readonly turnId: string;
 }
-
-const EMPTY_SUMMARY: EveObservabilityIssueSummary = {
-  errorCount: 0,
-  failedActionCount: 0,
-  failedStepCount: 0,
-  failedTurnCount: 0,
-  issueCount: 0,
-  rejectedActionCount: 0,
-};
 
 export function getObservabilityIssueState(
   state: SessionStateMap | undefined,
@@ -82,145 +70,80 @@ export function preserveObservabilityIssueState(
 export function accumulateObservabilityIssues(input: {
   readonly event: HandleMessageStreamEvent;
   readonly previous: EveObservabilityIssueState | undefined;
-}): EveObservabilityIssueState {
+}): EveObservabilityIssueState | undefined {
   const turnId = getTurnId(input.event) || input.previous?.turnId || "";
   const previous =
-    input.previous !== undefined && input.previous.turnId === turnId
-      ? input.previous
-      : {
-          ...EMPTY_SUMMARY,
-          seenIssueInTurn: false,
-          session: input.previous?.session ?? EMPTY_SUMMARY,
-          turnId,
-        };
+    input.previous !== undefined && input.previous.turnId === turnId ? input.previous : undefined;
 
-  const next = issueDelta(input.event, previous.seenIssueInTurn);
+  const next = issueFromEvent(input.event, previous?.seenIssueInTurn ?? false);
   if (next === null) {
-    return previous;
+    return previous ?? input.previous;
   }
 
-  const turn = addIssue(previous, next);
   return {
-    ...turn,
-    seenIssueInTurn: previous.seenIssueInTurn || next.countsAsIssue,
-    session: addIssue(previous.session, next),
+    issue: next,
+    seenIssueInTurn: true,
     turnId,
   };
 }
 
 export function observabilityIssueAttributes(
-  summary: EveObservabilityIssueSummary,
+  state: EveObservabilityIssueState,
 ): Record<string, EveAttributeValue> {
   return {
-    "$eve.error_count": summary.errorCount,
-    "$eve.failed_action_count": summary.failedActionCount,
-    "$eve.failed_step_count": summary.failedStepCount,
-    "$eve.failed_turn_count": summary.failedTurnCount,
-    "$eve.issue_count": summary.issueCount,
-    "$eve.last_issue_at": summary.lastIssueAt,
-    "$eve.last_issue_code": summary.lastIssueCode,
-    "$eve.last_issue_source": summary.lastIssueSource,
-    "$eve.last_issue_tool": summary.lastIssueTool,
-    "$eve.last_issue_tool_call_id": summary.lastIssueToolCallId,
-    "$eve.last_issue_turn_id": summary.lastIssueTurnId,
-    "$eve.last_issue_type": summary.lastIssueType,
-    "$eve.rejected_action_count": summary.rejectedActionCount,
+    "$eve.issue": serializeIssue(state.issue),
   };
 }
 
-interface IssueDelta {
-  readonly code: string;
-  readonly countsAsIssue: boolean;
-  readonly countsAsError: boolean;
-  readonly failedActionCount?: number;
-  readonly failedStepCount?: number;
-  readonly failedTurnCount?: number;
-  readonly issueType: EveObservabilityIssueType;
-  readonly rejectedActionCount?: number;
-  readonly source: EveObservabilityIssueSource;
-  readonly timestamp?: string;
-  readonly tool?: string;
-  readonly toolCallId?: string;
-  readonly turnId?: string;
-}
-
-function issueDelta(event: HandleMessageStreamEvent, seenIssueInTurn: boolean): IssueDelta | null {
+function issueFromEvent(
+  event: HandleMessageStreamEvent,
+  seenIssueInTurn: boolean,
+): EveObservabilityIssue | null {
   if (event.type === "action.result") {
     if (event.data.status !== "failed" && event.data.status !== "rejected") {
       return null;
     }
     return {
+      at: event.meta?.at ?? new Date().toISOString(),
       code: event.data.error?.code ?? actionFallbackCode(event.data.status),
-      countsAsError: event.data.status === "failed",
-      countsAsIssue: true,
-      failedActionCount: event.data.status === "failed" ? 1 : 0,
-      issueType: event.data.status === "failed" ? "action_failed" : "action_rejected",
-      rejectedActionCount: event.data.status === "rejected" ? 1 : 0,
       source: actionResultSource(event.data.result),
-      timestamp: event.meta?.at ?? new Date().toISOString(),
       tool: actionResultName(event.data.result),
       toolCallId: event.data.result.callId,
       turnId: event.data.turnId,
+      type: event.data.status === "failed" ? "action_failed" : "action_rejected",
     };
   }
 
   if (event.type === "step.failed") {
     return {
+      at: event.meta?.at ?? new Date().toISOString(),
       code: event.data.code,
-      countsAsError: true,
-      countsAsIssue: true,
-      failedStepCount: 1,
-      issueType: "step_failed",
       source: "workflow",
-      timestamp: event.meta?.at ?? new Date().toISOString(),
       turnId: event.data.turnId,
+      type: "step_failed",
     };
   }
 
-  if (event.type === "turn.failed") {
+  if (event.type === "turn.failed" && !seenIssueInTurn) {
     return {
+      at: event.meta?.at ?? new Date().toISOString(),
       code: event.data.code,
-      countsAsError: !seenIssueInTurn,
-      countsAsIssue: !seenIssueInTurn,
-      failedTurnCount: 1,
-      issueType: "turn_failed",
       source: "workflow",
-      timestamp: event.meta?.at ?? new Date().toISOString(),
       turnId: event.data.turnId,
+      type: "turn_failed",
     };
   }
 
   if (event.type === "session.failed" && !seenIssueInTurn) {
     return {
+      at: event.meta?.at ?? new Date().toISOString(),
       code: event.data.code,
-      countsAsError: true,
-      countsAsIssue: true,
-      issueType: "session_failed",
       source: "workflow",
-      timestamp: event.meta?.at ?? new Date().toISOString(),
+      type: "session_failed",
     };
   }
 
   return null;
-}
-
-function addIssue<T extends EveObservabilityIssueSummary>(summary: T, delta: IssueDelta): T {
-  return {
-    ...summary,
-    errorCount: summary.errorCount + (delta.countsAsError ? 1 : 0),
-    failedActionCount: summary.failedActionCount + (delta.failedActionCount ?? 0),
-    failedStepCount: summary.failedStepCount + (delta.failedStepCount ?? 0),
-    failedTurnCount: summary.failedTurnCount + (delta.failedTurnCount ?? 0),
-    issueCount: summary.issueCount + (delta.countsAsIssue ? 1 : 0),
-    lastIssueAt: delta.countsAsIssue ? delta.timestamp : summary.lastIssueAt,
-    lastIssueCode: delta.countsAsIssue ? delta.code : summary.lastIssueCode,
-    lastIssueSource: delta.countsAsIssue ? delta.source : summary.lastIssueSource,
-    lastIssueTool: delta.countsAsIssue ? delta.tool : summary.lastIssueTool,
-    lastIssueToolCallId: delta.countsAsIssue ? delta.toolCallId : summary.lastIssueToolCallId,
-    lastIssueTurnId: delta.countsAsIssue ? delta.turnId : summary.lastIssueTurnId,
-    lastIssueType: delta.countsAsIssue ? delta.issueType : summary.lastIssueType,
-    rejectedActionCount: summary.rejectedActionCount + (delta.rejectedActionCount ?? 0),
-  };
 }
 
 function actionFallbackCode(status: "failed" | "rejected"): string {
@@ -258,4 +181,70 @@ function getTurnId(event: HandleMessageStreamEvent): string {
     typeof event.data.turnId === "string"
     ? event.data.turnId
     : "";
+}
+
+type SerializedIssue = {
+  readonly at?: string;
+  readonly c: string;
+  readonly call?: string;
+  readonly s: EveObservabilityIssueSource;
+  readonly t: EveObservabilityIssueType;
+  readonly tool?: string;
+  readonly turn?: string;
+  readonly v: 1;
+};
+
+function compactIssue(issue: EveObservabilityIssue): SerializedIssue {
+  return {
+    at: issue.at,
+    c: issue.code,
+    call: issue.toolCallId,
+    s: issue.source,
+    t: issue.type,
+    tool: issue.tool,
+    turn: issue.turnId,
+    v: 1,
+  };
+}
+
+function omitUndefined(issue: SerializedIssue): Record<string, string | number> {
+  const compact: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(issue)) {
+    if (value !== undefined && value !== "") {
+      compact[key] = value;
+    }
+  }
+  return compact;
+}
+
+function byteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
+function serializeIssue(issue: EveObservabilityIssue): string {
+  const payload: Record<string, string | number> = omitUndefined(compactIssue(issue));
+  const shrinkable = ["tool", "turn", "call", "at"];
+
+  while (true) {
+    const json = JSON.stringify(payload);
+    if (byteLength(json) <= EVE_ATTRIBUTE_VALUE_MAX_BYTES) {
+      return json;
+    }
+
+    const key = shrinkable.find(
+      (candidate) => typeof payload[candidate] === "string" && payload[candidate].length > 16,
+    );
+    if (key) {
+      payload[key] = String(payload[key]).slice(0, Math.max(8, String(payload[key]).length - 16));
+      continue;
+    }
+
+    const optionalKey = shrinkable.find((candidate) => candidate in payload);
+    if (optionalKey) {
+      delete payload[optionalKey];
+      continue;
+    }
+
+    return JSON.stringify({ c: issue.code, s: issue.source, t: issue.type, v: 1 });
+  }
 }

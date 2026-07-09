@@ -13,7 +13,7 @@
  * of a session/turn/subagent run so dashboards can stitch a tree of
  * workflow runs back together without inspecting their bodies.
  *
- * Tag inventory (recap):
+ * Structural attribute inventory (not issue rollups):
  * - `$eve.type`         — `"session" | "turn" | "subagent"`
  * - `$eve.parent`       — sessionId of the **immediate** parent
  * - `$eve.root`         — sessionId of the **root** session in the chain
@@ -24,10 +24,13 @@
  * - `$eve.title`        — truncated session title from the first user message
  * - `$eve.channel_request_id` — inbound channel request id
  * - `$eve.version`      — installed Eve package version that emitted the run
+ *
+ * Issue occurrences are emitted separately by the harness as a single
+ * compact `$eve.issue` fact. Do not add derived counters, status, or
+ * "last issue" rollups here.
  */
 
 import { ChannelRequestIdKey } from "#context/keys.js";
-import type { EveObservabilityIssueSummary } from "#harness/observability-issues.js";
 import type { EveAttributeValue } from "#runtime/attributes/normalize.js";
 import { isNonEmptyString } from "#shared/guards.js";
 
@@ -67,8 +70,6 @@ export interface SessionParentLineage {
   readonly sessionId?: string;
   readonly turnId?: string;
 }
-
-export type EveSessionStatus = "completed" | "failed" | "running" | "waiting";
 
 /**
  * Reads the active channel kind from a deserialized context map.
@@ -214,7 +215,6 @@ export function buildSessionAttributes(input: {
 }): Record<string, EveAttributeValue> {
   return {
     "$eve.channel_request_id": readChannelRequestId(input.serializedContext),
-    "$eve.session_status": "running",
     "$eve.type": "session",
     "$eve.trigger": readChannelKind(input.serializedContext),
     "$eve.title": deriveSessionTitle(input.inputMessage),
@@ -247,38 +247,9 @@ export function buildSubagentRootAttributes(input: {
     "$eve.parent_call": input.parentCallId,
     "$eve.parent_turn": input.parentTurnId,
     "$eve.root": input.rootSessionId,
-    "$eve.session_status": "running",
     "$eve.subagent": input.identity.nodeId,
     "$eve.trigger": readChannelKind(input.serializedContext),
     "$eve.version": input.eveVersion,
-  };
-}
-
-export function buildSessionStatusAttributes(
-  status: EveSessionStatus,
-): Record<string, EveAttributeValue> {
-  return {
-    "$eve.session_status": status,
-  };
-}
-
-export function buildObservabilityIssueAttributes(
-  summary: EveObservabilityIssueSummary,
-): Record<string, EveAttributeValue> {
-  return {
-    "$eve.error_count": summary.errorCount,
-    "$eve.failed_action_count": summary.failedActionCount,
-    "$eve.failed_step_count": summary.failedStepCount,
-    "$eve.failed_turn_count": summary.failedTurnCount,
-    "$eve.issue_count": summary.issueCount,
-    "$eve.last_issue_at": summary.lastIssueAt,
-    "$eve.last_issue_code": summary.lastIssueCode,
-    "$eve.last_issue_source": summary.lastIssueSource,
-    "$eve.last_issue_tool": summary.lastIssueTool,
-    "$eve.last_issue_tool_call_id": summary.lastIssueToolCallId,
-    "$eve.last_issue_turn_id": summary.lastIssueTurnId,
-    "$eve.last_issue_type": summary.lastIssueType,
-    "$eve.rejected_action_count": summary.rejectedActionCount,
   };
 }
 

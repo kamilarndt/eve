@@ -14,6 +14,7 @@ import { getHarnessEmissionState } from "#harness/emission.js";
 import { setChannelContext } from "#execution/channel-context.js";
 import { hasPendingInputBatch } from "#harness/input-requests.js";
 import { coalesceTurnInputs } from "#harness/messages.js";
+import { observabilityIssueAttributes } from "#harness/observability-issues.js";
 import {
   getRuntimeActionKeysFromWorkflowInterrupt,
   isWorkflowRuntimeActionInterrupt,
@@ -61,6 +62,7 @@ import { reconcileSessionContinuationToken } from "#execution/reconcile-session-
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
 import { buildTurnAttributes, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import { normalizeEveAttributes } from "#runtime/attributes/normalize.js";
+import { setEveAttributes } from "#runtime/attributes/emit.js";
 import { resolveSessionSkillRoot } from "#execution/workflow-skill-root.js";
 import {
   createWorkflowRuntime,
@@ -501,6 +503,18 @@ export async function emitTerminalSessionFailureStep(input: {
   });
 
   const event = createSessionFailedEvent({ code, details, message, sessionId });
+  await setEveAttributes(
+    observabilityIssueAttributes({
+      issue: {
+        at: new Date().toISOString(),
+        code,
+        source: "workflow",
+        type: "session_failed",
+      },
+      seenIssueInTurn: true,
+      turnId: "",
+    }),
+  );
 
   // Best-effort: invoke the adapter handler so channels surface the
   // failure. Errors are logged, never rethrown — the outer workflow

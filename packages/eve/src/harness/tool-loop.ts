@@ -498,7 +498,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             event,
             previous: previousIssueState,
           });
-          if (nextIssueState !== previousIssueState) {
+          if (nextIssueState && nextIssueState !== previousIssueState) {
             session = setObservabilityIssueState(session, nextIssueState);
             await setEveAttributes(observabilityIssueAttributes(nextIssueState));
           }

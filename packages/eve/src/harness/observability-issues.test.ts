@@ -26,26 +26,18 @@ describe("accumulateObservabilityIssues", () => {
       previous: undefined,
     });
 
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
     expect(state).toMatchObject({
-      errorCount: 1,
-      failedStepCount: 1,
-      issueCount: 1,
-      lastIssueAt: "2026-07-07T12:00:00.000Z",
-      lastIssueCode: "MODEL_CALL_FAILED",
-      lastIssueSource: "workflow",
-      lastIssueTurnId: "turn_1",
-      lastIssueType: "step_failed",
+      issue: {
+        at: "2026-07-07T12:00:00.000Z",
+        code: "MODEL_CALL_FAILED",
+        source: "workflow",
+        turnId: "turn_1",
+        type: "step_failed",
+      },
       seenIssueInTurn: true,
       turnId: "turn_1",
-    });
-    expect(state.session).toMatchObject({
-      errorCount: 1,
-      failedStepCount: 1,
-      issueCount: 1,
-      lastIssueCode: "MODEL_CALL_FAILED",
-      lastIssueSource: "workflow",
-      lastIssueTurnId: "turn_1",
-      lastIssueType: "step_failed",
     });
   });
 
@@ -71,16 +63,17 @@ describe("accumulateObservabilityIssues", () => {
       previous: undefined,
     });
 
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
     expect(state).toMatchObject({
-      errorCount: 1,
-      failedActionCount: 1,
-      issueCount: 1,
-      lastIssueCode: "ETIMEDOUT",
-      lastIssueSource: "tool",
-      lastIssueTool: "linear.createIssue",
-      lastIssueToolCallId: "call_linear",
-      lastIssueTurnId: "turn_1",
-      lastIssueType: "action_failed",
+      issue: {
+        code: "ETIMEDOUT",
+        source: "tool",
+        tool: "linear.createIssue",
+        toolCallId: "call_linear",
+        turnId: "turn_1",
+        type: "action_failed",
+      },
     });
   });
 
@@ -123,25 +116,20 @@ describe("accumulateObservabilityIssues", () => {
       previous: afterTurn,
     });
 
+    expect(afterSession).toBeDefined();
+    if (!afterSession) throw new Error("expected issue state");
     expect(afterSession).toMatchObject({
-      errorCount: 1,
-      failedStepCount: 1,
-      failedTurnCount: 1,
-      issueCount: 1,
-      lastIssueCode: "OUTPUT_SCHEMA_NOT_FULFILLED",
-      lastIssueSource: "workflow",
-      lastIssueTurnId: "turn_2",
-      lastIssueType: "step_failed",
-    });
-    expect(afterSession.session).toMatchObject({
-      errorCount: 1,
-      failedStepCount: 1,
-      failedTurnCount: 1,
-      issueCount: 1,
+      issue: {
+        code: "OUTPUT_SCHEMA_NOT_FULFILLED",
+        source: "workflow",
+        turnId: "turn_2",
+        type: "step_failed",
+      },
+      seenIssueInTurn: true,
     });
   });
 
-  it("projects the current run issue state into sparse eve attributes", () => {
+  it("projects the current issue occurrence into a versioned eve attribute", () => {
     const state = accumulateObservabilityIssues({
       event: eventWithTime({
         type: "action.result",
@@ -163,21 +151,43 @@ describe("accumulateObservabilityIssues", () => {
       previous: undefined,
     });
 
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
     expect(observabilityIssueAttributes(state)).toEqual({
-      "$eve.error_count": 0,
-      "$eve.failed_action_count": 0,
-      "$eve.failed_step_count": 0,
-      "$eve.failed_turn_count": 0,
-      "$eve.issue_count": 1,
-      "$eve.last_issue_at": "2026-07-07T12:00:00.000Z",
-      "$eve.last_issue_code": "E_DENIED",
-      "$eve.last_issue_source": "subagent",
-      "$eve.last_issue_tool": "researcher",
-      "$eve.last_issue_tool_call_id": "call_child",
-      "$eve.last_issue_turn_id": "turn_3",
-      "$eve.last_issue_type": "action_rejected",
-      "$eve.rejected_action_count": 1,
+      "$eve.issue":
+        '{"at":"2026-07-07T12:00:00.000Z","c":"E_DENIED","call":"call_child","s":"subagent","t":"action_rejected","tool":"researcher","turn":"turn_3","v":1}',
     });
+  });
+
+  it("preserves the issue code before shrinking optional deep-link fields", () => {
+    const state = accumulateObservabilityIssues({
+      event: eventWithTime({
+        type: "action.result",
+        data: {
+          error: { code: "REMOTE_SUBAGENT_FAILED", message: "Remote failed" },
+          result: {
+            callId: "call_" + "x".repeat(2048),
+            isError: true,
+            kind: "subagent-result",
+            output: { code: "REMOTE_SUBAGENT_FAILED" },
+            subagentKind: "remote",
+            subagentName: "reviewer-" + "y".repeat(2048),
+          },
+          sequence: 3,
+          status: "failed",
+          stepIndex: 0,
+          turnId: "turn_" + "z".repeat(2048),
+        },
+      }),
+      previous: undefined,
+    });
+
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
+    const value = observabilityIssueAttributes(state)["$eve.issue"];
+    expect(typeof value).toBe("string");
+    const parsed = JSON.parse(String(value)) as { c?: string };
+    expect(parsed.c).toBe("REMOTE_SUBAGENT_FAILED");
   });
 
   it("records failed remote subagent results separately from local subagents", () => {
@@ -203,16 +213,17 @@ describe("accumulateObservabilityIssues", () => {
       previous: undefined,
     });
 
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
     expect(state).toMatchObject({
-      errorCount: 1,
-      failedActionCount: 1,
-      issueCount: 1,
-      lastIssueCode: "REMOTE_AGENT_FAILED",
-      lastIssueSource: "remote_subagent",
-      lastIssueTool: "reviewer",
-      lastIssueToolCallId: "call_remote",
-      lastIssueTurnId: "turn_remote",
-      lastIssueType: "action_failed",
+      issue: {
+        code: "REMOTE_AGENT_FAILED",
+        source: "remote_subagent",
+        tool: "reviewer",
+        toolCallId: "call_remote",
+        turnId: "turn_remote",
+        type: "action_failed",
+      },
     });
   });
 
@@ -232,6 +243,8 @@ describe("accumulateObservabilityIssues", () => {
       previous: undefined,
     });
 
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
     const nextSession = setObservabilityIssueState(session, state);
 
     expect(getObservabilityIssueState(nextSession.state)).toEqual(state);
@@ -260,6 +273,8 @@ describe("accumulateObservabilityIssues", () => {
       }),
       previous: undefined,
     });
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
     const source = setObservabilityIssueState(base, state);
     const priorSnapshot = {
       ...base,
