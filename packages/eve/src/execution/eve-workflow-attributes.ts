@@ -268,7 +268,10 @@ export function buildObservabilityIssueAttributes(
     "$eve.issue_count": summary.issueCount,
     "$eve.last_issue_at": summary.lastIssueAt,
     "$eve.last_issue_code": summary.lastIssueCode,
+    "$eve.last_issue_source": summary.lastIssueSource,
     "$eve.last_issue_tool": summary.lastIssueTool,
+    "$eve.last_issue_tool_call_id": summary.lastIssueToolCallId,
+    "$eve.last_issue_turn_id": summary.lastIssueTurnId,
     "$eve.last_issue_type": summary.lastIssueType,
     "$eve.rejected_action_count": summary.rejectedActionCount,
   };

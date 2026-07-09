@@ -32,6 +32,8 @@ describe("accumulateObservabilityIssues", () => {
       issueCount: 1,
       lastIssueAt: "2026-07-07T12:00:00.000Z",
       lastIssueCode: "MODEL_CALL_FAILED",
+      lastIssueSource: "workflow",
+      lastIssueTurnId: "turn_1",
       lastIssueType: "step_failed",
       seenIssueInTurn: true,
       turnId: "turn_1",
@@ -41,6 +43,8 @@ describe("accumulateObservabilityIssues", () => {
       failedStepCount: 1,
       issueCount: 1,
       lastIssueCode: "MODEL_CALL_FAILED",
+      lastIssueSource: "workflow",
+      lastIssueTurnId: "turn_1",
       lastIssueType: "step_failed",
     });
   });
@@ -72,7 +76,10 @@ describe("accumulateObservabilityIssues", () => {
       failedActionCount: 1,
       issueCount: 1,
       lastIssueCode: "ETIMEDOUT",
+      lastIssueSource: "tool",
       lastIssueTool: "linear.createIssue",
+      lastIssueToolCallId: "call_linear",
+      lastIssueTurnId: "turn_1",
       lastIssueType: "action_failed",
     });
   });
@@ -122,6 +129,8 @@ describe("accumulateObservabilityIssues", () => {
       failedTurnCount: 1,
       issueCount: 1,
       lastIssueCode: "OUTPUT_SCHEMA_NOT_FULFILLED",
+      lastIssueSource: "workflow",
+      lastIssueTurnId: "turn_2",
       lastIssueType: "step_failed",
     });
     expect(afterSession.session).toMatchObject({
@@ -162,7 +171,10 @@ describe("accumulateObservabilityIssues", () => {
       "$eve.issue_count": 1,
       "$eve.last_issue_at": "2026-07-07T12:00:00.000Z",
       "$eve.last_issue_code": "E_DENIED",
+      "$eve.last_issue_source": "subagent",
       "$eve.last_issue_tool": "researcher",
+      "$eve.last_issue_tool_call_id": "call_child",
+      "$eve.last_issue_turn_id": "turn_3",
       "$eve.last_issue_type": "action_rejected",
       "$eve.rejected_action_count": 1,
     });
@@ -213,12 +225,12 @@ describe("accumulateObservabilityIssues", () => {
       previous: undefined,
     });
     const source = setObservabilityIssueState(base, state);
-    const staleSnapshot = {
+    const priorSnapshot = {
       ...base,
       state: { "eve.harness.other": { value: true } },
     } as HarnessSession;
 
-    const preserved = preserveObservabilityIssueState(source, staleSnapshot);
+    const preserved = preserveObservabilityIssueState(source, priorSnapshot);
 
     expect(preserved.state?.["eve.harness.other"]).toEqual({ value: true });
     expect(getObservabilityIssueState(preserved.state)).toEqual(state);

@@ -11,6 +11,8 @@ export type EveObservabilityIssueType =
   | "step_failed"
   | "turn_failed";
 
+export type EveObservabilityIssueSource = "skill" | "subagent" | "tool" | "workflow";
+
 export interface EveObservabilityIssueSummary {
   readonly errorCount: number;
   readonly failedActionCount: number;
@@ -19,7 +21,10 @@ export interface EveObservabilityIssueSummary {
   readonly issueCount: number;
   readonly lastIssueAt?: string;
   readonly lastIssueCode?: string;
+  readonly lastIssueSource?: EveObservabilityIssueSource;
   readonly lastIssueTool?: string;
+  readonly lastIssueToolCallId?: string;
+  readonly lastIssueTurnId?: string;
   readonly lastIssueType?: EveObservabilityIssueType;
   readonly rejectedActionCount: number;
 }
@@ -109,7 +114,10 @@ export function observabilityIssueAttributes(
     "$eve.issue_count": summary.issueCount,
     "$eve.last_issue_at": summary.lastIssueAt,
     "$eve.last_issue_code": summary.lastIssueCode,
+    "$eve.last_issue_source": summary.lastIssueSource,
     "$eve.last_issue_tool": summary.lastIssueTool,
+    "$eve.last_issue_tool_call_id": summary.lastIssueToolCallId,
+    "$eve.last_issue_turn_id": summary.lastIssueTurnId,
     "$eve.last_issue_type": summary.lastIssueType,
     "$eve.rejected_action_count": summary.rejectedActionCount,
   };
@@ -124,8 +132,11 @@ interface IssueDelta {
   readonly failedTurnCount?: number;
   readonly issueType: EveObservabilityIssueType;
   readonly rejectedActionCount?: number;
+  readonly source: EveObservabilityIssueSource;
   readonly timestamp?: string;
   readonly tool?: string;
+  readonly toolCallId?: string;
+  readonly turnId?: string;
 }
 
 function issueDelta(event: HandleMessageStreamEvent, seenIssueInTurn: boolean): IssueDelta | null {
@@ -140,8 +151,11 @@ function issueDelta(event: HandleMessageStreamEvent, seenIssueInTurn: boolean): 
       failedActionCount: event.data.status === "failed" ? 1 : 0,
       issueType: event.data.status === "failed" ? "action_failed" : "action_rejected",
       rejectedActionCount: event.data.status === "rejected" ? 1 : 0,
+      source: actionResultSource(event.data.result),
       timestamp: event.meta?.at ?? new Date().toISOString(),
       tool: actionResultName(event.data.result),
+      toolCallId: event.data.result.callId,
+      turnId: event.data.turnId,
     };
   }
 
@@ -152,7 +166,9 @@ function issueDelta(event: HandleMessageStreamEvent, seenIssueInTurn: boolean): 
       countsAsIssue: true,
       failedStepCount: 1,
       issueType: "step_failed",
+      source: "workflow",
       timestamp: event.meta?.at ?? new Date().toISOString(),
+      turnId: event.data.turnId,
     };
   }
 
@@ -163,7 +179,9 @@ function issueDelta(event: HandleMessageStreamEvent, seenIssueInTurn: boolean): 
       countsAsIssue: !seenIssueInTurn,
       failedTurnCount: 1,
       issueType: "turn_failed",
+      source: "workflow",
       timestamp: event.meta?.at ?? new Date().toISOString(),
+      turnId: event.data.turnId,
     };
   }
 
@@ -173,6 +191,7 @@ function issueDelta(event: HandleMessageStreamEvent, seenIssueInTurn: boolean): 
       countsAsError: true,
       countsAsIssue: true,
       issueType: "session_failed",
+      source: "workflow",
       timestamp: event.meta?.at ?? new Date().toISOString(),
     };
   }
@@ -190,7 +209,10 @@ function addIssue<T extends EveObservabilityIssueSummary>(summary: T, delta: Iss
     issueCount: summary.issueCount + (delta.countsAsIssue ? 1 : 0),
     lastIssueAt: delta.countsAsIssue ? delta.timestamp : summary.lastIssueAt,
     lastIssueCode: delta.countsAsIssue ? delta.code : summary.lastIssueCode,
+    lastIssueSource: delta.countsAsIssue ? delta.source : summary.lastIssueSource,
     lastIssueTool: delta.countsAsIssue ? delta.tool : summary.lastIssueTool,
+    lastIssueToolCallId: delta.countsAsIssue ? delta.toolCallId : summary.lastIssueToolCallId,
+    lastIssueTurnId: delta.countsAsIssue ? delta.turnId : summary.lastIssueTurnId,
     lastIssueType: delta.countsAsIssue ? delta.issueType : summary.lastIssueType,
     rejectedActionCount: summary.rejectedActionCount + (delta.rejectedActionCount ?? 0),
   };
@@ -210,6 +232,18 @@ function actionResultName(
     return result.subagentName;
   }
   return result.name ?? "load_skill";
+}
+
+function actionResultSource(
+  result: Extract<HandleMessageStreamEvent, { type: "action.result" }>["data"]["result"],
+): EveObservabilityIssueSource {
+  if (result.kind === "tool-result") {
+    return "tool";
+  }
+  if (result.kind === "subagent-result") {
+    return "subagent";
+  }
+  return "skill";
 }
 
 function getTurnId(event: HandleMessageStreamEvent): string {
