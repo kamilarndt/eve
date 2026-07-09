@@ -142,6 +142,7 @@ describe("deriveSessionTitle", () => {
 describe("buildSessionAttributes", () => {
   it("emits type=session with trigger and derived title", () => {
     const attrs = buildSessionAttributes({
+      eveVersion: "1.2.3",
       inputMessage: "ship the thing please",
       serializedContext: slackChannelCtx,
     });
@@ -152,11 +153,13 @@ describe("buildSessionAttributes", () => {
       "$eve.type": "session",
       "$eve.trigger": "slack",
       "$eve.title": "ship the thing please",
+      "$eve.version": "1.2.3",
     });
   });
 
   it("omits the trigger when no channel is on the context", () => {
     const attrs = buildSessionAttributes({
+      eveVersion: "1.2.3",
       inputMessage: "hi",
       serializedContext: {},
     });
@@ -167,6 +170,7 @@ describe("buildSessionAttributes", () => {
 
   it("emits the channel request id when present", () => {
     const attrs = buildSessionAttributes({
+      eveVersion: "1.2.3",
       inputMessage: "hi",
       serializedContext: {
         ...slackChannelCtx,
@@ -181,6 +185,7 @@ describe("buildSessionAttributes", () => {
 describe("buildSubagentRootAttributes", () => {
   it("emits type=subagent with parent, root session, subagent node, and trigger", () => {
     const attrs = buildSubagentRootAttributes({
+      eveVersion: "1.2.3",
       identity: { nodeId: "subagents/linear" },
       parentCallId: "call_subagent_0",
       parentSessionId: "wrun_parent_subagent",
@@ -199,11 +204,13 @@ describe("buildSubagentRootAttributes", () => {
       "$eve.session_status": "running",
       "$eve.subagent": "subagents/linear",
       "$eve.trigger": "slack",
+      "$eve.version": "1.2.3",
     });
   });
 
   it("emits the channel request id when present", () => {
     const attrs = buildSubagentRootAttributes({
+      eveVersion: "1.2.3",
       identity: { nodeId: "subagents/linear" },
       parentSessionId: "wrun_parent_subagent",
       rootSessionId: "wrun_top_level_session",
@@ -264,6 +271,7 @@ describe("buildObservabilityIssueAttributes", () => {
 describe("buildTurnAttributes", () => {
   it("emits type=turn with parent and root session", () => {
     const attrs = buildTurnAttributes({
+      eveVersion: "1.2.3",
       parentSessionId: "wrun_session_123",
       rootSessionId: "wrun_session_123",
     });
@@ -273,11 +281,13 @@ describe("buildTurnAttributes", () => {
       "$eve.type": "turn",
       "$eve.parent": "wrun_session_123",
       "$eve.root": "wrun_session_123",
+      "$eve.version": "1.2.3",
     });
   });
 
   it("emits the channel request id when present", () => {
     const attrs = buildTurnAttributes({
+      eveVersion: "1.2.3",
       parentSessionId: "wrun_session_123",
       requestId: "req_turn",
       rootSessionId: "wrun_session_123",

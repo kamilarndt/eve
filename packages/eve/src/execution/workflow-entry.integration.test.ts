@@ -494,6 +494,7 @@ describe("workflowEntry integration", () => {
           allowReservedAttributes: true,
           attributes: normalizeEveAttributes(
             buildSessionAttributes({
+              eveVersion: "1.2.3-test",
               inputMessage: "session tag round-trip",
               serializedContext,
             }),
@@ -512,6 +513,7 @@ describe("workflowEntry integration", () => {
         expect(attrs["$eve.type"]).toBe("session");
         expect(attrs["$eve.trigger"]).toBe("http");
         expect(attrs["$eve.title"]).toContain("session tag round-trip");
+        expect(attrs["$eve.version"]).toBe("1.2.3-test");
         expect(attrs["$eve.session_status"]).toBe("waiting");
         // Top-level sessions have no parent or subagent name on the root run.
         expect(attrs["$eve.parent"]).toBeUndefined();
@@ -550,6 +552,7 @@ describe("workflowEntry integration", () => {
           allowReservedAttributes: true,
           attributes: normalizeEveAttributes(
             buildSubagentRootAttributes({
+              eveVersion: "1.2.3-test",
               identity: { nodeId: "researcher" },
               parentCallId: "call-subagent-1",
               parentSessionId: "parent-session",
@@ -577,6 +580,7 @@ describe("workflowEntry integration", () => {
       expect(attrs["$eve.root"]).toBe("root-session");
       expect(attrs["$eve.session_status"]).toBe("completed");
       expect(attrs["$eve.trigger"]).toBe("subagent");
+      expect(attrs["$eve.version"]).toBe("1.2.3-test");
     });
   });
 });

@@ -36,6 +36,9 @@ import {
   turnWorkflowReference,
   workflowEntryReference,
 } from "#execution/workflow-runtime.js";
+import { resolveInstalledPackageInfo } from "#internal/application/package.js";
+
+const EVE_PACKAGE_VERSION = resolveInstalledPackageInfo().version;
 
 vi.mock("./durable-session-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./durable-session-store.js")>();
@@ -221,6 +224,7 @@ describe("dispatchTurnStep", () => {
           "$eve.parent": "sess-test",
           "$eve.root": "sess-test",
           "$eve.type": "turn",
+          "$eve.version": EVE_PACKAGE_VERSION,
         },
         deploymentId: "latest",
       },
@@ -245,6 +249,7 @@ describe("dispatchTurnStep", () => {
           "$eve.parent": "sess-test",
           "$eve.root": "sess-test",
           "$eve.type": "turn",
+          "$eve.version": EVE_PACKAGE_VERSION,
         },
       },
     );
@@ -267,6 +272,7 @@ describe("dispatchTurnStep", () => {
         "$eve.parent": "sess-test",
         "$eve.root": "sess-test",
         "$eve.type": "turn",
+        "$eve.version": EVE_PACKAGE_VERSION,
       },
       deploymentId: "latest",
     });
@@ -277,6 +283,7 @@ describe("dispatchTurnStep", () => {
         "$eve.parent": "sess-test",
         "$eve.root": "sess-test",
         "$eve.type": "turn",
+        "$eve.version": EVE_PACKAGE_VERSION,
       },
     });
   });

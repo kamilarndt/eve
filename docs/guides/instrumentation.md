@@ -130,6 +130,7 @@ Structural tags describe each run's place in the tree:
 - `$eve.trigger`: the channel kind that started the run
 - `$eve.title`: truncated title derived from the first user message
 - `$eve.session_status`: Eve session lifecycle for session and subagent roots (`"running"`, `"waiting"`, `"completed"`, or `"failed"`)
+- `$eve.version`: installed Eve package version that emitted the run
 
 Per-turn usage tags are written on each step of a turn, accumulating cumulative totals (last write wins):
 

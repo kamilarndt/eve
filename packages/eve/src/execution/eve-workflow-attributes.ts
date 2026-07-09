@@ -23,6 +23,7 @@
  * - `$eve.trigger`      — channel adapter kind (session/subagent rows)
  * - `$eve.title`        — truncated session title from the first user message
  * - `$eve.channel_request_id` — inbound channel request id
+ * - `$eve.version`      — installed Eve package version that emitted the run
  */
 
 import { ChannelRequestIdKey } from "#context/keys.js";
@@ -207,6 +208,7 @@ function collectMessageText(message: unknown): string | undefined {
  * so its own `workflowRunId` already identifies the chain root.
  */
 export function buildSessionAttributes(input: {
+  readonly eveVersion: string;
   readonly inputMessage: unknown;
   readonly serializedContext: Record<string, unknown>;
 }): Record<string, EveAttributeValue> {
@@ -216,6 +218,7 @@ export function buildSessionAttributes(input: {
     "$eve.type": "session",
     "$eve.trigger": readChannelKind(input.serializedContext),
     "$eve.title": deriveSessionTitle(input.inputMessage),
+    "$eve.version": input.eveVersion,
   };
 }
 
@@ -229,6 +232,7 @@ export function buildSessionAttributes(input: {
  * session in a single round trip.
  */
 export function buildSubagentRootAttributes(input: {
+  readonly eveVersion: string;
   readonly identity: SessionIdentitySummary;
   readonly parentCallId?: string;
   readonly parentSessionId: string;
@@ -246,6 +250,7 @@ export function buildSubagentRootAttributes(input: {
     "$eve.session_status": "running",
     "$eve.subagent": input.identity.nodeId,
     "$eve.trigger": readChannelKind(input.serializedContext),
+    "$eve.version": input.eveVersion,
   };
 }
 
@@ -288,6 +293,7 @@ export function buildObservabilityIssueAttributes(
  * emitted.
  */
 export function buildTurnAttributes(input: {
+  readonly eveVersion: string;
   readonly parentSessionId: string;
   readonly requestId?: string;
   readonly rootSessionId: string;
@@ -297,5 +303,6 @@ export function buildTurnAttributes(input: {
     "$eve.type": "turn",
     "$eve.parent": input.parentSessionId,
     "$eve.root": input.rootSessionId,
+    "$eve.version": input.eveVersion,
   };
 }

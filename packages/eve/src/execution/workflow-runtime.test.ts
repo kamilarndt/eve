@@ -16,6 +16,7 @@ import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-
 const getRunMock = vi.fn();
 const resumeHookMock = vi.fn();
 const startMock = vi.fn();
+const EVE_PACKAGE_VERSION = resolveInstalledPackageInfo().version;
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
   getRun: (...args: unknown[]) => getRunMock(...args),
@@ -184,6 +185,7 @@ describe("createWorkflowRuntime#run", () => {
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
+          "$eve.version": EVE_PACKAGE_VERSION,
         },
         deploymentId: "latest",
       },
@@ -241,6 +243,7 @@ describe("createWorkflowRuntime#run", () => {
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
+          "$eve.version": EVE_PACKAGE_VERSION,
         },
         deploymentId: "latest",
       },
@@ -283,6 +286,7 @@ describe("createWorkflowRuntime#run", () => {
         "$eve.subagent": "researcher",
         "$eve.trigger": "subagent",
         "$eve.type": "subagent",
+        "$eve.version": EVE_PACKAGE_VERSION,
       },
     });
   });
@@ -309,6 +313,7 @@ describe("createWorkflowRuntime#run", () => {
         "$eve.title": "hello",
         "$eve.trigger": "http",
         "$eve.type": "session",
+        "$eve.version": EVE_PACKAGE_VERSION,
       },
       deploymentId: "latest",
     });
@@ -319,6 +324,7 @@ describe("createWorkflowRuntime#run", () => {
         "$eve.title": "hello",
         "$eve.trigger": "http",
         "$eve.type": "session",
+        "$eve.version": EVE_PACKAGE_VERSION,
       },
     });
   });
@@ -354,6 +360,7 @@ describe("createWorkflowRuntime#run", () => {
           "$eve.title": "hello",
           "$eve.trigger": "http",
           "$eve.type": "session",
+          "$eve.version": EVE_PACKAGE_VERSION,
         },
       });
     },

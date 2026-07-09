@@ -105,10 +105,12 @@ export function createWorkflowRuntime(config: {
       const attributes =
         parentLineage.sessionId === undefined
           ? buildSessionAttributes({
+              eveVersion: EVE_PACKAGE_INFO.version,
               inputMessage: input.title ?? input.input.message,
               serializedContext,
             })
           : buildSubagentRootAttributes({
+              eveVersion: EVE_PACKAGE_INFO.version,
               identity: { nodeId: bundle.nodeId ?? ROOT_RUNTIME_AGENT_NODE_ID },
               parentCallId: parentLineage.callId,
               parentSessionId: parentLineage.sessionId,

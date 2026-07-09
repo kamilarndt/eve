@@ -68,6 +68,9 @@ import {
   turnWorkflowReference,
 } from "#execution/workflow-runtime.js";
 import { resumeHook } from "#internal/workflow/runtime.js";
+import { resolveInstalledPackageInfo } from "#internal/application/package.js";
+
+const EVE_PACKAGE_VERSION = resolveInstalledPackageInfo().version;
 
 /**
  * Result of one durable harness step, consumed by the turn workflow.
@@ -584,6 +587,7 @@ export async function dispatchTurnStep(
       allowReservedAttributes: true,
       attributes: normalizeEveAttributes(
         buildTurnAttributes({
+          eveVersion: EVE_PACKAGE_VERSION,
           parentSessionId: input.sessionState.sessionId,
           requestId: input.delivery.kind === "deliver" ? input.delivery.requestId : undefined,
           rootSessionId: readRootSessionId(input.serializedContext) ?? input.sessionState.sessionId,

@@ -1277,6 +1277,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       "$eve.cache_write_tokens": nextTurnUsage.cacheWriteTokens,
       "$eve.cost_usd": nextTurnUsage.sawCost ? nextTurnUsage.costUsd : undefined,
       "$eve.tool_count": config.tools.size,
+      "$eve.version": eveVersion,
     });
 
     // --- Handle result ------------------------------------------------------
