@@ -1,9 +1,11 @@
 import { jsonSchema, type ModelMessage } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
+import { ContextContainer, contextStorage } from "#context/container.js";
+import { requestAuthorization } from "#harness/authorization.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import {
-  appendExecutedToolResults,
+  closeApprovedActionBatch,
   executeApprovedToolCalls,
 } from "#harness/approved-tool-execution.js";
 
@@ -135,46 +137,90 @@ describe("executeApprovedToolCalls", () => {
   });
 });
 
-describe("appendExecutedToolResults", () => {
-  const part = {
-    output: { type: "text", value: "ok" },
-    toolCallId: "call-1",
-    toolName: "echo",
-    type: "tool-result",
-  } as const;
-
-  it("merges results into the trailing tool message", () => {
-    const messages: ModelMessage[] = [
-      { content: "hi", role: "user" },
+describe("closeApprovedActionBatch", () => {
+  it("preserves every authorization challenge raised by an approved batch", async () => {
+    const firstSignal = requestAuthorization([
       {
-        content: [{ approvalId: "approval-1", approved: true, type: "tool-approval-response" }],
-        role: "tool",
+        challenge: { url: "https://idp.example/first" },
+        hookUrl: "https://app.example/first/callback",
+        name: "first_connection",
+        resume: { nonce: "first" },
       },
-    ];
+    ]);
+    const secondSignal = requestAuthorization([
+      {
+        challenge: { url: "https://idp.example/second" },
+        hookUrl: "https://app.example/second/callback",
+        name: "second_connection",
+        resume: { nonce: "second" },
+      },
+    ]);
+    const ctx = new ContextContainer();
+    const tools = new Map([
+      ["first", createDefinition({ execute: () => firstSignal, name: "first" })],
+      ["second", createDefinition({ execute: () => secondSignal, name: "second" })],
+    ]);
 
-    const result = appendExecutedToolResults(messages, [part]);
+    const result = await contextStorage.run(ctx, () =>
+      closeApprovedActionBatch({
+        batch: {
+          calls: [
+            { ...call, callId: "call-first", toolName: "first" },
+            { ...call, callId: "call-second", toolName: "second" },
+          ],
+        },
+        ctx,
+        messages: [],
+        tools,
+      }),
+    );
 
-    expect(result).toHaveLength(2);
-    expect(result[1]).toEqual({
-      content: [{ approvalId: "approval-1", approved: true, type: "tool-approval-response" }, part],
-      role: "tool",
-    });
-  });
-
-  it("appends a new tool message when the transcript does not end in one", () => {
-    const messages: ModelMessage[] = [{ content: "hi", role: "user" }];
-
-    const result = appendExecutedToolResults(messages, [part]);
-
-    expect(result).toEqual([
-      { content: "hi", role: "user" },
-      { content: [part], role: "tool" },
+    expect(result.authorizationSignal?.challenges).toEqual([
+      ...firstSignal.challenges,
+      ...secondSignal.challenges,
     ]);
   });
 
-  it("returns a copy when there is nothing to append", () => {
-    const messages: ModelMessage[] = [{ content: "hi", role: "user" }];
+  it("places a result beside its matching call when later input already follows", async () => {
+    const assistant: ModelMessage = {
+      content: [
+        {
+          input: { note: "hi" },
+          toolCallId: "call-1",
+          toolName: "echo",
+          type: "tool-call",
+        },
+      ],
+      role: "assistant",
+    };
+    const approval: ModelMessage = {
+      content: [{ approvalId: "approval-1", approved: true, type: "tool-approval-response" }],
+      role: "tool",
+    };
+    const laterInput: ModelMessage = { content: "additional context", role: "user" };
 
-    expect(appendExecutedToolResults(messages, [])).toEqual(messages);
+    const result = await closeApprovedActionBatch({
+      batch: { calls: [call] },
+      ctx: undefined,
+      messages: [assistant, approval, laterInput],
+      tools: new Map([["echo", createDefinition({ execute: () => "ok" })]]),
+    });
+
+    expect(result.messages).toEqual([
+      assistant,
+      {
+        content: [
+          { approvalId: "approval-1", approved: true, type: "tool-approval-response" },
+          {
+            output: { type: "text", value: "ok" },
+            toolCallId: "call-1",
+            toolName: "echo",
+            type: "tool-result",
+          },
+        ],
+        role: "tool",
+      },
+      laterInput,
+    ]);
   });
 });

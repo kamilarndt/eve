@@ -455,6 +455,7 @@ function createPendingBashApprovalSession(): HarnessSession {
 
 function createPendingProtectedActionApprovalSession(): HarnessSession {
   return setPendingInputBatch({
+    event: { sequence: 7, stepIndex: 0, turnId: "turn-1" },
     requests: [
       {
         action: {

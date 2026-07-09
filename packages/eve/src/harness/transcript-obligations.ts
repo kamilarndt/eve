@@ -35,16 +35,18 @@ export interface DanglingToolCall {
  * `undefined` are left dangling, so legitimately open obligations (parked
  * approvals, pending runtime actions) pass through untouched.
  *
- * Every transcript closure the harness synthesizes goes through here: the
- * step-time closure of invalid-input tool calls (detailed, model-actionable
- * error text) and the request-assembly guard in the tool loop, which closes
- * any remaining orphan with {@link INTERRUPTED_TOOL_CALL_RESULT} — durably,
- * so histories poisoned by a missed closure heal instead of replaying the
- * same provider rejection forever.
+ * Every transcript closure the harness synthesizes goes through here:
+ * answered input requests, approved and denied calls, invalid-input calls,
+ * and the request-assembly guard, which closes any remaining orphan with
+ * {@link INTERRUPTED_TOOL_CALL_RESULT}. Recording the guard's closure durably
+ * heals histories poisoned by a missed result.
  */
 export function closeDanglingToolCalls(
   messages: readonly ModelMessage[],
   resolveClosure: (call: DanglingToolCall) => ToolResultOutput | undefined,
+  options: { readonly placement: "after-existing" | "before-existing" } = {
+    placement: "before-existing",
+  },
 ): {
   readonly closed: readonly DanglingToolCall[];
   readonly messages: ModelMessage[];
@@ -66,7 +68,11 @@ export function closeDanglingToolCalls(
     // assistant message that carries the call.
     const next = messages[index + 1];
     if (next !== undefined && next.role === "tool" && Array.isArray(next.content)) {
-      result.push({ ...next, content: [...closures, ...next.content] });
+      const content =
+        options.placement === "after-existing"
+          ? [...next.content, ...closures]
+          : [...closures, ...next.content];
+      result.push({ ...next, content });
       index += 1;
     } else {
       result.push({ content: closures, role: "tool" });

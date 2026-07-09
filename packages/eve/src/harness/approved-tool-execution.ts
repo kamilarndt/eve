@@ -10,10 +10,15 @@ import type {
 } from "#runtime/actions/types.js";
 import { toError } from "#shared/errors.js";
 import { createRuntimeToolResultFromValue } from "#harness/action-result-helpers.js";
-import { type AuthorizationSignal, isAuthorizationSignal } from "#harness/authorization.js";
+import {
+  type AuthorizationSignal,
+  isAuthorizationSignal,
+  requestAuthorization,
+} from "#harness/authorization.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import type { ApprovedActionBatch } from "#harness/input-requests.js";
 import { readToolInterrupt } from "#harness/tool-interrupts.js";
+import { closeDanglingToolCalls } from "#harness/transcript-obligations.js";
 import { resolveExecutedToolModelOutput, wrapToolExecute } from "#harness/tools.js";
 import type { HarnessEmitFn, HarnessToolMap } from "#harness/types.js";
 
@@ -38,10 +43,11 @@ export interface ApprovedToolExecutionOutcome {
 
 /**
  * Closes one resolved approval batch: executes the approved calls, appends
- * their durable results to the transcript, and emits `action.result` events
- * against the originating turn's stream coordinates. Returns the closed
- * transcript plus the first {@link AuthorizationSignal} an executed tool
- * raised, so the caller can park exactly like in-stream execution.
+ * their durable results to the transcript, and emits terminal `action.result`
+ * events against the originating turn's stream coordinates. Returns the
+ * closed transcript plus one combined {@link AuthorizationSignal} for every
+ * authorization challenge the batch raised, so the caller can park exactly
+ * like in-stream execution.
  *
  * Dynamic tools take precedence over authored tools of the same name,
  * mirroring the toolset override order used for model calls.
@@ -76,16 +82,22 @@ export async function closeApprovedActionBatch(input: {
     return { messages: [...input.messages] };
   }
 
-  const messages = appendExecutedToolResults(
-    input.messages,
-    executed.map((outcome) => outcome.part),
+  const classified = classifyExecutedToolCalls(ctx, executed);
+  const closures = new Map(
+    executed.map((outcome) => [outcome.part.toolCallId, outcome.part.output]),
   );
+  const messages = closeDanglingToolCalls(input.messages, (call) => closures.get(call.toolCallId), {
+    placement: "after-existing",
+  }).messages;
 
   if (input.emit !== undefined && batch.event !== undefined) {
-    for (const outcome of executed) {
+    for (const result of classified) {
+      if (result.kind === "authorization-pending") {
+        continue;
+      }
       await input.emit(
         createActionResultEvent({
-          result: outcome.actionResult,
+          result: result.outcome.actionResult,
           sequence: batch.event.sequence,
           stepIndex: batch.event.stepIndex,
           turnId: batch.event.turnId,
@@ -94,30 +106,37 @@ export async function closeApprovedActionBatch(input: {
     }
   }
 
+  const challenges = classified.flatMap((result) =>
+    result.kind === "authorization-pending" ? result.signal.challenges : [],
+  );
+
   return {
-    authorizationSignal: findStashedAuthorizationSignal(ctx, executed),
+    authorizationSignal: challenges.length > 0 ? requestAuthorization(challenges) : undefined,
     messages,
   };
 }
 
-/**
- * Reads back the first authorization signal stashed by `wrapToolExecute`
- * during resume-time execution.
- */
-function findStashedAuthorizationSignal(
+type ClassifiedExecutedToolCall =
+  | {
+      readonly kind: "authorization-pending";
+      readonly outcome: ExecutedApprovedToolCall;
+      readonly signal: AuthorizationSignal;
+    }
+  | { readonly kind: "completed"; readonly outcome: ExecutedApprovedToolCall };
+
+/** Separates terminal results from authorization parks before event emission. */
+function classifyExecutedToolCalls(
   ctx: AlsContext | undefined,
   executed: readonly ExecutedApprovedToolCall[],
-): AuthorizationSignal | undefined {
-  if (ctx === undefined) {
-    return undefined;
-  }
-  for (const outcome of executed) {
-    const stashed = readToolInterrupt(ctx, outcome.actionResult.callId);
+): ClassifiedExecutedToolCall[] {
+  return executed.map((outcome) => {
+    const stashed =
+      ctx === undefined ? undefined : readToolInterrupt(ctx, outcome.actionResult.callId);
     if (stashed !== undefined && isAuthorizationSignal(stashed)) {
-      return stashed;
+      return { kind: "authorization-pending", outcome, signal: stashed };
     }
-  }
-  return undefined;
+    return { kind: "completed", outcome };
+  });
 }
 
 /**
@@ -219,26 +238,4 @@ function buildErrorOutcome(
       type: "tool-result",
     },
   };
-}
-
-/**
- * Merges resume-time closures into the trailing tool message (the one
- * carrying the approval responses) so every `tool_use` and its result stay
- * within adjacent messages, as providers require. Appends a new tool message
- * when the transcript does not end in one.
- */
-export function appendExecutedToolResults(
-  messages: readonly ModelMessage[],
-  parts: readonly ToolResultPart[],
-): ModelMessage[] {
-  if (parts.length === 0) {
-    return [...messages];
-  }
-
-  const last = messages.at(-1);
-  if (last !== undefined && last.role === "tool" && Array.isArray(last.content)) {
-    return [...messages.slice(0, -1), { ...last, content: [...last.content, ...parts] }];
-  }
-
-  return [...messages, { content: [...parts], role: "tool" }];
 }

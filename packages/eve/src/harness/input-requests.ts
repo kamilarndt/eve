@@ -12,6 +12,7 @@ import {
   isSessionLimitContinuationRequest,
   resolveSessionLimitContinuation,
 } from "#harness/session-limit-continuation.js";
+import { closeDanglingToolCalls } from "#harness/transcript-obligations.js";
 import type { HarnessSession, SessionStateMap, StepInput } from "#harness/types.js";
 
 const PENDING_INPUT_BATCH_KEY = "eve.runtime.pendingInputBatch";
@@ -25,6 +26,7 @@ const TOOL_EXECUTION_DENIED_MESSAGE = "Tool execution was denied.";
 const TOOL_EXECUTION_INVALID_APPROVAL_MESSAGE = "Invalid approval response.";
 
 type ToolResponsePart = Extract<ModelMessage, { role: "tool" }>["content"][number];
+type ToolResultOutput = Extract<ToolResponsePart, { type: "tool-result" }>["output"];
 
 /**
  * Stream-emit coordinates carried so a parked batch's resolution can attribute
@@ -178,11 +180,7 @@ export function resolvePendingInput(input: {
     // A follow-up message arrived for question-only input with no explicit
     // responses. Keep the existing question semantics: mark unanswered
     // question requests ignored so the model can continue with the message.
-    const toolParts = buildToolResponseParts(pendingBatch, []);
-    const messages: ModelMessage[] = [...baseHistory, ...pendingBatch.responseMessages];
-    if (toolParts.length > 0) {
-      messages.push({ content: toolParts, role: "tool" });
-    }
+    const messages = buildResolvedInputMessages(baseHistory, pendingBatch, []);
 
     const rejectedActions = buildRejectedActionBatch(pendingBatch, []);
     session = clearPendingInputBatch(session);
@@ -211,13 +209,7 @@ export function resolvePendingInput(input: {
     session,
   });
 
-  // Build tool result messages from responses.
-  const toolParts = buildToolResponseParts(pendingBatch, responses);
-
-  const messages: ModelMessage[] = [...baseHistory, ...pendingBatch.responseMessages];
-  if (toolParts.length > 0) {
-    messages.push({ content: toolParts, role: "tool" });
-  }
+  const messages = buildResolvedInputMessages(baseHistory, pendingBatch, responses);
 
   const rejectedActions = buildRejectedActionBatch(pendingBatch, responses);
   const approvedActions = buildApprovedActionBatch(pendingBatch, approvedRequestIds);
@@ -566,76 +558,67 @@ function buildApprovedActionBatch(
   return calls.length > 0 ? { calls, event: batch.event } : undefined;
 }
 
-function buildToolResponseParts(
+/** Resolves input metadata and closes every answered or denied tool call. */
+function buildResolvedInputMessages(
+  baseHistory: readonly ModelMessage[],
   batch: PendingInputBatch,
   responses: readonly InputResponse[],
-): ToolResponsePart[] {
-  const responseMap = new Map(responses.map((r) => [r.requestId, r]));
-
-  const parts: ToolResponsePart[] = [];
-  for (const request of batch.requests) {
-    parts.push(...buildToolResponsePartsForRequest(request, responseMap.get(request.requestId)));
+): ModelMessage[] {
+  const { closures, responseParts } = buildInputResolutionParts(batch, responses);
+  const messages: ModelMessage[] = [...baseHistory, ...batch.responseMessages];
+  if (responseParts.length > 0) {
+    messages.push({ content: [...responseParts], role: "tool" });
   }
-  return parts;
+
+  return closeDanglingToolCalls(messages, (call) => closures.get(call.toolCallId), {
+    placement: "after-existing",
+  }).messages;
 }
 
-function buildToolResponsePartsForRequest(
-  request: InputRequest,
-  response: InputResponse | undefined,
-): ToolResponsePart[] {
-  // A session-limit continuation prompt is harness-authored: no matching
-  // tool call exists in model history, so resolving it must not append a
-  // tool message the provider would reject as unmatched. This is currently
-  // the only harness-authored request type; if another appears, replace this
-  // toolName predicate with a generic synthetic-request marker instead of
-  // stacking a second special case here.
-  if (isSessionLimitContinuationRequest(request)) {
-    return [];
-  }
+function buildInputResolutionParts(
+  batch: PendingInputBatch,
+  responses: readonly InputResponse[],
+): {
+  readonly closures: ReadonlyMap<string, ToolResultOutput>;
+  readonly responseParts: readonly ToolResponsePart[];
+} {
+  const responseMap = new Map(responses.map((r) => [r.requestId, r]));
+  const closures = new Map<string, ToolResultOutput>();
+  const responseParts: ToolResponsePart[] = [];
 
-  if (isApprovalRequest(request)) {
-    const { approved, reason } = resolveApprovalOutcome(response);
-    const parts: ToolResponsePart[] = [
-      {
+  for (const request of batch.requests) {
+    // A session-limit continuation prompt is harness-authored: no matching
+    // tool call exists in model history, so resolving it must not append a
+    // tool message the provider would reject as unmatched.
+    if (isSessionLimitContinuationRequest(request)) {
+      continue;
+    }
+
+    const response = responseMap.get(request.requestId);
+    if (isApprovalRequest(request)) {
+      const { approved, reason } = resolveApprovalOutcome(response);
+      responseParts.push({
         approvalId: request.requestId,
         approved,
         reason,
         type: "tool-approval-response",
-      },
-    ];
-    /*
-     * The harness owns closing every parked tool call: providers reject a
-     * replayed `tool_use` without a `tool_result`, and the persisted
-     * `tool-approval-response` is stripped during provider prompt
-     * conversion, so it is not a closure. Denials are closed here with the
-     * matching `execution-denied` result; approved calls are executed and
-     * closed by the tool loop (see `approvedActions`).
-     */
-    if (!approved) {
-      parts.push({
-        output: { type: "execution-denied", reason },
-        toolCallId: request.action.callId,
-        toolName: request.action.toolName,
-        type: "tool-result",
       });
+      if (!approved) {
+        closures.set(request.action.callId, { type: "execution-denied", reason });
+      }
+      continue;
     }
-    return parts;
+
+    closures.set(request.action.callId, {
+      type: "json",
+      value:
+        response !== undefined
+          ? { optionId: response.optionId, text: response.text, status: "answered" }
+          : { status: "ignored" },
+    });
   }
 
-  return [
-    {
-      output: {
-        type: "json",
-        value:
-          response !== undefined
-            ? { optionId: response.optionId, text: response.text, status: "answered" }
-            : { status: "ignored" },
-      },
-      toolCallId: request.action.callId,
-      toolName: request.action.toolName,
-      type: "tool-result",
-    },
-  ];
+  return { closures, responseParts };
 }
 
 function isApprovalRequest(request: InputRequest): boolean {
