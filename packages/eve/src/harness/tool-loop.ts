@@ -77,13 +77,6 @@ import {
   type TokenUsageDelta,
 } from "#harness/turn-tag-state.js";
 import {
-  accumulateObservabilityIssues,
-  getObservabilityIssueState,
-  observabilityIssueAttributes,
-  preserveObservabilityIssueState,
-  setObservabilityIssueState,
-} from "#harness/observability-issues.js";
-import {
   applySessionLimitContinuation,
   enforceSessionTokenLimit,
 } from "#harness/session-limit-enforcement.js";
@@ -493,15 +486,6 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     const baseEmit = config.handleEvent;
     const emit: ToolLoopHarnessConfig["handleEvent"] = baseEmit
       ? async (event, messages) => {
-          const previousIssueState = getObservabilityIssueState(session.state);
-          const nextIssueState = accumulateObservabilityIssues({
-            event,
-            previous: previousIssueState,
-          });
-          if (nextIssueState && nextIssueState !== previousIssueState) {
-            session = setObservabilityIssueState(session, nextIssueState);
-            await setEveAttributes(observabilityIssueAttributes(nextIssueState));
-          }
           await baseEmit(event, messages);
         }
       : undefined;
@@ -528,10 +512,10 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     if (resolvedRuntimeActions.outcome === "unresolved") {
       return {
         next: null,
-        session: preserveObservabilityIssueState(session, resolvedRuntimeActions.session),
+        session: resolvedRuntimeActions.session,
       };
     }
-    session = preserveObservabilityIssueState(session, resolvedRuntimeActions.session);
+    session = resolvedRuntimeActions.session;
 
     const pending = resolvePendingInput({
       history: resolvedRuntimeActions.messages,
@@ -550,14 +534,11 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
         emissionState = await emitTurnEpilogue(emit, emissionState, config.mode);
         return {
           next: null,
-          session: setHarnessEmissionState(
-            preserveObservabilityIssueState(session, pending.session),
-            emissionState,
-          ),
+          session: setHarnessEmissionState(pending.session, emissionState),
         };
       }
 
-      return { next: null, session: preserveObservabilityIssueState(session, pending.session) };
+      return { next: null, session: pending.session };
     }
 
     // Surface denied tool-call approvals as rejected `action.result` events.
@@ -594,7 +575,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       }
     }
 
-    session = preserveObservabilityIssueState(session, pending.session);
+    session = pending.session;
     let messages: ModelMessage[] = pending.messages;
 
     // A resolved session-limit continuation prompt grants a fresh token
@@ -609,10 +590,10 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     if (continuation.result !== null) {
       return {
         ...continuation.result,
-        session: preserveObservabilityIssueState(session, continuation.result.session),
+        session: continuation.result.session,
       };
     }
-    session = preserveObservabilityIssueState(session, continuation.session);
+    session = continuation.session;
 
     if (stepInput.input?.context !== undefined) {
       for (const entry of stepInput.input.context) {
@@ -679,7 +660,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       telemetry: enrichTelemetry(telemetryConfig, agentName) ?? undefined,
     });
     messages = compacted.messages;
-    session = preserveObservabilityIssueState(session, compacted.session);
+    session = compacted.session;
 
     const approvedTools = getApprovedTools(session);
 
@@ -1028,7 +1009,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     if (pendingWorkflowInterrupt !== null) {
       return {
         ...pendingWorkflowInterrupt,
-        session: preserveObservabilityIssueState(session, pendingWorkflowInterrupt.session),
+        session: pendingWorkflowInterrupt.session,
       };
     }
 
@@ -1042,7 +1023,7 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
     if (limitResult !== null) {
       return {
         ...limitResult,
-        session: preserveObservabilityIssueState(session, limitResult.session),
+        session: limitResult.session,
       };
     }
 
@@ -1282,14 +1263,10 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
 
     // --- Handle result ------------------------------------------------------
 
-    const preserveObservedIssueState = (target: HarnessSession) =>
-      preserveObservabilityIssueState(session, target);
-
     return handleStepResult({
       config,
       emit,
       emissionState,
-      preserveObservedIssueState,
       promptMessages: messages,
       result,
       runStep,
@@ -1749,13 +1726,12 @@ async function handleStepResult(input: {
   readonly config: ToolLoopHarnessConfig;
   readonly emit?: ToolLoopHarnessConfig["handleEvent"];
   readonly emissionState: ReturnType<typeof getHarnessEmissionState>;
-  readonly preserveObservedIssueState: (session: HarnessSession) => HarnessSession;
   readonly promptMessages: readonly ModelMessage[];
   readonly result: HarnessStepResult;
   readonly runStep: StepFn;
   readonly session: HarnessSession;
 }): Promise<StepResult> {
-  const { config, emit, preserveObservedIssueState, promptMessages, result, runStep } = input;
+  const { config, emit, promptMessages, result, runStep } = input;
   let { emissionState, session } = input;
 
   const resolvedStepOutput = resolveAssistantStepText(result.response.messages, result.text);
@@ -1998,7 +1974,7 @@ async function handleStepResult(input: {
     });
     return {
       ...stepResult,
-      session: preserveObservedIssueState(stepResult.session),
+      session: stepResult.session,
     };
   }
 
@@ -2012,7 +1988,7 @@ async function handleStepResult(input: {
   });
   return {
     ...stepResult,
-    session: preserveObservedIssueState(stepResult.session),
+    session: stepResult.session,
   };
 }
 

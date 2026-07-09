@@ -14,7 +14,6 @@ import { getHarnessEmissionState } from "#harness/emission.js";
 import { setChannelContext } from "#execution/channel-context.js";
 import { hasPendingInputBatch } from "#harness/input-requests.js";
 import { coalesceTurnInputs } from "#harness/messages.js";
-import { observabilityIssueAttributes } from "#harness/observability-issues.js";
 import {
   getRuntimeActionKeysFromWorkflowInterrupt,
   isWorkflowRuntimeActionInterrupt,
@@ -62,7 +61,7 @@ import { reconcileSessionContinuationToken } from "#execution/reconcile-session-
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
 import { buildTurnAttributes, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import { normalizeEveAttributes } from "#runtime/attributes/normalize.js";
-import { setEveAttributes } from "#runtime/attributes/emit.js";
+import { reportEveObservabilityEvent } from "#runtime/observability/report.js";
 import { resolveSessionSkillRoot } from "#execution/workflow-skill-root.js";
 import {
   createWorkflowRuntime,
@@ -257,7 +256,9 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
   const emit = async (event: HandleMessageStreamEvent): Promise<HandleMessageStreamEvent> => {
     const toEmit = await callAdapterEventHandler(adapter, event, adapterCtx);
     setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
-    await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(toEmit)));
+    const timed = timestampHandleMessageStreamEvent(toEmit);
+    await reportEveObservabilityEvent(timed);
+    await writer.write(encodeMessageStreamEvent(timed));
     return toEmit;
   };
 
@@ -503,18 +504,7 @@ export async function emitTerminalSessionFailureStep(input: {
   });
 
   const event = createSessionFailedEvent({ code, details, message, sessionId });
-  await setEveAttributes(
-    observabilityIssueAttributes({
-      issue: {
-        at: new Date().toISOString(),
-        code,
-        source: "workflow",
-        type: "session_failed",
-      },
-      seenIssueInTurn: true,
-      turnId: "",
-    }),
-  );
+  await reportEveObservabilityEvent(event);
 
   // Best-effort: invoke the adapter handler so channels surface the
   // failure. Errors are logged, never rethrown — the outer workflow

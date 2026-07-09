@@ -25,9 +25,9 @@
  * - `$eve.channel_request_id` — inbound channel request id
  * - `$eve.version`      — installed Eve package version that emitted the run
  *
- * Issue occurrences are emitted separately by the harness as a single
- * compact `$eve.issue` fact. Do not add derived counters, status, or
- * "last issue" rollups here.
+ * Issue occurrences are reported separately as structured observability events
+ * before Workflow serializes the stream. Do not add derived counters, status,
+ * or "last issue" rollups here.
  */
 
 import { ChannelRequestIdKey } from "#context/keys.js";
