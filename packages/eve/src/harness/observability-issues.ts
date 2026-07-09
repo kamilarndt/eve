@@ -114,7 +114,7 @@ function issueFromEvent(
     };
   }
 
-  if (event.type === "step.failed") {
+  if (event.type === "step.failed" && !seenIssueInTurn) {
     return {
       at: event.meta?.at ?? new Date().toISOString(),
       code: event.data.code,
@@ -223,7 +223,7 @@ function byteLength(value: string): number {
 
 function serializeIssue(issue: EveObservabilityIssue): string {
   const payload: Record<string, string | number> = omitUndefined(compactIssue(issue));
-  const shrinkable = ["tool", "turn", "call", "at"];
+  const shrinkable = ["tool", "turn", "call", "at", "c"];
 
   while (true) {
     const json = JSON.stringify(payload);
@@ -239,12 +239,21 @@ function serializeIssue(issue: EveObservabilityIssue): string {
       continue;
     }
 
-    const optionalKey = shrinkable.find((candidate) => candidate in payload);
+    const optionalKey = shrinkable
+      .filter((candidate) => candidate !== "c")
+      .find((candidate) => candidate in payload);
     if (optionalKey) {
       delete payload[optionalKey];
       continue;
     }
 
-    return JSON.stringify({ c: issue.code, s: issue.source, t: issue.type, v: 1 });
+    const minimal = { c: String(payload.c ?? issue.code), s: issue.source, t: issue.type, v: 1 };
+    const minimalJson = JSON.stringify(minimal);
+    if (byteLength(minimalJson) <= EVE_ATTRIBUTE_VALUE_MAX_BYTES) {
+      return minimalJson;
+    }
+
+    const maxCodeChars = Math.max(0, String(minimal.c).length - 16);
+    payload.c = String(minimal.c).slice(0, maxCodeChars);
   }
 }

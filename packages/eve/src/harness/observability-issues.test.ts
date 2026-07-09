@@ -227,6 +227,89 @@ describe("accumulateObservabilityIssues", () => {
     });
   });
 
+  it("keeps the action issue when a later step failure wraps the same turn", () => {
+    const afterAction = accumulateObservabilityIssues({
+      event: eventWithTime({
+        type: "action.result",
+        data: {
+          error: { code: "REMOTE_AGENT_FAILED", message: "Remote failed" },
+          result: {
+            callId: "call_remote",
+            isError: true,
+            kind: "subagent-result",
+            output: { code: "REMOTE_AGENT_FAILED", message: "Remote failed" },
+            subagentKind: "remote",
+            subagentName: "reviewer",
+          },
+          sequence: 3,
+          status: "failed",
+          stepIndex: 0,
+          turnId: "turn_remote",
+        },
+      }),
+      previous: undefined,
+    });
+
+    const afterStep = accumulateObservabilityIssues({
+      event: eventWithTime({
+        type: "step.failed",
+        data: {
+          code: "STEP_FAILED",
+          message: "Step failed after action error",
+          sequence: 4,
+          stepIndex: 0,
+          turnId: "turn_remote",
+        },
+      }),
+      previous: afterAction,
+    });
+
+    expect(afterStep).toMatchObject({
+      issue: {
+        code: "REMOTE_AGENT_FAILED",
+        source: "remote_subagent",
+        tool: "reviewer",
+        toolCallId: "call_remote",
+        turnId: "turn_remote",
+        type: "action_failed",
+      },
+    });
+  });
+
+  it("keeps oversized issue payloads as valid bounded JSON", () => {
+    const state = accumulateObservabilityIssues({
+      event: eventWithTime({
+        type: "action.result",
+        data: {
+          error: { code: "E_" + "X".repeat(2048), message: "Too long" },
+          result: {
+            callId: "call_" + "x".repeat(2048),
+            isError: true,
+            kind: "tool-result",
+            output: "Too long",
+            toolName: "tool_" + "y".repeat(2048),
+          },
+          sequence: 3,
+          status: "failed",
+          stepIndex: 0,
+          turnId: "turn_" + "z".repeat(2048),
+        },
+      }),
+      previous: undefined,
+    });
+
+    expect(state).toBeDefined();
+    if (!state) throw new Error("expected issue state");
+    const value = observabilityIssueAttributes(state)["$eve.issue"];
+    expect(typeof value).toBe("string");
+    expect(new TextEncoder().encode(String(value)).length).toBeLessThanOrEqual(256);
+    const parsed = JSON.parse(String(value)) as { c?: string; s?: string; t?: string; v?: number };
+    expect(parsed.c?.startsWith("E_")).toBe(true);
+    expect(parsed.s).toBe("tool");
+    expect(parsed.t).toBe("action_failed");
+    expect(parsed.v).toBe(1);
+  });
+
   it("stores issue state on the serializable harness session state map", () => {
     const session = { sessionId: "wrun_session" } as HarnessSession;
     const state = accumulateObservabilityIssues({
