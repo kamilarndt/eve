@@ -25,6 +25,7 @@ import type {
   ConnectionToolMetadata,
 } from "#runtime/connections/types.js";
 import { isObject } from "#shared/guards.js";
+import { isLoopbackHostname } from "#shared/network-address.js";
 import { readBodyTextSafe, safeFetch } from "#shared/safe-fetch.js";
 
 interface OpenApiToolCache {
@@ -185,16 +186,19 @@ export class OpenApiConnectionClient implements ConnectionClient {
    */
   #resolveBaseUrl(document: Record<string, unknown>): string {
     const explicit = this.#connection.url;
-    if (typeof explicit === "string" && explicit.trim().length > 0) {
-      return explicit;
+    const baseUrl =
+      typeof explicit === "string" && explicit.trim().length > 0
+        ? explicit
+        : extractServerUrl(document, this.#connection.spec);
+    if (baseUrl === undefined) {
+      throw new Error(
+        `OpenAPI connection "${this.#connection.connectionName}" has no base URL: set "baseUrl" or ensure the document declares an absolute "servers" entry or Swagger "host".`,
+      );
     }
-    const fromServers = extractServerUrl(document, this.#connection.spec);
-    if (fromServers !== undefined) {
-      return fromServers;
-    }
-    throw new Error(
-      `OpenAPI connection "${this.#connection.connectionName}" has no base URL: set "baseUrl" or ensure the document declares an absolute "servers" entry or Swagger "host".`,
-    );
+    // Fail fast at build time on a cleartext base URL; safeFetch adds the SSRF
+    // host/redirect checks on each operation call.
+    assertSecureUrl(baseUrl, this.#connection.connectionName, "base");
+    return baseUrl;
   }
 
   async #loadDocument(): Promise<Record<string, unknown>> {
@@ -209,9 +213,11 @@ export class OpenApiConnectionClient implements ConnectionClient {
       return spec;
     }
 
+    assertSecureUrl(spec, this.#connection.connectionName, "spec");
+
     let response: Response;
     try {
-      // safeFetch: https-pin (loopback http ok) + SSRF host/redirect guard.
+      // safeFetch adds SSRF host checks and re-validates every redirect hop.
       response = await safeFetch(spec, {
         headers: { accept: "application/json, application/yaml, text/yaml, */*" },
       });
@@ -466,6 +472,33 @@ function joinPath(baseUrl: string, path: string): string {
   const trimmedBase = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   const trimmedPath = path.startsWith("/") ? path : `/${path}`;
   return `${trimmedBase}${trimmedPath}`;
+}
+
+/**
+ * Fails fast on a cleartext connection URL at build time. The spec body
+ * configures tool calls and every operation request carries the connection's
+ * resolved auth, so both are only trusted over `https`; plain `http` is
+ * permitted for loopback hosts for local development. safeFetch layers the SSRF
+ * host and per-redirect-hop checks on top at fetch time.
+ */
+function assertSecureUrl(rawUrl: string, connectionName: string, kind: string): void {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error(
+      `OpenAPI connection "${connectionName}" has an invalid ${kind} URL "${rawUrl}".`,
+    );
+  }
+  if (url.protocol === "https:") {
+    return;
+  }
+  if (url.protocol === "http:" && isLoopbackHostname(url.hostname)) {
+    return;
+  }
+  throw new Error(
+    `OpenAPI connection "${connectionName}" must use https for its ${kind} (got "${url.protocol}//${url.host}").`,
+  );
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {

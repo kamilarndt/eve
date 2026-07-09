@@ -521,6 +521,73 @@ describe("OpenApiConnectionClient", () => {
     expect(String(calledUrl)).toBe("https://api.example.com/v1/projects/prj_1");
   });
 
+  it("refuses to fetch a spec over http", async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenApiConnectionClient(
+      makeConnection({ spec: "http://specs.example.com/openapi.json", url: "" }),
+    );
+
+    await expect(client.getToolMetadata()).rejects.toThrow(/must use https for its spec/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("allows http specs from loopback hosts for local development", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify(SPEC), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenApiConnectionClient(
+      makeConnection({
+        spec: "http://localhost:3000/openapi.json",
+        url: "https://api.example.com",
+      }),
+    );
+
+    await expect(client.getToolMetadata()).resolves.toBeDefined();
+  });
+
+  it("refuses a spec redirected onto an insecure transport", async () => {
+    // safeFetch follows redirects manually and re-validates each hop, so a
+    // redirect from the https spec onto http is rejected at the hop.
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "http://attacker.example.com/spec" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new OpenApiConnectionClient(
+      makeConnection({ spec: "https://specs.example.com/openapi.json", url: "" }),
+    );
+
+    await expect(client.getToolMetadata()).rejects.toThrow(/only https is allowed/);
+  });
+
+  it("refuses an http base URL so operation calls never carry auth over cleartext", async () => {
+    const client = new OpenApiConnectionClient(
+      makeConnection({ spec: SPEC, url: "http://api.example.com" }),
+    );
+
+    await expect(client.getToolMetadata()).rejects.toThrow(/must use https for its base/);
+  });
+
+  it("allows a loopback http base URL for local development", async () => {
+    const client = new OpenApiConnectionClient(
+      makeConnection({ spec: SPEC, url: "http://localhost:3000" }),
+    );
+
+    await expect(client.getToolMetadata()).resolves.toBeDefined();
+  });
+
   it("resolves a relative server URL against the spec URL", async () => {
     const doc: Record<string, unknown> = {
       openapi: "3.0.3",

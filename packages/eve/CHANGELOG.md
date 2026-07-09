@@ -1,5 +1,43 @@
 # eve
 
+## 0.22.3
+
+### Patch Changes
+
+- 8223498: Start remote authentication when a credentialed Vercel deployment returns an `UNAUTHORIZED` protection response.
+- 79df338: feat(eve): scaffold projects with bundler module resolution
+
+  `eve init` now writes a `tsconfig.json` using `"moduleResolution": "bundler"` (and `"module": "esnext"`), which matches how eve compiles authored agents and extensions. Relative imports in your agent and extension source no longer need `.js` extensions (e.g. `import extension from "../extension"`).
+
+- 173fa5d: Restore the `DISCORD_BOT_TOKEN` environment fallback for proactive Discord messages, typing indicators, and bot-authenticated requests when `discordChannel()` is configured without explicit credentials.
+- 89cd2d6: Eval assertion `count` options now accept predicates, allowing ranges such as “at least two” while preserving exact numeric counts.
+- fdf56ef: feat(eve): mounted extensions
+
+  Package eve capabilities — tools, connections, skills, instructions, hooks — as a reusable package and mount it under `agent/extensions/`, as a file (`crm.ts`) or a directory with co-located override slots that shadow the extension's own contributions. Contributions compose into the agent under a `<namespace>__` prefix. Author with `defineExtension` from `eve/extension`, taking an optional Standard-Schema `config` read via `extension.config`; `defineState` is auto-scoped to the package. `eve build` compiles the package to runnable JavaScript with type declarations and fills its `exports`, so a published extension installs and mounts with no second compiler. `eve` is a peer dependency whose declared range eve enforces at mount; an extension cannot declare a sandbox, agent config, schedules, or limits, or mount other extensions.
+
+- 89f13e0: Hardened frontmatter parsing and OpenAPI connection loading.
+
+  All frontmatter parsing now runs through a single safe-by-default helper with gray-matter's code-capable engines disabled, so a `---js` / `---javascript` fence throws instead of being `eval()`d. Previously only authored markdown (skills, schedules, instructions) was hardened; the eval YAML loader and the OpenAPI spec loader used gray-matter's defaults and would execute such a fence. This closes that path for OpenAPI specs, which are fetched over the network. Parsing untrusted frontmatter as code is now opt-in only, and a direct import of the bundled gray-matter outside the wrapper fails CI.
+
+  OpenAPI spec URLs and the resolved base URL are now required to use `https` (plain `http` is still allowed for loopback hosts during local development), so neither the spec fetch nor the credentialed operation calls run over cleartext; the spec transport is also re-checked after redirects.
+
+- aff35e2: Stop `eve dev` source snapshots from copying nested Git repositories and worktrees, preventing duplicate checkouts from inflating each development snapshot.
+- 9087496: Prevent brokered credential values from being exposed to commands running in Microsandbox. Guest Git configuration continues to use broker-managed placeholders for authenticated requests.
+- 72c58ae: Recover `eve dev <url>` authentication when Vercel Deployment Protection returns an SSO redirect or a structured protected-deployment response.
+- 87688f9: Slack outbound messages now preserve literal bare `@` tokens, including scoped package names, while explicit `<@USER_ID>` mention syntax continues to pass through unchanged.
+- c1c4ee5: Preserve query parameters passed to `eve dev` and send them on every agent request, including session POSTs and streams.
+
+## 0.22.2
+
+### Patch Changes
+
+- 4da4d86: Fixed Anthropic prompt caching placing the final cache breakpoint one message too early. Fresh tool results were billed as uncached input every turn and only entered the cache on the following request, capping the effective cache hit rate near 50%; the breakpoint now sits on the last message of each request, so agentic tool loops get near-full prefix hits.
+- 4446f96: Update the vendored Workflow SDK packages to the latest 5.0 beta releases. eve now delegates world target selection and construction to the upstream SDK instead of maintaining parallel factory and compatibility logic, and no longer disables stable Workflow Turbo mode.
+- 3da5def: Retry transient provider overload errors delivered inside model streams. Classified transient failures get at most three fresh model-call attempts, while other recoverable task-mode errors fall back to Workflow's durable step retries without multiplying retry budgets.
+- 2afed3b: Update `withEve()` to generate Vercel Build Output service routes for eve instead of the legacy Next.js rewrite setup. The generated output now uses the stable `services` field and service routes, including in hosted Vercel builds where no local `.vercel/project.json` exists, so Vercel builds the eve service without Next.js rewrites.
+- 3983d36: The Slack channel's default typing indicator for `actions.requested` now shows the action's contents instead of a generic `Running <tool>...` label: the tool name plus its most telling argument (`grep useEveAgent`, `read_file agent/agent.ts`), the subagent or remote-agent name for dispatched calls, and `+N more` for batches. The label helpers are exported from `eve/channels/slack` as `describeActionRequest` and `describeActionRequests` for use in custom handlers.
+- 15309f3: New projects created with `eve init` now use stable TypeScript 7.0.2 instead of the release candidate.
+
 ## 0.22.1
 
 ### Patch Changes
