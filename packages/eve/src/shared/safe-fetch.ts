@@ -289,6 +289,9 @@ export async function safeFetch(
       new Error(withLabel(assertOptions.label, `request timed out after ${timeoutMs}ms.`)),
     );
   }, timeoutMs);
+  // Don't let a pending timeout keep the process alive on the rare path where
+  // the returned body is never read (cleanup is otherwise tied to the body).
+  timer.unref?.();
 
   const onExternalAbort = () => controller.abort(externalSignal?.reason);
   if (externalSignal !== undefined) {
@@ -298,6 +301,13 @@ export async function safeFetch(
       externalSignal.addEventListener("abort", onExternalAbort, { once: true });
     }
   }
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    if (externalSignal !== undefined) {
+      externalSignal.removeEventListener("abort", onExternalAbort);
+    }
+  };
 
   let currentMethod = method ?? "GET";
   let currentBody = body;
@@ -314,7 +324,10 @@ export async function safeFetch(
       });
 
       if (!isRedirectStatus(response.status)) {
-        return response;
+        // The timeout and abort signal must keep bounding and cancelling the
+        // caller's body read, so hand cleanup off to the response body's
+        // lifetime rather than firing it now that headers have arrived.
+        return bindResponseCleanup(response, cleanup);
       }
       if (hop >= maxRedirects) {
         await drainBody(response);
@@ -361,12 +374,50 @@ export async function safeFetch(
 
       currentUrl = nextUrl;
     }
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal !== undefined) {
-      externalSignal.removeEventListener("abort", onExternalAbort);
-    }
+  } catch (error) {
+    cleanup();
+    throw error;
   }
+}
+
+/**
+ * Returns `response` with cleanup deferred until its body settles: reading to
+ * completion, erroring, or cancelling runs {@link cleanup}. This keeps the
+ * request timeout and abort signal live across the caller's body read (a plain
+ * `Response` hands the body off without them otherwise). Bodyless responses
+ * clean up immediately.
+ */
+function bindResponseCleanup(response: Response, cleanup: () => void): Response {
+  if (response.body === null) {
+    cleanup();
+    return response;
+  }
+  const reader = response.body.getReader();
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          cleanup();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        cleanup();
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      cleanup();
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(stream, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
 }
 
 /**

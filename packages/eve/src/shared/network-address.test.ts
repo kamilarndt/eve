@@ -59,6 +59,18 @@ describe("isReservedIpAddress", () => {
     }
   });
 
+  it("blocks private/metadata IPv4 tunneled through alternate IPv6 encodings", () => {
+    for (const host of [
+      "[::169.254.169.254]", // IPv4-compatible → cloud metadata
+      "[::10.0.0.1]", // IPv4-compatible → RFC1918
+      "2002:c0a8:0101::", // 6to4 → 192.168.1.1
+      "64:ff9b::169.254.169.254", // NAT64 → cloud metadata
+      "[::ffff:0:0a00:0001]", // SIIT-translated → 10.0.0.1
+    ]) {
+      expect(isReservedIpAddress(host), host).toBe(true);
+    }
+  });
+
   it("allows public addresses, loopback, and plain hostnames", () => {
     for (const host of [
       "8.8.8.8",
@@ -78,6 +90,14 @@ describe("normalizeAddress", () => {
     expect(normalizeAddress("[fe80::1%eth0]")).toBe("fe80::1");
     expect(normalizeAddress("::ffff:169.254.169.254")).toBe("169.254.169.254");
     expect(normalizeAddress("  example.com  ")).toBe("example.com");
+  });
+
+  it("unwraps IPv4 tunneled through alternate IPv6 forms and preserves ::/::1", () => {
+    expect(normalizeAddress("[::169.254.169.254]")).toBe("169.254.169.254"); // compatible
+    expect(normalizeAddress("2002:c0a8:0101::")).toBe("192.168.1.1"); // 6to4
+    expect(normalizeAddress("[::ffff:0:7f00:1]")).toBe("127.0.0.1"); // SIIT loopback
+    expect(normalizeAddress("[::1]")).toBe("::1"); // loopback preserved, not 0.0.0.1
+    expect(normalizeAddress("[::]")).toBe("::"); // unspecified preserved
   });
 
   it("leaves a plain hostname or bare IPv4 unchanged", () => {

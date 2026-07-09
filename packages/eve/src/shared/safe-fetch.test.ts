@@ -177,6 +177,28 @@ describe("safeFetch", () => {
       safeFetch("https://example.com/", { lookup: PUBLIC, fetch: fetchImpl, timeoutMs: 10 }),
     ).rejects.toThrow(/timed out/);
   });
+
+  it("keeps the timeout bounding the body read after the response is returned", async () => {
+    // Headers arrive immediately but the body never completes; the timeout must
+    // still fire during the caller's readBodyTextSafe, not be cleared on return.
+    const fetchImpl = vi.fn<typeof fetch>(
+      async (_input, init) =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason));
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const res = await safeFetch("https://example.com/", {
+      lookup: PUBLIC,
+      fetch: fetchImpl,
+      timeoutMs: 20,
+    });
+    await expect(readBodyTextSafe(res)).rejects.toThrow(/timed out/);
+  });
 });
 
 describe("readBodyTextSafe", () => {
