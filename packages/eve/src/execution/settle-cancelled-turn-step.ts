@@ -120,6 +120,7 @@ async function runSettleCancelledTurn(input: {
       const scoped = await withContextScope(ctx, session, async (enrichedSession) => {
         const emit = async (event: HandleMessageStreamEvent): Promise<void> => {
           const transformed = await callAdapterEventHandler(adapter, event, adapterCtx);
+          setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
           await writer.write(
             encodeMessageStreamEvent(timestampHandleMessageStreamEvent(transformed)),
           );
@@ -137,8 +138,6 @@ async function runSettleCancelledTurn(input: {
       writer.releaseLock();
     }
   }
-
-  setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
 
   const cancelledSession = reconcileSessionContinuationToken(
     ctx,
