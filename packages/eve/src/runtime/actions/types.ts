@@ -144,6 +144,7 @@ const runtimeSubagentResultActionResultSchema = z
     isError: z.boolean().optional(),
     kind: z.literal("subagent-result"),
     output: jsonValueSchema,
+    subagentKind: z.enum(["local", "remote"]).optional(),
     subagentName: z.string(),
     usage: tokenUsageSchema.optional(),
   })

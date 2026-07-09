@@ -61,6 +61,40 @@ describe("session callback route", () => {
           callId: "call-1",
           kind: "subagent-result",
           output: "done",
+          subagentKind: "remote",
+          subagentName: "research",
+        },
+      ],
+    });
+  });
+
+  it("marks failed remote-agent callback results as remote subagents", async () => {
+    resumeHookMock.mockResolvedValue(undefined);
+
+    const response = await handleSessionCallbackRequest(
+      new Request("https://app.example.com/eve/v1/callback/tok123", {
+        body: JSON.stringify({
+          callId: "call-1",
+          error: { code: "REMOTE_AGENT_FAILED", message: "Remote failed." },
+          kind: "session.failed",
+          sessionId: "remote-session",
+          subagentName: "research",
+        }),
+        method: "POST",
+      }),
+      createRouteContext({ token: "tok123" }),
+    );
+
+    expect(response.status).toBe(202);
+    expect(resumeHookMock).toHaveBeenCalledWith("tok123", {
+      kind: "runtime-action-result",
+      results: [
+        {
+          callId: "call-1",
+          isError: true,
+          kind: "subagent-result",
+          output: { code: "REMOTE_AGENT_FAILED", message: "Remote failed." },
+          subagentKind: "remote",
           subagentName: "research",
         },
       ],
@@ -93,6 +127,7 @@ describe("session callback route", () => {
           callId: "call-1",
           kind: "subagent-result",
           output: "done",
+          subagentKind: "remote",
           subagentName: "research",
           usage: { cacheReadTokens: 10, cacheWriteTokens: 5, inputTokens: 100, outputTokens: 50 },
         },
@@ -167,6 +202,7 @@ describe("session callback route", () => {
           callId: "call-1",
           kind: "subagent-result",
           output: "done",
+          subagentKind: "remote",
           subagentName: "research",
         },
       ],

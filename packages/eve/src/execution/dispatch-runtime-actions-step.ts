@@ -229,6 +229,7 @@ function createRemoteAgentStartFailureResult(input: {
       code: "REMOTE_AGENT_START_FAILED",
       message: toErrorMessage(input.error),
     },
+    subagentKind: "remote",
     subagentName: input.action.remoteAgentName,
   };
 }
@@ -248,6 +249,7 @@ function createSubagentDepthLimitResult(input: {
       maxDepth: input.delegationLimit.maxDepth,
       message: `Subagent depth limit reached (${input.delegationLimit.maxDepth}); "${subagentName}" was not called.`,
     },
+    subagentKind: input.action.kind === "remote-agent-call" ? "remote" : "local",
     subagentName,
   };
 }

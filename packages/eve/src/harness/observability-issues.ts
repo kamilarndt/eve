@@ -11,7 +11,12 @@ export type EveObservabilityIssueType =
   | "step_failed"
   | "turn_failed";
 
-export type EveObservabilityIssueSource = "skill" | "subagent" | "tool" | "workflow";
+export type EveObservabilityIssueSource =
+  | "remote_subagent"
+  | "skill"
+  | "subagent"
+  | "tool"
+  | "workflow";
 
 export interface EveObservabilityIssueSummary {
   readonly errorCount: number;
@@ -241,7 +246,7 @@ function actionResultSource(
     return "tool";
   }
   if (result.kind === "subagent-result") {
-    return "subagent";
+    return result.subagentKind === "remote" ? "remote_subagent" : "subagent";
   }
   return "skill";
 }

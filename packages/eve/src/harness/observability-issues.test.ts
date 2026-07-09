@@ -180,6 +180,42 @@ describe("accumulateObservabilityIssues", () => {
     });
   });
 
+  it("records failed remote subagent results separately from local subagents", () => {
+    const state = accumulateObservabilityIssues({
+      event: eventWithTime({
+        type: "action.result",
+        data: {
+          error: { code: "REMOTE_AGENT_FAILED", message: "Remote failed" },
+          result: {
+            callId: "call_remote",
+            isError: true,
+            kind: "subagent-result",
+            output: { code: "REMOTE_AGENT_FAILED", message: "Remote failed" },
+            subagentKind: "remote",
+            subagentName: "reviewer",
+          },
+          sequence: 3,
+          status: "failed",
+          stepIndex: 0,
+          turnId: "turn_remote",
+        },
+      }),
+      previous: undefined,
+    });
+
+    expect(state).toMatchObject({
+      errorCount: 1,
+      failedActionCount: 1,
+      issueCount: 1,
+      lastIssueCode: "REMOTE_AGENT_FAILED",
+      lastIssueSource: "remote_subagent",
+      lastIssueTool: "reviewer",
+      lastIssueToolCallId: "call_remote",
+      lastIssueTurnId: "turn_remote",
+      lastIssueType: "action_failed",
+    });
+  });
+
   it("stores issue state on the serializable harness session state map", () => {
     const session = { sessionId: "wrun_session" } as HarnessSession;
     const state = accumulateObservabilityIssues({

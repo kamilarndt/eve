@@ -146,7 +146,7 @@ output, or error-message content:
 - `$eve.failed_step_count`, `$eve.failed_turn_count`: failed model steps or turns
 - `$eve.last_issue_type`: the most recent issue category, such as `action_failed` or `step_failed`
 - `$eve.last_issue_code`: stable error code for grouping, such as `OUTPUT_SCHEMA_NOT_FULFILLED`
-- `$eve.last_issue_source`: where the issue occurred, such as `tool`, `workflow`, or `subagent`
+- `$eve.last_issue_source`: where the issue occurred, such as `tool`, `workflow`, `subagent`, or `remote_subagent`
 - `$eve.last_issue_tool`: tool or subagent name when the issue came from an action
 - `$eve.last_issue_turn_id`: turn id for deep-linking to the affected turn
 - `$eve.last_issue_tool_call_id`: tool-call id for deep-linking to the affected tool call when available

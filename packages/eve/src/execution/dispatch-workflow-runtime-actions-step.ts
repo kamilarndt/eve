@@ -118,6 +118,7 @@ function createWorkflowSubagentLimitResult(input: {
       maxSubagents: input.plan.maxSubagents,
       message: `Workflow subagent limit reached (${String(input.plan.maxSubagents)}); "${subagentName}" was not called.`,
     },
+    subagentKind: input.action.kind === "remote-agent-call" ? "remote" : "local",
     subagentName,
   };
 }

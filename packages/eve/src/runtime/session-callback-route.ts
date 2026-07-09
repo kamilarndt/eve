@@ -105,6 +105,7 @@ function projectSessionCallbackResult(
       callId: payload.callId,
       kind: "subagent-result",
       output: payload.output ?? "",
+      subagentKind: "remote",
       subagentName: payload.subagentName,
     };
     const usage = parseCallbackUsage((payload as { usage?: unknown }).usage);
@@ -123,6 +124,7 @@ function projectSessionCallbackResult(
               message: "Remote agent failed.",
             }
           : payload.error,
+      subagentKind: "remote",
       subagentName: payload.subagentName,
     };
   }
