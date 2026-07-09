@@ -25,6 +25,7 @@ import type {
   ConnectionToolMetadata,
 } from "#runtime/connections/types.js";
 import { isObject } from "#shared/guards.js";
+import { readBodyTextSafe, safeFetch } from "#shared/safe-fetch.js";
 
 interface OpenApiToolCache {
   readonly metadata: readonly ConnectionToolMetadata[];
@@ -210,7 +211,8 @@ export class OpenApiConnectionClient implements ConnectionClient {
 
     let response: Response;
     try {
-      response = await fetch(spec, {
+      // safeFetch: https-pin (loopback http ok) + SSRF host/redirect guard.
+      response = await safeFetch(spec, {
         headers: { accept: "application/json, application/yaml, text/yaml, */*" },
       });
     } catch (error) {
@@ -224,7 +226,7 @@ export class OpenApiConnectionClient implements ConnectionClient {
       );
     }
 
-    const text = await response.text();
+    const text = await readBodyTextSafe(response);
     let parsed: unknown;
     try {
       parsed = parseSpecDocument(text);
@@ -434,7 +436,8 @@ export class OpenApiConnectionClient implements ConnectionClient {
       headers["content-type"] = operation.requestBody.contentType;
     }
 
-    const response = await fetch(url, {
+    // Credentialed call — safeFetch guards the resolved base URL against SSRF.
+    const response = await safeFetch(url, {
       method: operation.method.toUpperCase(),
       headers,
       body,
@@ -466,7 +469,7 @@ function joinPath(baseUrl: string, path: string): string {
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
+  const text = await readBodyTextSafe(response);
   if (text.length === 0) {
     return null;
   }

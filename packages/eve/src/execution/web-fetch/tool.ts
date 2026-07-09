@@ -1,6 +1,7 @@
 import { EVE_PACKAGE_NAME } from "#internal/package-name.js";
 import { truncateHead } from "#execution/sandbox/truncate-output.js";
 import { convertHtmlToMarkdown, extractTextFromHtml } from "#execution/web-fetch/html.js";
+import { readBodyTextSafe, safeFetch } from "#shared/safe-fetch.js";
 
 const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5 MB
 const DEFAULT_TIMEOUT_MS = 30_000; // 30 seconds
@@ -69,23 +70,28 @@ export async function executeWebFetchTool(
     MAX_TIMEOUT_MS,
   );
 
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const headers = buildHeaders(format);
+  // Shared deadline so the initial request and the Cloudflare retry together
+  // stay within timeoutMs, not one budget each.
+  const deadline = AbortSignal.timeout(timeoutMs);
   const signal =
     options?.abortSignal === undefined
-      ? timeoutSignal
-      : AbortSignal.any([options.abortSignal, timeoutSignal]);
-  const headers = buildHeaders(format);
+      ? deadline
+      : AbortSignal.any([options.abortSignal, deadline]);
+  // Model-supplied URL — the top SSRF target. allowHttp since web pages are
+  // still often http.
+  const fetchOptions = { allowHttp: true, headers, signal, timeoutMs };
 
-  const initial = await fetch(url, { headers, signal });
+  const initial = await safeFetch(url, fetchOptions);
 
   // Cloudflare may reject browser-like UA strings from Node.js runtimes
   // because the TLS fingerprint does not match a real browser. Retry with
   // an honest UA to bypass the challenge.
   const response =
     initial.status === 403 && initial.headers.get("cf-mitigated") === "challenge"
-      ? await fetch(url, {
+      ? await safeFetch(url, {
+          ...fetchOptions,
           headers: { ...headers, "User-Agent": EVE_PACKAGE_NAME },
-          signal,
         })
       : initial;
 
@@ -99,15 +105,9 @@ export async function executeWebFetchTool(
     throw new Error("Response too large (exceeds 5 MB limit).");
   }
 
-  const buffer = await response.arrayBuffer();
-
-  if (buffer.byteLength > MAX_RESPONSE_SIZE) {
-    throw new Error("Response too large (exceeds 5 MB limit).");
-  }
-
   const contentType = response.headers.get("content-type") ?? "";
   const isHtml = contentType.includes("text/html");
-  const body = new TextDecoder().decode(buffer);
+  const body = await readBodyTextSafe(response, { maxBytes: MAX_RESPONSE_SIZE });
 
   let rawContent: string;
 

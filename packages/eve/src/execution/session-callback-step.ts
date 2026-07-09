@@ -3,6 +3,7 @@ import { parseSessionCallback } from "#channel/session-callback.js";
 import { SessionCallbackKey } from "#context/keys.js";
 import { createLogger } from "#internal/logging.js";
 import { toErrorMessage } from "#shared/errors.js";
+import { safeFetch } from "#shared/safe-fetch.js";
 import type { TokenUsage } from "#shared/token-usage.js";
 
 const SESSION_CALLBACK_TIMEOUT_MS = 30_000;
@@ -58,16 +59,15 @@ export async function fireSessionCallbackStep(input: {
             subagentName: callback.subagentName,
           };
 
-    const response = await fetch(callback.url, {
+    const response = await safeFetch(callback.url, {
       body: JSON.stringify(body),
       headers: {
         "content-type": "application/json",
       },
       method: "POST",
-      // Do not follow redirects: a validated callback host could otherwise
-      // 3xx-bounce the framework to an internal/metadata address after the
-      // path/token check has already passed.
-      redirect: "error",
+      // Reject redirects so a validated host can't 3xx-bounce to metadata;
+      // safeFetch also DNS-resolves the host (the schema guard only sees IP literals).
+      maxRedirects: 0,
       signal: AbortSignal.timeout(SESSION_CALLBACK_TIMEOUT_MS),
     });
 

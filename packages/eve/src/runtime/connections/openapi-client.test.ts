@@ -268,7 +268,7 @@ describe("OpenApiConnectionClient", () => {
     const [calledUrl, init] = fetchMock.mock.calls[0]!;
     expect(calledUrl.toString()).toBe("https://api.example.com/v1/projects/prj_1?teamId=team_9");
     expect(init.method).toBe("GET");
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer secret");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret");
   });
 
   it("resolves auth and headers from the active caller", async () => {
@@ -306,10 +306,9 @@ describe("OpenApiConnectionClient", () => {
     await contextStorage.run(ctx, () => client.executeTool("getProject", { id: "prj_1" }));
 
     const [, init] = fetchMock.mock.calls[0]!;
-    expect(init.headers).toMatchObject({
-      Authorization: "Bearer token-for-alice",
-      "X-Tenant": "acme",
-    });
+    const callerHeaders = new Headers(init.headers);
+    expect(callerHeaders.get("Authorization")).toBe("Bearer token-for-alice");
+    expect(callerHeaders.get("X-Tenant")).toBe("acme");
   });
 
   it("serializes the request body on execute", async () => {
@@ -659,7 +658,7 @@ describe("OpenApiConnectionClient", () => {
     await client.executeTool("getMe", { session: "abc 123" });
 
     const [, init] = fetchMock.mock.calls[0]!;
-    expect((init.headers as Record<string, string>).cookie).toBe("session=abc%20123");
+    expect(new Headers(init.headers).get("cookie")).toBe("session=abc%20123");
   });
 
   it("places the credential in an apiKey header security scheme", async () => {
@@ -678,9 +677,9 @@ describe("OpenApiConnectionClient", () => {
     await client.executeTool("op", {});
 
     const [, init] = fetchMock.mock.calls[0]!;
-    const headers = init.headers as Record<string, string>;
-    expect(headers["X-API-Key"]).toBe("secret");
-    expect(headers.Authorization).toBeUndefined();
+    const headers = new Headers(init.headers);
+    expect(headers.get("X-API-Key")).toBe("secret");
+    expect(headers.get("Authorization")).toBeNull();
   });
 
   it("places the credential in an apiKey query security scheme", async () => {
@@ -700,7 +699,7 @@ describe("OpenApiConnectionClient", () => {
 
     const [calledUrl, init] = fetchMock.mock.calls[0]!;
     expect(String(calledUrl)).toContain("api_key=secret");
-    expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(new Headers(init.headers).get("Authorization")).toBeNull();
   });
 
   it("uses HTTP basic auth when the security scheme is basic", async () => {
@@ -719,7 +718,7 @@ describe("OpenApiConnectionClient", () => {
     await client.executeTool("op", {});
 
     const [, init] = fetchMock.mock.calls[0]!;
-    expect((init.headers as Record<string, string>).Authorization).toBe("Basic dXNlcjpwYXNz");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Basic dXNlcjpwYXNz");
   });
 
   it("places credentials from Swagger 2.0 securityDefinitions", async () => {
@@ -744,7 +743,7 @@ describe("OpenApiConnectionClient", () => {
 
     const [calledUrl, init] = fetchMock.mock.calls[0]!;
     expect(String(calledUrl)).toBe("https://api.example.com/v1/items/itm_1?app_key=secret");
-    expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+    expect(new Headers(init.headers).get("Authorization")).toBeNull();
   });
 
   it("keeps Bearer auth for http bearer and oauth2 schemes", async () => {
@@ -763,7 +762,7 @@ describe("OpenApiConnectionClient", () => {
     await client.executeTool("op", {});
 
     const [, init] = fetchMock.mock.calls[0]!;
-    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer secret");
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret");
   });
 });
 

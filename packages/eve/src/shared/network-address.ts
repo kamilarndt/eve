@@ -27,7 +27,14 @@ reservedRanges.addAddress("::", "ipv6"); // unspecified
 reservedRanges.addSubnet("fc00::", 7, "ipv6"); // unique-local
 reservedRanges.addSubnet("fe80::", 10, "ipv6"); // link-local
 
-function normalizeAddress(host: string): string {
+/**
+ * Reduces a URL host or address literal to a bare, classifiable address:
+ * trims, strips IPv6 brackets and any zone index (`%eth0`), and unwraps
+ * IPv4-mapped IPv6 (`::ffff:a.b.c.d`) so the IPv4 ranges apply. Plain hostnames
+ * pass through unchanged. Shared with the SSRF fetch guard so URL hosts are
+ * normalized identically here and before a DNS lookup.
+ */
+export function normalizeAddress(host: string): string {
   const withoutBrackets = host.trim().replace(/^\[(.*)\]$/u, "$1");
   const zoneIndex = withoutBrackets.indexOf("%");
   const withoutZone = zoneIndex === -1 ? withoutBrackets : withoutBrackets.slice(0, zoneIndex);

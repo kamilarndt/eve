@@ -41,15 +41,13 @@ describe("startRemoteAgentSession", () => {
     });
 
     expect(childSessionId).toBe("remote-session-header");
-    expect(fetchMock).toHaveBeenCalledWith("https://remote.example.com/eve/v1/session", {
-      body: expect.any(String),
-      headers: {
-        authorization: "Bearer remote-token",
-        "content-type": "application/json",
-        "x-static": "yes",
-      },
-      method: "POST",
-    });
+    const [calledUrl, init] = fetchMock.mock.calls[0]!;
+    expect(calledUrl).toBe("https://remote.example.com/eve/v1/session");
+    expect(init?.method).toBe("POST");
+    const sentHeaders = new Headers(init?.headers);
+    expect(sentHeaders.get("authorization")).toBe("Bearer remote-token");
+    expect(sentHeaders.get("content-type")).toBe("application/json");
+    expect(sentHeaders.get("x-static")).toBe("yes");
     expect(JSON.parse(fetchMock.mock.calls[0]?.[1]?.body as string)).toEqual({
       callback: {
         callId: "call-remote",

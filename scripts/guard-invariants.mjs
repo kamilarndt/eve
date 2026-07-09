@@ -82,6 +82,14 @@
  *             `queue-namespace.ts`. The generated agent bootstrap installs the
  *             agent-scoped namespace before queue-producing APIs can run.
  *   rule 34 — `phase` stays a runtime-only dependency. No file under the Eve\n *             logo renderer's GPU/runtime boundary (render/, shaders/, or the\n *             offline render harness) may import the `phase` package. This keeps\n *             the mechanical separation between the lifecycle layer and the GPU\n *             renderer enforceable.
+ *   rule 36 — No bare `fetch(` in the network-facing directories
+ *             (`runtime/connections/`, `execution/`, `runtime/governance/auth/`).
+ *             These issue outbound requests whose host is influenced by author,
+ *             tenant, or model input, so they must go through `safeFetch` /
+ *             `assertUrlSafeToFetch` from `#shared/safe-fetch.js`, which reject
+ *             private/link-local/metadata targets and re-validate redirects.
+ *             (Rule 35 is reserved for the gray-matter import guard landing
+ *             separately; numeric gaps are normal here.)
  *
  * Baselines for rules with pre-existing violations live in
  * `guard-invariants-baseline.json`. Counts and allowlists in that file
@@ -170,6 +178,7 @@ function isTsLike(relPath) {
  *   rule27: Violation[];
  *   rule28: Violation[];
  *   rule33: Violation[];
+ *   rule36: Violation[];
  *   symlinks: string[];
  * }} state
  */
@@ -197,7 +206,41 @@ async function scanRepo(state) {
     checkRule27(posix, lines, state.rule27);
     checkRule28(posix, lines, state.rule28);
     checkRule33(posix, lines, state.rule33);
+    checkRule36(posix, lines, state.rule36);
   }
+}
+
+// ---------- Rule 36: bare fetch() in network-facing directories ----------
+
+const NETWORK_FACING_PREFIXES = [
+  "packages/eve/src/runtime/connections/",
+  "packages/eve/src/execution/",
+  "packages/eve/src/runtime/governance/auth/",
+];
+const SAFE_FETCH_MODULE = "packages/eve/src/shared/safe-fetch.ts";
+// `safeFetch(` doesn't match (capital F); `\s*` tolerates `fetch (`.
+const BARE_FETCH_RE = /\bfetch\s*\(/;
+
+/**
+ * @param {string} posix
+ * @param {string[]} lines
+ * @param {Violation[]} violations
+ */
+function checkRule36(posix, lines, violations) {
+  if (posix === SAFE_FETCH_MODULE) return;
+  if (!NETWORK_FACING_PREFIXES.some((prefix) => posix.startsWith(prefix))) return;
+  // Tests may stub fetch directly; the concern is production request paths.
+  if (/\.(test|integration\.test|scenario\.test)\.ts$/.test(posix)) return;
+  lines.forEach((line, idx) => {
+    if (BARE_FETCH_RE.test(line)) {
+      violations.push({
+        rule: 36,
+        file: posix,
+        line: idx + 1,
+        message: `calls fetch() directly in a network-facing directory. Route outbound requests through safeFetch()/assertUrlSafeToFetch() from "#shared/safe-fetch.js" so private/link-local/metadata hosts and unsafe redirects are rejected. If this URL is fully hardcoded and non-sensitive, refactor so the fetch lives outside these directories.`,
+      });
+    }
+  });
 }
 
 // ---------- Rule 13: spread-ternary object composition ----------
@@ -846,7 +889,6 @@ async function checkRule34PhaseBoundary() {
   return violations;
 }
 
-
 /**
  * @returns {Promise<Set<string>>}
  */
@@ -1024,6 +1066,7 @@ async function main() {
     rule27: /** @type {Violation[]} */ ([]),
     rule28: /** @type {Violation[]} */ ([]),
     rule33: /** @type {Violation[]} */ ([]),
+    rule36: /** @type {Violation[]} */ ([]),
     symlinks: /** @type {string[]} */ ([]),
   };
 
@@ -1111,6 +1154,9 @@ async function main() {
 
   // Rule 34
   violations.push(...(await checkRule34PhaseBoundary()));
+
+  // Rule 36
+  violations.push(...state.rule36);
 
   if (violations.length === 0) {
     process.stdout.write("[eve:guard:invariants] ok — all mechanical lints passed.\n");

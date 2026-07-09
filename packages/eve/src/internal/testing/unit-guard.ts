@@ -1,8 +1,14 @@
 import { vi } from "vitest";
 
+import { setSafeFetchLookupOverride } from "#shared/safe-fetch.js";
+
 /**
  * Vitest setup that makes unit-tier boundary violations fail loudly.
  */
+
+// safeFetch DNS-resolves before connecting; unit tests are hermetic, so resolve
+// every host to a fixed public IP. SSRF rejection is covered in safe-fetch.test.ts.
+setSafeFetchLookupOverride(async () => [{ address: "93.184.216.34", family: 4 }]);
 
 const INTEGRATION_GUIDANCE =
   "Move this test to `src/**/*.integration.test.ts` or `test/scenarios/*.scenario.test.ts`.";

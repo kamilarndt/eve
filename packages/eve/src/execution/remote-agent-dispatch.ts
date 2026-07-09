@@ -2,6 +2,7 @@ import { EVE_SESSION_ID_HEADER } from "#protocol/message.js";
 import { createEveCallbackRoutePath } from "#protocol/routes.js";
 import { createWorkflowCallbackUrl } from "#execution/workflow-callback-url.js";
 import { formatSubagentInput } from "#execution/subagent-invocation.js";
+import { readBodyTextSafe, safeFetch } from "#shared/safe-fetch.js";
 import type { HarnessSession } from "#harness/types.js";
 import type { RuntimeRemoteAgentCallActionRequest } from "#runtime/actions/types.js";
 import type { RuntimeSubagentRegistry } from "#runtime/subagents/registry.js";
@@ -23,7 +24,8 @@ export async function startRemoteAgentSession(input: {
   }
 
   const headers = await resolveRemoteAgentRequestHeaders(input.remote);
-  const response = await fetch(createRemoteAgentSessionUrl(input.remote), {
+  // Credentialed POST — safeFetch guards the remote URL against SSRF.
+  const response = await safeFetch(createRemoteAgentSessionUrl(input.remote), {
     body: JSON.stringify({
       callback: {
         callId: input.action.callId,
@@ -58,7 +60,10 @@ export async function startRemoteAgentSession(input: {
   }
 
   try {
-    const body = (await response.json()) as { readonly sessionId?: unknown };
+    // Bounded read — the body only carries a small `{ sessionId }`.
+    const body = JSON.parse(await readBodyTextSafe(response, { maxBytes: 1024 * 1024 })) as {
+      readonly sessionId?: unknown;
+    };
     if (typeof body.sessionId === "string" && body.sessionId.length > 0) {
       return body.sessionId;
     }

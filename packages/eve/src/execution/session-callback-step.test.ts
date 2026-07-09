@@ -58,11 +58,9 @@ describe("fireSessionCallbackStep", () => {
         sessionId: "remote-session",
         subagentName: "research",
       }),
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: expect.any(Headers),
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: expect.any(AbortSignal),
     });
     expect(errorSpy).not.toHaveBeenCalled();
@@ -85,11 +83,9 @@ describe("fireSessionCallbackStep", () => {
         sessionId: "remote-session",
         subagentName: "research",
       }),
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: expect.any(Headers),
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: expect.any(AbortSignal),
     });
   });
@@ -114,11 +110,9 @@ describe("fireSessionCallbackStep", () => {
         subagentName: "research",
         usage: USAGE,
       }),
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: expect.any(Headers),
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: expect.any(AbortSignal),
     });
     expect(errorSpy).not.toHaveBeenCalled();
@@ -173,11 +167,9 @@ describe("fireSessionCallbackStep", () => {
         sessionId: "remote-session",
         subagentName: "research",
       }),
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: expect.any(Headers),
       method: "POST",
-      redirect: "error",
+      redirect: "manual",
       signal: expect.any(AbortSignal),
     });
   });

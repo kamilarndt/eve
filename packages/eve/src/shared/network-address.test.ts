@@ -4,6 +4,7 @@ import {
   isLoopbackHostname,
   isLoopbackServerUrl,
   isReservedIpAddress,
+  normalizeAddress,
 } from "#shared/network-address.js";
 
 describe("isLoopbackHostname", () => {
@@ -68,5 +69,19 @@ describe("isReservedIpAddress", () => {
     ]) {
       expect(isReservedIpAddress(host), host).toBe(false);
     }
+  });
+});
+
+describe("normalizeAddress", () => {
+  it("strips IPv6 brackets and zone indices and unwraps IPv4-mapped IPv6", () => {
+    expect(normalizeAddress("[::1]")).toBe("::1");
+    expect(normalizeAddress("[fe80::1%eth0]")).toBe("fe80::1");
+    expect(normalizeAddress("::ffff:169.254.169.254")).toBe("169.254.169.254");
+    expect(normalizeAddress("  example.com  ")).toBe("example.com");
+  });
+
+  it("leaves a plain hostname or bare IPv4 unchanged", () => {
+    expect(normalizeAddress("api.example.com")).toBe("api.example.com");
+    expect(normalizeAddress("10.0.0.1")).toBe("10.0.0.1");
   });
 });

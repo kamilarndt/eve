@@ -52,6 +52,22 @@ Credential brokering gives the model _authenticated_ network access from inside 
 
 [Connection](../connections) tokens (MCP and OpenAPI) come from either `getToken()` or an interactive OAuth flow, and eve injects the resolved token into every outbound request. The token is cached per step and never serialized to durable state.
 
+## Outbound requests are SSRF-guarded
+
+Several eve surfaces make outbound HTTP requests to a host that comes from author, tenant, or model input rather than being hardcoded: [OpenAPI](../connections/openapi) spec fetches and credentialed operation calls, the built-in `web_fetch` tool, [MCP](../connections/mcp) connections, remote [subagent](../subagents) dispatch, OIDC discovery, and session callbacks. Left unguarded, any of these could be steered at an internal-only service or a cloud metadata endpoint (`169.254.169.254`) — and because some carry the connection's credentials, that would make an authenticated request on an attacker's behalf.
+
+This protection is on by default; the author configures nothing. For every request eve issues on those surfaces, it:
+
+- **Pins the transport to `https`.** Plain `http` is allowed only for loopback hosts, so local development still works but a credentialed call never runs over cleartext.
+- **Resolves the host and blocks private ranges.** The hostname is DNS-resolved and rejected if it is — or resolves to — a private (RFC 1918), carrier-grade-NAT, link-local (including cloud metadata), or otherwise reserved address. A public-looking hostname that resolves into a private range is caught, not just IP literals.
+- **Re-validates every redirect hop.** Redirects are followed manually and each hop runs the same checks, and `Authorization`/`Cookie` are dropped when a redirect crosses origin, so a safe first hop can't bounce the request (and its credentials) to an internal host.
+- **Bounds the request** with a timeout and a response-size cap.
+
+Two things to know:
+
+- **Loopback is allowed by default.** `localhost` and `127.0.0.0/8` are treated as same-host, not a network pivot, because local development depends on them. The high-value target — link-local cloud metadata — is still blocked.
+- **Your own code is not automatically covered.** The guard applies to eve's built-in request paths. A custom [tool](../tools) or handler that calls `fetch()` directly reaches whatever host it is given; validate untrusted URLs yourself before fetching them.
+
 ## Channel verification
 
 A [channel](../channels/overview) is your agent's front door, so authenticating inbound traffic is its job. The built-in platform channels follow two rules, and so must any channel you write yourself:
@@ -94,6 +110,9 @@ Before exposing an agent to real traffic:
       shouldn't have open egress; use credential brokering for authenticated egress.
 - [ ] Don't surface untrusted text as markup. Model- or user-controlled
       strings rendered into a channel UI should be escaped for that surface.
+- [ ] Validate outbound URLs in your own tools. eve's built-in request paths
+      are SSRF-guarded, but a custom tool that fetches an author-, tenant-, or
+      model-supplied URL must validate it before fetching.
 
 ## What to read next
 

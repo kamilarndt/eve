@@ -235,9 +235,9 @@ describe("executeWebFetchTool", () => {
 
     const retryCall = fetchSpy.mock.calls[1];
     expect(retryCall).toBeDefined();
-    const retryHeaders = (retryCall![1] as RequestInit).headers as Record<string, string>;
+    const retryHeaders = new Headers((retryCall![1] as RequestInit).headers);
 
-    expect(retryHeaders["User-Agent"]).toBe(EVE_PACKAGE_NAME);
+    expect(retryHeaders.get("User-Agent")).toBe(EVE_PACKAGE_NAME);
   });
 
   it("sends format-aware Accept headers", async () => {
@@ -257,9 +257,9 @@ describe("executeWebFetchTool", () => {
 
     const firstCall = fetchSpy.mock.calls[0];
     expect(firstCall).toBeDefined();
-    const headers = (firstCall![1] as RequestInit).headers as Record<string, string>;
+    const headers = new Headers((firstCall![1] as RequestInit).headers);
 
-    expect(headers.Accept).toContain("text/markdown");
+    expect(headers.get("Accept")).toContain("text/markdown");
   });
 
   it("truncates large bodies to the shared tool-output budget", async () => {

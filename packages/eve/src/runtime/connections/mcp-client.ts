@@ -8,6 +8,7 @@ import type { ResolvedConnectionDefinition } from "#runtime/types.js";
 import { evictScopedToken, resolveScopedToken } from "#runtime/connections/scoped-authorization.js";
 import { resolveConnectionAuthorization } from "#runtime/connections/resolve-authorization.js";
 import { isObject } from "#shared/guards.js";
+import { assertUrlSafeToFetch } from "#shared/safe-fetch.js";
 import type {
   AuthorizationDefinition,
   ConnectionClient,
@@ -69,6 +70,11 @@ export class McpConnectionClient implements ConnectionClient {
   async #createClient(): Promise<MCPClient> {
     const headers = await resolveHeaders(this.#connection);
     const url = this.#connection.url;
+
+    // @ai-sdk/mcp owns the socket, so eve can only preflight the URL for SSRF.
+    if (typeof url === "string") {
+      await assertUrlSafeToFetch(url);
+    }
 
     try {
       return await createMCPClient({

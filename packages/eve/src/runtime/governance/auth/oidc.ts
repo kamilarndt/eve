@@ -10,6 +10,7 @@ import type {
   ResolvedOidcAuthStrategy,
   RouteStrategyAuthenticationResult,
 } from "#runtime/governance/auth/types.js";
+import { assertUrlSafeToFetch, readBodyTextSafe, safeFetch } from "#shared/safe-fetch.js";
 
 const oidcDiscoveryDocumentSchema = z
   .object({
@@ -164,6 +165,9 @@ async function getOidcRemoteJwks(
     return existing;
   }
 
+  // jwks_uri comes from the discovery doc and jose owns its fetch, so preflight
+  // it here against SSRF.
+  await assertUrlSafeToFetch(discoveryDocument.jwks_uri);
   const remoteJwks = createRemoteJWKSet(new URL(discoveryDocument.jwks_uri));
   oidcJwksCache.set(discoveryDocument.jwks_uri, remoteJwks);
 
@@ -179,7 +183,7 @@ async function getOidcDiscoveryDocument(
     return await cached;
   }
 
-  const discoveryPromise = fetch(discoveryUrl, {
+  const discoveryPromise = safeFetch(discoveryUrl, {
     headers: {
       accept: "application/json",
     },
@@ -189,7 +193,7 @@ async function getOidcDiscoveryDocument(
         throw new Error(`Discovery route returned HTTP ${response.status}.`);
       }
 
-      return oidcDiscoveryDocumentSchema.parse(await response.json());
+      return oidcDiscoveryDocumentSchema.parse(JSON.parse(await readBodyTextSafe(response)));
     })
     .catch((error) => {
       oidcDiscoveryDocumentCache.delete(discoveryUrl);
