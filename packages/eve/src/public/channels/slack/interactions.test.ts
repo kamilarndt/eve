@@ -169,7 +169,7 @@ describe("handleInteractionPost view_submission forwarding", () => {
       onViewSubmission(view: SlackViewSubmission) {
         received.push(view);
       },
-    } as unknown as SlackChannelConfig;
+    } as SlackChannelConfig;
 
     const response = await handleInteractionPost(viewSubmissionBody({}), ctx, { config });
     expect(response.status).toBe(200);
@@ -195,7 +195,7 @@ describe("handleInteractionPost view_submission forwarding", () => {
       onViewSubmission(view: SlackViewSubmission) {
         received.push(view);
       },
-    } as unknown as SlackChannelConfig;
+    } as SlackChannelConfig;
 
     const body = viewSubmissionBody({
       view: {
@@ -212,7 +212,7 @@ describe("handleInteractionPost view_submission forwarding", () => {
 
   it("acks foreign view submissions without a handler configured", async () => {
     const response = await handleInteractionPost(viewSubmissionBody({}), ctx, {
-      config: {} as unknown as SlackChannelConfig,
+      config: {} as SlackChannelConfig,
     });
     expect(response.status).toBe(200);
   });
