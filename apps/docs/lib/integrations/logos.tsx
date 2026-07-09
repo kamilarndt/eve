@@ -1,4 +1,11 @@
-import { SiDatadog, SiNotion } from "@icons-pack/react-simple-icons";
+import {
+  SiDatadog,
+  SiGooglechat,
+  SiMessenger,
+  SiNotion,
+  SiWhatsapp,
+  SiX,
+} from "@icons-pack/react-simple-icons";
 import type { ComponentProps } from "react";
 
 type LogoProps = ComponentProps<"svg">;
@@ -133,6 +140,14 @@ export const honeycombLogo = (props: LogoProps) => (
   </svg>
 );
 
+export const googlechatLogo = (props: LogoProps) => <SiGooglechat color="default" {...props} />;
+
+export const whatsappLogo = (props: LogoProps) => <SiWhatsapp color="default" {...props} />;
+
+export const messengerLogo = (props: LogoProps) => <SiMessenger color="default" {...props} />;
+
+export const xLogo = (props: LogoProps) => <SiX {...props} />;
+
 export const logos = {
   eve: eveLogo,
   web: webLogo,
@@ -146,6 +161,10 @@ export const logos = {
   notion: notionLogo,
   datadog: datadogLogo,
   honeycomb: honeycombLogo,
+  googlechat: googlechatLogo,
+  whatsapp: whatsappLogo,
+  messenger: messengerLogo,
+  x: xLogo,
 } as const;
 
 export type LogoKey = keyof typeof logos;
