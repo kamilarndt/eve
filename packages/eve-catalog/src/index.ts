@@ -144,21 +144,6 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     surfaces: { scaffoldable: true, gallery: true },
   },
   {
-    slug: "chat-sdk-slack",
-    name: "Slack",
-    kind: "channel",
-    tagline: "Slack bots with threads, reactions, and interactive messages via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
-    slug: "chat-sdk-teams",
-    name: "Microsoft Teams",
-    kind: "channel",
-    tagline:
-      "Teams bots with Adaptive Cards, mentions, and threaded conversations via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
     slug: "chat-sdk-gchat",
     name: "Google Chat",
     kind: "channel",
@@ -166,45 +151,10 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     surfaces: { scaffoldable: false, gallery: true },
   },
   {
-    slug: "chat-sdk-discord",
-    name: "Discord",
-    kind: "channel",
-    tagline: "Discord bots with slash commands, threads, and rich embeds via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
-    slug: "chat-sdk-github",
-    name: "GitHub",
-    kind: "channel",
-    tagline: "Reply in GitHub pull request and issue comment threads via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
-    slug: "chat-sdk-linear",
-    name: "Linear",
-    kind: "channel",
-    tagline: "Automate Linear issue comment threads via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
-    slug: "chat-sdk-telegram",
-    name: "Telegram",
-    kind: "channel",
-    tagline: "Telegram groups, channels, and inline keyboards via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
     slug: "chat-sdk-whatsapp",
     name: "WhatsApp",
     kind: "channel",
     tagline: "Customer messaging through WhatsApp Business Cloud via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
-    slug: "chat-sdk-twilio",
-    name: "Twilio",
-    kind: "channel",
-    tagline: "SMS and MMS bots on Twilio webhooks and the Messages API via the Chat SDK.",
     surfaces: { scaffoldable: false, gallery: true },
   },
   {
@@ -219,13 +169,6 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     name: "Messenger",
     kind: "channel",
     tagline: "Facebook Messenger bots with templates, buttons, and reactions via the Chat SDK.",
-    surfaces: { scaffoldable: false, gallery: true },
-  },
-  {
-    slug: "chat-sdk-web",
-    name: "Web",
-    kind: "channel",
-    tagline: "Browser chat over the AI SDK useChat protocol via the Chat SDK.",
     surfaces: { scaffoldable: false, gallery: true },
   },
   {

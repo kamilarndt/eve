@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-The integrations catalog gains 12 Chat SDK adapter channels (Slack, Microsoft Teams, Google Chat, Discord, GitHub, Linear, Telegram, WhatsApp, Twilio, X, Messenger, and Web) for the docs integrations gallery, each with a `chatSdkChannel` quick start. The `eve channels add` picker is unchanged.
+The integrations catalog gains 4 Chat SDK adapter channels for surfaces without a first-class eve channel (Google Chat, WhatsApp, X, and Messenger), each with a `chatSdkChannel` quick start. The `eve channels add` picker is unchanged.
