@@ -292,7 +292,7 @@ function formatEveDevOutputLine(line: string, logLabel: string | undefined): str
     trimmedLine.length === 0 ||
     /^☰eve\b/.test(trimmedLine) ||
     trimmedLine === "CONFIGURATION_FIELD_CONFLICT" ||
-    /^\[CONFIGURATION_FIELD_CONFLICT\]/.test(trimmedLine)
+    trimmedLine.startsWith("[CONFIGURATION_FIELD_CONFLICT]")
   ) {
     return undefined;
   }
