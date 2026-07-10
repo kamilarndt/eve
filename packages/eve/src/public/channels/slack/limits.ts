@@ -63,8 +63,23 @@ export const SLACK_MODAL_TITLE_MAX_LENGTH = 24;
  * needed.
  */
 export function truncateTypingStatus(status: string): string {
-  const normalized = stripTypingStatusMarkdown(status).trim().replace(/\s+/gu, " ");
+  const normalized = normalizeTypingStatus(status);
   return truncateWithEllipsis(normalized, SLACK_TYPING_STATUS_MAX_LENGTH);
+}
+
+/** Truncates a status while reserving room for a required trailing summary. */
+export function truncateTypingStatusWithSuffix(input: {
+  readonly status: string;
+  readonly suffix: string;
+}): string {
+  const status = normalizeTypingStatus(input.status);
+  const suffix = normalizeTypingStatus(input.suffix);
+  if (suffix.length === 0) return truncateWithEllipsis(status, SLACK_TYPING_STATUS_MAX_LENGTH);
+
+  const preservedSuffix = ` ${suffix}`;
+  const statusLimit = SLACK_TYPING_STATUS_MAX_LENGTH - preservedSuffix.length;
+  if (statusLimit <= 0) return truncateWithEllipsis(suffix, SLACK_TYPING_STATUS_MAX_LENGTH);
+  return `${truncateWithEllipsis(status, statusLimit)}${preservedSuffix}`;
 }
 
 /**
@@ -122,6 +137,10 @@ function truncateWithEllipsis(value: string, maxLength: number): string {
   if (value.length <= maxLength) return value;
   const sliceLength = Math.max(0, maxLength - 3);
   return `${value.slice(0, sliceLength).trimEnd()}...`;
+}
+
+function normalizeTypingStatus(status: string): string {
+  return stripTypingStatusMarkdown(status).trim().replace(/\s+/gu, " ");
 }
 
 function stripTypingStatusMarkdown(status: string): string {

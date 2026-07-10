@@ -13,6 +13,11 @@ export type ToolExecuteFn<TInput = unknown, TOutput = unknown> = (
   options: ToolExecuteOptions,
 ) => Promise<TOutput> | TOutput;
 
+/** Produces a tool-approved progress argument from validated input. */
+export type ToolDisplayArgumentFormatter = (
+  input: Readonly<Record<string, unknown>>,
+) => string | undefined;
+
 interface ToolDefinitionBase {
   readonly description: string;
 }

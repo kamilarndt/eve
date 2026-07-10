@@ -1,5 +1,6 @@
 import { type BashInput, executeBashOnSandbox } from "#execution/sandbox/bash-tool.js";
 import { requireSandboxSession } from "#execution/sandbox/require-sandbox.js";
+import { formatCommandDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { ToolExecuteOptions } from "#shared/tool-definition.js";
@@ -58,6 +59,7 @@ async function executeBash(input: unknown, options?: ToolExecuteOptions): Promis
 export const BASH_TOOL_DEFINITION: ResolvedToolDefinition = {
   description: "Execute a shell command in the shared workspace environment.",
   execute: executeBash,
+  formatDisplayArgument: (input) => formatCommandDisplayArgument(input.command),
   inputSchema: BASH_INPUT_SCHEMA,
   logicalPath: "eve:framework/bash",
   name: "bash",

@@ -1,3 +1,4 @@
+import { formatTextDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { JsonObject } from "#shared/json.js";
 
@@ -195,6 +196,7 @@ export const WEB_SEARCH_PARALLEL_OUTPUT_SCHEMA: JsonObject = {
 export const WEB_SEARCH_TOOL_DEFINITION: ResolvedToolDefinition = {
   description:
     "Search the web for real-time information. Use this to find up-to-date information about current events, recent developments, or topics that may have changed since the knowledge cutoff.",
+  formatDisplayArgument: (input) => formatTextDisplayArgument(input.query),
   inputSchema: null,
   logicalPath: "eve:framework/web-search",
   name: "web_search",

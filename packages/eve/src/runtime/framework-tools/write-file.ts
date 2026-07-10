@@ -3,6 +3,7 @@ import {
   type WriteFileInput,
 } from "#execution/sandbox/write-file-tool.js";
 import { requireSandboxSession } from "#execution/sandbox/require-sandbox.js";
+import { formatPathDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { ToolExecuteOptions } from "#shared/tool-definition.js";
@@ -67,6 +68,7 @@ export const WRITE_FILE_TOOL_DEFINITION: ResolvedToolDefinition = {
     "- Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.",
   ].join("\n"),
   execute: executeWriteFile,
+  formatDisplayArgument: (input) => formatPathDisplayArgument(input.filePath),
   inputSchema: WRITE_FILE_INPUT_SCHEMA,
   logicalPath: "eve:framework/write-file",
   name: "write_file",

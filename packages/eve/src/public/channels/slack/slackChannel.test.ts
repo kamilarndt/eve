@@ -821,22 +821,66 @@ describe("slackChannel() default event handlers", () => {
     expect(body.markdown_text).toContain("abc-123");
   });
 
-  it("actions.requested typing indicator is truncated to Slack's length cap", async () => {
+  it("groups repeated action names in the typing indicator", async () => {
     const adapter = withState(
       getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
       THREAD_STATE,
     );
     const ctx = buildAdapterContext(adapter, stubAccessor());
 
-    const longTool = "search_internal_documentation_for_relevant_passages";
+    await callEvent(
+      adapter,
+      makeEvent("actions.requested", {
+        actions: Array.from({ length: 5 }, (_, index) => ({
+          callId: `c${index}`,
+          displayArgument: "sh -c script/foo.sh",
+          input: { command: "sh -c script/foo.sh" },
+          kind: "tool-call",
+          toolName: "bash",
+        })),
+        sequence: 0,
+        stepIndex: 0,
+        turnId: "t1",
+      }),
+      ctx,
+    );
+
+    const body = parseSlackRequestBody(fetchMock.mock.calls[0]![1] as RequestInit);
+    expect(body.status).toBe("5 Bash sh -c script/foo.sh");
+  });
+
+  it("preserves the mixed-action count within Slack's typing-status limit", async () => {
+    const adapter = withState(
+      getAdapter(slackChannel({ credentials: { botToken: "xoxb-test" } })),
+      THREAD_STATE,
+    );
+    const ctx = buildAdapterContext(adapter, stubAccessor());
 
     await callEvent(
       adapter,
       makeEvent("actions.requested", {
         actions: [
-          { kind: "tool-call", toolName: longTool, callId: "c1", input: {} },
-          { kind: "tool-call", toolName: longTool, callId: "c2", input: {} },
-          { kind: "tool-call", toolName: longTool, callId: "c3", input: {} },
+          ...Array.from({ length: 3 }, (_, index) => ({
+            callId: `read-${index}`,
+            displayArgument: "a".repeat(80),
+            input: { filePath: `/workspace/${index}.ts` },
+            kind: "tool-call",
+            toolName: "read_file",
+          })),
+          {
+            callId: "grep",
+            displayArgument: "digest",
+            input: {},
+            kind: "tool-call",
+            toolName: "grep",
+          },
+          {
+            callId: "glob",
+            displayArgument: "**/*.ts",
+            input: {},
+            kind: "tool-call",
+            toolName: "glob",
+          },
         ],
         sequence: 0,
         stepIndex: 0,
@@ -848,7 +892,8 @@ describe("slackChannel() default event handlers", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = parseSlackRequestBody(fetchMock.mock.calls[0]![1] as RequestInit);
     expect((body.status as string).length).toBeLessThanOrEqual(50);
-    expect((body.status as string).endsWith("...")).toBe(true);
+    expect((body.status as string).startsWith("3 Read file ")).toBe(true);
+    expect((body.status as string).endsWith("+2 more")).toBe(true);
   });
 });
 

@@ -256,6 +256,7 @@ function resolveHarnessToolDefinition(input: {
       rawExecute,
       scope: def.name,
     }),
+    formatDisplayArgument: def.formatDisplayArgument,
     inputSchema: def.inputStandardSchema ?? jsonSchema(def.inputSchema ?? {}),
     name: def.name,
     approval: def.approval,

@@ -183,7 +183,7 @@ export const defaultEvents: SlackChannelInternalEvents = {
       await channel.thread.startTyping(truncateTypingStatus(buffered));
       return;
     }
-    await channel.thread.startTyping(truncateTypingStatus(describeActionRequests(event.actions)));
+    await channel.thread.startTyping(describeActionRequests(event.actions));
   },
 
   async "message.completed"(event, channel, _ctx) {

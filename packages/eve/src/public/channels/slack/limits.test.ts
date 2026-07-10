@@ -15,6 +15,7 @@ import {
   truncatePlainText,
   truncateSectionText,
   truncateTypingStatus,
+  truncateTypingStatusWithSuffix,
 } from "#public/channels/slack/limits.js";
 
 describe("truncateTypingStatus", () => {
@@ -50,6 +51,16 @@ describe("truncateTypingStatus", () => {
     const result = truncateTypingStatus(padded);
     expect(result.endsWith(" ...")).toBe(false);
     expect(result.endsWith("...")).toBe(true);
+  });
+
+  it("reserves room for a required suffix", () => {
+    const result = truncateTypingStatusWithSuffix({
+      status: `3 Read file ${"a".repeat(80)}`,
+      suffix: "+2 more",
+    });
+
+    expect(result.length).toBeLessThanOrEqual(SLACK_TYPING_STATUS_MAX_LENGTH);
+    expect(result.endsWith("+2 more")).toBe(true);
   });
 });
 

@@ -1,4 +1,5 @@
 import { executeWebFetchTool, type WebFetchInput } from "#execution/web-fetch/tool.js";
+import { formatUrlDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { ToolExecuteOptions } from "#shared/tool-definition.js";
 import type { JsonObject } from "#shared/json.js";
@@ -55,6 +56,7 @@ export const WEB_FETCH_TOOL_DEFINITION: ResolvedToolDefinition = {
     "- This tool is read-only and does not modify any files",
   ].join("\n"),
   execute: executeWebFetch,
+  formatDisplayArgument: (input) => formatUrlDisplayArgument(input.url),
   inputSchema: WEB_FETCH_INPUT_SCHEMA,
   logicalPath: "eve:framework/web-fetch",
   name: "web_fetch",

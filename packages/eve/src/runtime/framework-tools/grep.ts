@@ -1,5 +1,6 @@
 import { executeGrepOnSandbox, type GrepInput } from "#execution/sandbox/grep-tool.js";
 import { requireSandboxSession } from "#execution/sandbox/require-sandbox.js";
+import { formatTextDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { ToolExecuteOptions } from "#shared/tool-definition.js";
@@ -97,6 +98,7 @@ export const GREP_TOOL_DEFINITION: ResolvedToolDefinition = {
     "- Any line longer than 2000 characters is truncated.",
   ].join("\n"),
   execute: executeGrep,
+  formatDisplayArgument: (input) => formatTextDisplayArgument(input.pattern),
   inputSchema: GREP_INPUT_SCHEMA,
   logicalPath: "eve:framework/grep",
   name: "grep",

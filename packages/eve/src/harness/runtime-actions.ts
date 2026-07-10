@@ -2,7 +2,11 @@ import type { ModelMessage, ToolSet, TypedToolCall } from "ai";
 
 import { createActionResultEvent, type HandleMessageStreamEvent } from "#protocol/message.js";
 import { getRuntimeActionRequestKey, getRuntimeActionResultKey } from "#runtime/actions/keys.js";
-import type { RuntimeActionRequest, RuntimeActionResult } from "#runtime/actions/types.js";
+import type {
+  RuntimeActionRequest,
+  RuntimeActionResult,
+  RuntimeToolCallActionRequest,
+} from "#runtime/actions/types.js";
 import { parseJsonObject, type JsonObject } from "#shared/json.js";
 import { clearProxyInputRequestsForChild } from "#harness/proxy-input-requests.js";
 import {
@@ -359,15 +363,16 @@ export function createRuntimeActionRequestFromToolCall(input: {
   readonly tools: HarnessToolMap;
 }): RuntimeActionRequest {
   const definition = input.tools.get(input.toolCall.toolName);
+  const toolInput = resolveToolCallInputObject(input.toolCall.input, {
+    callId: input.toolCall.toolCallId,
+    toolName: input.toolCall.toolName,
+  });
 
   if (definition?.runtimeAction?.kind === "subagent-call") {
     return {
       callId: input.toolCall.toolCallId,
       description: definition.description,
-      input: resolveToolCallInputObject(input.toolCall.input, {
-        callId: input.toolCall.toolCallId,
-        toolName: input.toolCall.toolName,
-      }),
+      input: toolInput,
       kind: "subagent-call",
       name: definition.name,
       nodeId: definition.runtimeAction.nodeId,
@@ -379,10 +384,7 @@ export function createRuntimeActionRequestFromToolCall(input: {
     return {
       callId: input.toolCall.toolCallId,
       description: definition.description,
-      input: resolveToolCallInputObject(input.toolCall.input, {
-        callId: input.toolCall.toolCallId,
-        toolName: input.toolCall.toolName,
-      }),
+      input: toolInput,
       kind: "remote-agent-call",
       name: definition.name,
       nodeId: definition.runtimeAction.nodeId,
@@ -390,15 +392,15 @@ export function createRuntimeActionRequestFromToolCall(input: {
     };
   }
 
-  return {
+  const displayArgument = definition?.formatDisplayArgument?.(toolInput);
+  const action: RuntimeToolCallActionRequest = {
     callId: input.toolCall.toolCallId,
-    input: resolveToolCallInputObject(input.toolCall.input, {
-      callId: input.toolCall.toolCallId,
-      toolName: input.toolCall.toolName,
-    }),
+    input: toolInput,
     kind: "tool-call",
     toolName: input.toolCall.toolName,
   };
+  if (displayArgument !== undefined) action.displayArgument = displayArgument;
+  return action;
 }
 
 /**

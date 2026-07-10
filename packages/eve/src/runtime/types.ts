@@ -34,7 +34,10 @@ import type {
 import type { NamedSkillDefinition } from "#shared/skill-definition.js";
 import type { InternalAgentDefinition } from "#shared/agent-definition.js";
 import type { RuntimeDynamicModelReference } from "#runtime/agent/bootstrap.js";
-import type { InternalToolDefinitionWithExecuteFn } from "#shared/tool-definition.js";
+import type {
+  InternalToolDefinitionWithExecuteFn,
+  ToolDisplayArgumentFormatter,
+} from "#shared/tool-definition.js";
 import type { SandboxBackend } from "#shared/sandbox-backend.js";
 import type { SandboxBootstrapContext, SandboxSessionContext } from "#shared/sandbox-definition.js";
 
@@ -170,6 +173,12 @@ export type ResolvedToolDefinition = Readonly<
      * {@link Approval} for the shared callback contract.
      */
     readonly approval?: Approval;
+    /**
+     * Framework-owned projection of validated tool input into a filtered
+     * progress argument. Authored tools omit this until eve exposes an explicit
+     * authoring contract.
+     */
+    readonly formatDisplayArgument?: ToolDisplayArgumentFormatter;
     /**
      * Optional function that derives a compound approval key from the tool
      * input. When present, the runtime records this key (instead of just

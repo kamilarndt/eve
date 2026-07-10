@@ -1,5 +1,6 @@
 import { executeReadFileOnSandbox, type ReadFileInput } from "#execution/sandbox/read-file-tool.js";
 import { requireSandboxSession } from "#execution/sandbox/require-sandbox.js";
+import { formatPathDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { ToolExecuteOptions } from "#shared/tool-definition.js";
@@ -78,6 +79,7 @@ export const READ_FILE_TOOL_DEFINITION: ResolvedToolDefinition = {
     "- Avoid tiny repeated slices (30 line chunks). If you need more context, read a larger window.",
   ].join("\n"),
   execute: executeReadFile,
+  formatDisplayArgument: (input) => formatPathDisplayArgument(input.filePath),
   inputSchema: READ_FILE_INPUT_SCHEMA,
   logicalPath: "eve:framework/read-file",
   name: "read_file",

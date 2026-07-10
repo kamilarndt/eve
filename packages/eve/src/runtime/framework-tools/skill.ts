@@ -1,6 +1,7 @@
 import { loadContext } from "#context/container.js";
 import { DynamicSkillManifestKey, SandboxKey } from "#context/keys.js";
 import { ConnectionRegistryKey } from "#context/providers/connection-key.js";
+import { formatTextDisplayArgument } from "#runtime/actions/display-argument.js";
 import { loadSkillFromSandbox } from "#runtime/skills/sandbox-access.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { JsonObject } from "#shared/json.js";
@@ -74,6 +75,7 @@ export const SKILL_TOOL_DEFINITION: ResolvedToolDefinition = {
     'Choose the "skill" value from the Available skills block.',
   ].join(" "),
   execute: (input) => executeLoadSkillTool(input as LoadSkillInput),
+  formatDisplayArgument: (input) => formatTextDisplayArgument(input.skill),
   inputSchema: {
     additionalProperties: false,
     properties: {

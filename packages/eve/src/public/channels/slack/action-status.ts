@@ -1,91 +1,97 @@
 /**
  * Typing-indicator labels for requested actions. The Slack indicator is
  * plain text (`assistant.threads.setStatus` renders no markdown), so the
- * label is the action's name plus its most telling argument — `grep useEve`
- * or `read_file agent/agent.ts` instead of `Running grep...`.
+ * label is the capitalized action name plus a framework-selected argument,
+ * for example `Grep useEve` or `Read file agent/agent.ts`.
  */
+import {
+  truncateTypingStatus,
+  truncateTypingStatusWithSuffix,
+} from "#public/channels/slack/limits.js";
 import type { RuntimeActionRequest } from "#runtime/actions/types.js";
 
-/** Argument keys worth surfacing, most telling first, per tool. */
-const SALIENT_KEYS: Readonly<Record<string, readonly string[]>> = {
-  bash: ["command"],
-  glob: ["pattern"],
-  grep: ["pattern", "path"],
-  load_skill: ["skill"],
-  read_file: ["filePath"],
-  web_fetch: ["url"],
-  web_search: ["query"],
-  write_file: ["filePath"],
-};
-
-/** Fallback keys probed on tools without a {@link SALIENT_KEYS} entry. */
-const GENERIC_KEYS: readonly string[] = [
-  "filePath",
-  "path",
-  "pattern",
-  "command",
-  "query",
-  "name",
-  "repo",
-  "url",
-  "issueNumber",
-  "number",
-];
-
-const MAX_ARG_CHARS = 40;
-
-function salientArg(toolName: string, input: Readonly<Record<string, unknown>>): string | null {
-  for (const key of SALIENT_KEYS[toolName] ?? GENERIC_KEYS) {
-    const value = input[key];
-    if (typeof value === "string" && value.trim().length > 0) return value;
-    if (typeof value === "number") return String(value);
-  }
-  return null;
+interface ActionLabel {
+  readonly groupKey: string;
+  readonly text: string;
 }
 
-/** Keep the tail of a path: `agent/lib/triage/cards.ts` -> `triage/cards.ts`. */
-function shortenArg(text: string): string {
-  const oneLine = text.split(/\r?\n/u, 1)[0]?.trim() ?? "";
-  if (oneLine.length <= MAX_ARG_CHARS) return oneLine;
-  if (oneLine.includes("/") && !oneLine.includes(" ")) {
-    const segments = oneLine.split("/").filter((s) => s.length > 0);
-    const tail = segments.slice(-2).join("/");
-    if (tail.length <= MAX_ARG_CHARS) return tail;
-  }
-  return `${oneLine.slice(0, MAX_ARG_CHARS - 3).trimEnd()}...`;
+interface ActionGroup {
+  readonly count: number;
+  readonly label: ActionLabel;
 }
 
-function toolCallLabel(toolName: string, input: Readonly<Record<string, unknown>>): string {
-  const arg = salientArg(toolName, input);
-  return arg === null ? toolName : `${toolName} ${shortenArg(arg)}`;
+function humanizeActionName(name: string): string {
+  const words = name.replace(/[_-]+/gu, " ").trim();
+  const first = words[0];
+  return first === undefined ? words : `${first.toUpperCase()}${words.slice(1)}`;
+}
+
+function formatActionLabel(name: string, argument?: string): string {
+  const label = humanizeActionName(name);
+  return argument === undefined ? label : `${label} ${argument}`;
+}
+
+function actionLabel(action: RuntimeActionRequest): ActionLabel {
+  switch (action.kind) {
+    case "load-skill": {
+      const skill = typeof action.input.skill === "string" ? action.input.skill : undefined;
+      return { groupKey: "load-skill", text: formatActionLabel("load_skill", skill) };
+    }
+    case "remote-agent-call":
+      return {
+        groupKey: `remote-agent:${action.remoteAgentName}`,
+        text: formatActionLabel(action.remoteAgentName),
+      };
+    case "subagent-call":
+      return {
+        groupKey: `subagent:${action.subagentName}`,
+        text: formatActionLabel(action.subagentName),
+      };
+    case "tool-call":
+      return {
+        groupKey: `tool:${action.toolName}`,
+        text: formatActionLabel(action.toolName, action.displayArgument),
+      };
+  }
 }
 
 /**
- * One action's typing-indicator label: `grep useEveAgent` for tool calls,
- * the subagent or remote-agent name for dispatched calls, and
- * `load_skill <name>` for skill loads.
+ * One action's typing-indicator label: `Grep useEveAgent` for tool calls,
+ * the capitalized subagent or remote-agent name for dispatched calls, and
+ * `Load skill <name>` for skill loads.
  */
 export function describeActionRequest(action: RuntimeActionRequest): string {
-  switch (action.kind) {
-    case "load-skill":
-      return toolCallLabel("load_skill", action.input);
-    case "remote-agent-call":
-      return action.remoteAgentName;
-    case "subagent-call":
-      return action.subagentName;
-    case "tool-call":
-      return toolCallLabel(action.toolName, action.input);
-  }
+  return truncateTypingStatus(actionLabel(action).text);
 }
 
 /**
- * Typing-indicator text for one requested batch: the first action's
- * {@link describeActionRequest} label, plus `+N more` when the model
- * requested several actions at once.
+ * Typing-indicator text for one requested batch. The most frequent action
+ * name is counted and shown with its first argument; other actions become a
+ * `+N more` suffix that is preserved within Slack's status limit.
  */
 export function describeActionRequests(actions: readonly RuntimeActionRequest[]): string {
   const [first] = actions;
   if (first === undefined) return "Working...";
-  const label = describeActionRequest(first);
-  return actions.length === 1 ? label : `${label} +${actions.length - 1} more`;
+
+  const groups = new Map<string, ActionGroup>();
+  for (const action of actions) {
+    const label = actionLabel(action);
+    const existing = groups.get(label.groupKey);
+    groups.set(label.groupKey, {
+      count: (existing?.count ?? 0) + 1,
+      label: existing?.label ?? label,
+    });
+  }
+
+  let primary: ActionGroup = { count: 0, label: actionLabel(first) };
+  for (const group of groups.values()) {
+    if (group.count > primary.count) primary = group;
+  }
+
+  const status =
+    primary.count === 1 ? primary.label.text : `${primary.count} ${primary.label.text}`;
+  const remaining = actions.length - primary.count;
+  return remaining === 0
+    ? truncateTypingStatus(status)
+    : truncateTypingStatusWithSuffix({ status, suffix: `+${remaining} more` });
 }

@@ -17,6 +17,8 @@ export type RuntimeToolCallActionRequest = z.infer<typeof runtimeToolCallActionR
 export const runtimeToolCallActionRequestSchema = z
   .object({
     callId: z.string(),
+    /** Framework-derived, tool-filtered argument for progress UI. */
+    displayArgument: z.string().min(1).optional(),
     input: jsonObjectSchema,
     kind: z.literal("tool-call"),
     toolName: z.string(),

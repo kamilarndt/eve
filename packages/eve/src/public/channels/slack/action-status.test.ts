@@ -7,48 +7,48 @@ import {
 import type { RuntimeActionRequest } from "#runtime/actions/types.js";
 import type { JsonObject } from "#shared/json.js";
 
-function toolCall(toolName: string, input: JsonObject = {}): RuntimeActionRequest {
-  return { callId: "c1", input, kind: "tool-call", toolName };
+type ToolCallAction = Extract<RuntimeActionRequest, { kind: "tool-call" }>;
+
+function toolCall(
+  toolName: string,
+  input: JsonObject = {},
+  displayArgument?: string,
+): ToolCallAction {
+  const action: ToolCallAction = {
+    callId: "c1",
+    input,
+    kind: "tool-call",
+    toolName,
+  };
+  if (displayArgument !== undefined) action.displayArgument = displayArgument;
+  return action;
 }
 
 describe("describeActionRequest", () => {
-  it("labels tool calls with the tool name plus the salient argument", () => {
-    expect(
-      describeActionRequest(toolCall("grep", { path: "packages", pattern: "useEveAgent" })),
-    ).toBe("grep useEveAgent");
-    expect(describeActionRequest(toolCall("read_file", { filePath: "agent/agent.ts" }))).toBe(
-      "read_file agent/agent.ts",
+  it("capitalizes action names and appends only the precomputed display argument", () => {
+    expect(describeActionRequest(toolCall("grep", {}, "useEveAgent"))).toBe("Grep useEveAgent");
+    expect(describeActionRequest(toolCall("read_file", {}, "agent/agent.ts"))).toBe(
+      "Read file agent/agent.ts",
     );
-    expect(describeActionRequest(toolCall("bash", { command: "pnpm test\npnpm lint" }))).toBe(
-      "bash pnpm test",
-    );
+    expect(describeActionRequest(toolCall("bash", {}, "pnpm test"))).toBe("Bash pnpm test");
   });
 
-  it("keeps the tail of long paths and clips long commands", () => {
-    expect(
-      describeActionRequest(
-        toolCall("read_file", {
-          filePath: "/workspace/eve/packages/eve/src/runtime/actions/executor-registry.ts",
-        }),
-      ),
-    ).toBe("read_file actions/executor-registry.ts");
-
-    const clipped = describeActionRequest(toolCall("bash", { command: "x".repeat(120) }));
-    expect(clipped.length).toBeLessThanOrEqual("bash ".length + 40);
+  it("clips a long precomputed argument to Slack's final status limit", () => {
+    const clipped = describeActionRequest(toolCall("bash", {}, "x".repeat(120)));
+    expect(clipped.length).toBeLessThanOrEqual(50);
     expect(clipped.endsWith("...")).toBe(true);
   });
 
-  it("probes generic keys for tools without a salient-key entry", () => {
-    expect(describeActionRequest(toolCall("close_issue", { issueNumber: 42 }))).toBe(
-      "close_issue 42",
-    );
+  it("does not infer display text from raw tool input", () => {
+    expect(
+      describeActionRequest(
+        toolCall("web_fetch", { url: "https://alice:secret@example.com/data" }),
+      ),
+    ).toBe("Web fetch");
+    expect(describeActionRequest(toolCall("close_issue", { issueNumber: 42 }))).toBe("Close issue");
   });
 
-  it("falls back to the bare tool name without a telling argument", () => {
-    expect(describeActionRequest(toolCall("list_new_issues"))).toBe("list_new_issues");
-  });
-
-  it("labels dispatched calls with the target name and skill loads with the skill", () => {
+  it("capitalizes dispatched targets and skill loads", () => {
     expect(
       describeActionRequest({
         callId: "c1",
@@ -59,7 +59,7 @@ describe("describeActionRequest", () => {
         nodeId: "n1",
         subagentName: "reasoner",
       }),
-    ).toBe("reasoner");
+    ).toBe("Reasoner");
     expect(
       describeActionRequest({
         callId: "c1",
@@ -70,22 +70,34 @@ describe("describeActionRequest", () => {
         nodeId: "n1",
         remoteAgentName: "triage",
       }),
-    ).toBe("triage");
+    ).toBe("Triage");
     expect(
       describeActionRequest({ callId: "c1", input: { skill: "arena" }, kind: "load-skill" }),
-    ).toBe("load_skill arena");
+    ).toBe("Load skill arena");
   });
 });
 
 describe("describeActionRequests", () => {
-  it("shows the first label and a count for the rest of the batch", () => {
+  it("groups the most frequent action name and counts the mixed remainder", () => {
     expect(
       describeActionRequests([
-        toolCall("grep", { pattern: "digest" }),
-        toolCall("read_file", { filePath: "a.ts" }),
-        toolCall("read_file", { filePath: "b.ts" }),
+        toolCall("grep", {}, "digest"),
+        ...Array.from({ length: 5 }, () => toolCall("bash", {}, "sh -c script/foo.sh")),
+        toolCall("read_file", {}, "agent/agent.ts"),
       ]),
-    ).toBe("grep digest +2 more");
+    ).toBe("5 Bash sh -c script/foo.sh +2 more");
+  });
+
+  it("reserves room for the mixed-action suffix when the main label is long", () => {
+    const status = describeActionRequests([
+      ...Array.from({ length: 3 }, () => toolCall("read_file", {}, "a".repeat(80))),
+      toolCall("grep", {}, "digest"),
+      toolCall("glob", {}, "**/*.ts"),
+    ]);
+
+    expect(status.length).toBeLessThanOrEqual(50);
+    expect(status.startsWith("3 Read file ")).toBe(true);
+    expect(status.endsWith("+2 more")).toBe(true);
   });
 
   it("returns a generic label for an empty batch", () => {

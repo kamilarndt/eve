@@ -1,5 +1,6 @@
 import { executeGlobOnSandbox, type GlobInput } from "#execution/sandbox/glob-tool.js";
 import { requireSandboxSession } from "#execution/sandbox/require-sandbox.js";
+import { formatTextDisplayArgument } from "#runtime/actions/display-argument.js";
 import type { JsonObject } from "#shared/json.js";
 import type { ResolvedToolDefinition } from "#runtime/types.js";
 import type { ToolExecuteOptions } from "#shared/tool-definition.js";
@@ -75,6 +76,7 @@ export const GLOB_TOOL_DEFINITION: ResolvedToolDefinition = {
     "- Call this tool in parallel when you know there are multiple patterns to search for.",
   ].join("\n"),
   execute: executeGlob,
+  formatDisplayArgument: (input) => formatTextDisplayArgument(input.pattern),
   inputSchema: GLOB_INPUT_SCHEMA,
   logicalPath: "eve:framework/glob",
   name: "glob",
