@@ -2,12 +2,13 @@ import { jsonSchema, type TextStreamPart, type ToolSet } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  emitStreamContent,
+  emitStreamContent as emitOrderedStreamContent,
   getHarnessEmissionState,
   type HarnessEmissionState,
   setHarnessEmissionState,
 } from "#harness/emission.js";
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
+import { createOrderedStreamEmitter } from "#harness/ordered-stream-emitter.js";
 import type { HarnessEmitFn, HarnessSession } from "#harness/types.js";
 import { EMPTY_DELIVERY_SENTINEL } from "#shared/empty-delivery.js";
 
@@ -15,6 +16,15 @@ async function* streamOf(parts: TextStreamPart<ToolSet>[]): AsyncIterable<TextSt
   for (const part of parts) {
     yield part;
   }
+}
+
+function emitStreamContent(
+  emitFn: HarnessEmitFn,
+  state: HarnessEmissionState,
+  fullStream: AsyncIterable<TextStreamPart<ToolSet>>,
+  options?: Parameters<typeof emitOrderedStreamContent>[3],
+) {
+  return emitOrderedStreamContent(createOrderedStreamEmitter(emitFn), state, fullStream, options);
 }
 
 const EMISSION_STATE: HarnessEmissionState = {
@@ -600,13 +610,54 @@ describe("emitStreamContent action requests", () => {
 });
 
 describe("emitStreamContent error-part handling", () => {
+  it("reports consumption failure before waiting for pending writes to drain", async () => {
+    let resolveWrite!: () => void;
+    const pendingWrite = new Promise<void>((resolve) => {
+      resolveWrite = resolve;
+    });
+    const failures: unknown[] = [];
+    let settled = false;
+    const run = emitStreamContent(
+      async () => pendingWrite,
+      EMISSION_STATE,
+      streamOf([
+        { id: "text-1", text: "A", type: "text-delta" } as TextStreamPart<ToolSet>,
+        { reason: "provider aborted", type: "abort" } as TextStreamPart<ToolSet>,
+      ]),
+      {
+        excludedActionToolNames: new Set(),
+        onConsumptionFailure(error) {
+          failures.push(error);
+        },
+        tools: new Map(),
+      },
+    );
+    void run.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    await vi.waitFor(() => expect(failures).toHaveLength(1));
+
+    const failure = failures[0];
+    expect(failure).toMatchObject({ message: "provider aborted", name: "AbortError" });
+    expect(settled).toBe(false);
+
+    resolveWrite();
+    await expect(run).rejects.toBe(failure);
+  });
+
   it("interrupts a stalled provider pull when the durable emitter fails", async () => {
     const writeError = new Error("durable write failed");
     let rejectWrite!: (error: unknown) => void;
     const firstWrite = new Promise<void>((_resolve, reject) => {
       rejectWrite = reject;
     });
-    let providerCancelled = false;
+    let iteratorReturned = false;
     let stalledReadStarted = false;
     const firstPart = {
       id: "text-1",
@@ -626,7 +677,7 @@ describe("emitStreamContent error-part handling", () => {
             return new Promise(() => {});
           },
           return(): Promise<IteratorResult<TextStreamPart<ToolSet>>> {
-            providerCancelled = true;
+            iteratorReturned = true;
             return Promise.resolve({ done: true, value: undefined });
           },
         };
@@ -639,7 +690,7 @@ describe("emitStreamContent error-part handling", () => {
     rejectWrite(writeError);
 
     await rejected;
-    expect(providerCancelled).toBe(true);
+    expect(iteratorReturned).toBe(true);
   });
 
   it("preserves the original Error instance when the stream emits one", async () => {

@@ -127,13 +127,17 @@ import {
   summarizeKnownModelCallRequestError,
 } from "#harness/model-call-error.js";
 import { throwIfTurnAborted } from "#harness/turn-cancellation.js";
+import { createOrderedStreamEmitter } from "#harness/ordered-stream-emitter.js";
 import type { JsonObject, JsonValue } from "#shared/json.js";
 import {
   CONDITIONAL_DELIVERY_INSTRUCTION,
   EMPTY_DELIVERY_SENTINEL,
   hasEmptyDeliverySentinel,
 } from "#shared/empty-delivery.js";
-import { extractWorkflowStreamWriteErrorDetails } from "#harness/workflow-stream-error.js";
+import {
+  extractWorkflowStreamWriteErrorDetails,
+  isWorkflowStreamWriteError,
+} from "#harness/workflow-stream-error.js";
 import { ensureOtelIntegration } from "#harness/otel-integration.js";
 import { getAdvertisedTools } from "#harness/advertised-tools.js";
 import {
@@ -174,6 +178,7 @@ import type { RuntimeModelReference } from "#runtime/agent/bootstrap.js";
 import type { RunMode } from "#shared/run-mode.js";
 import type {
   CompactionConfig,
+  HarnessEmitFn,
   HarnessSession,
   HarnessToolMap,
   StepFn,
@@ -199,6 +204,30 @@ const environment = process.env.NODE_ENV ?? "unknown";
 const eveVersion = resolveInstalledPackageInfo().version;
 
 const log = createLogger("harness.tool-loop");
+
+// Keep the original object as AbortSignal.reason while retaining enough
+// provenance to prevent a sink failure from entering model retry/recovery.
+const eventSinkFailures = new WeakSet<object>();
+
+function trackEventSinkFailures(emitFn: HarnessEmitFn): HarnessEmitFn {
+  return async (event, messages) => {
+    try {
+      await emitFn(event, messages);
+    } catch (error) {
+      const failure = isWeakKey(error) ? error : new Error(toErrorMessage(error), { cause: error });
+      eventSinkFailures.add(failure);
+      throw failure;
+    }
+  };
+}
+
+function isEventSinkFailure(error: unknown): boolean {
+  return isWeakKey(error) && eventSinkFailures.has(error);
+}
+
+function isWeakKey(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
 
 /**
  * Wired as the agent's `onToolExecutionEnd`. On the `tool-error` branch
@@ -433,7 +462,8 @@ function resolveStepOtelContext(
 }
 
 export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
-  const emit = config.handleEvent;
+  const emit =
+    config.handleEvent === undefined ? undefined : trackEventSinkFailures(config.handleEvent);
   const telemetryConfig = getInstrumentationConfig();
   if (telemetryConfig !== undefined) {
     ensureOtelIntegration();
@@ -868,56 +898,69 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
             FINAL_OUTPUT_TOOL_NAME,
             ...hiddenRuntimeActionToolNames,
           ]);
-          const streamResult = await agent.stream({
-            abortSignal: config.abortSignal,
-            messages: callMessages,
-          });
-          const {
-            emittedActionCallIds,
-            handledInlineToolResultCallIds,
-            invalidInputToolCallIds,
-            inlineAuthorizationResults,
-            trailingInlineToolResultParts,
-          } = await emitStreamContent(emit, emissionState, streamResult.fullStream, {
-            excludedActionToolNames,
-            tools: config.tools,
-          });
-          throwIfTurnAborted(config.abortSignal);
-          const [stepResult, accumulatedResponseMessages] = await Promise.all([
-            hooks.stepResult,
-            streamResult.responseMessages,
-          ]);
-          if (
-            isEmptyModelResponse(stepResult) &&
-            extractToolResultCallIds(accumulatedResponseMessages).size === 0 &&
-            inlineAuthorizationResults.length === 0 &&
-            trailingInlineToolResultParts.length === 0
-          ) {
-            throw new EmptyModelResponseError();
-          }
-          await emitStepActions(emit, emissionState, stepResult, {
-            emittedActionCallIds,
-            excludedActionCallIds: invalidInputToolCallIds,
-            excludedActionToolNames,
-            handledInlineToolResultCallIds,
-            tools: advertisedHarnessTools,
-          });
-          const existingToolResults = stepResult.toolResults as TypedToolResult<ToolSet>[];
-          const toolResultsByCallId = new Map(
-            existingToolResults.map((toolResult) => [toolResult.toolCallId, toolResult]),
+          const orderedEmitter = createOrderedStreamEmitter(emit);
+          const attemptController = new AbortController();
+          const modelAbortSignal = AbortSignal.any(
+            config.abortSignal === undefined
+              ? [attemptController.signal, orderedEmitter.failureSignal]
+              : [config.abortSignal, attemptController.signal, orderedEmitter.failureSignal],
           );
-          for (const toolResult of inlineAuthorizationResults) {
-            toolResultsByCallId.set(toolResult.toolCallId, toolResult);
+          try {
+            const streamResult = await agent.stream({
+              abortSignal: modelAbortSignal,
+              messages: callMessages,
+            });
+            const {
+              emittedActionCallIds,
+              handledInlineToolResultCallIds,
+              invalidInputToolCallIds,
+              inlineAuthorizationResults,
+              trailingInlineToolResultParts,
+            } = await emitStreamContent(orderedEmitter, emissionState, streamResult.fullStream, {
+              excludedActionToolNames,
+              onConsumptionFailure: (error) => attemptController.abort(error),
+              tools: config.tools,
+            });
+            throwIfTurnAborted(config.abortSignal);
+            const [stepResult, accumulatedResponseMessages] = await Promise.all([
+              hooks.stepResult,
+              streamResult.responseMessages,
+            ]);
+            if (
+              isEmptyModelResponse(stepResult) &&
+              extractToolResultCallIds(accumulatedResponseMessages).size === 0 &&
+              inlineAuthorizationResults.length === 0 &&
+              trailingInlineToolResultParts.length === 0
+            ) {
+              throw new EmptyModelResponseError();
+            }
+            await emitStepActions(emit, emissionState, stepResult, {
+              emittedActionCallIds,
+              excludedActionCallIds: invalidInputToolCallIds,
+              excludedActionToolNames,
+              handledInlineToolResultCallIds,
+              tools: advertisedHarnessTools,
+            });
+            const existingToolResults = stepResult.toolResults as TypedToolResult<ToolSet>[];
+            const toolResultsByCallId = new Map(
+              existingToolResults.map((toolResult) => [toolResult.toolCallId, toolResult]),
+            );
+            for (const toolResult of inlineAuthorizationResults) {
+              toolResultsByCallId.set(toolResult.toolCallId, toolResult);
+            }
+            return withAccumulatedResponseMessages({
+              invalidInputToolCallIds,
+              responseMessages: appendMissingToolResultMessages({
+                append: trailingInlineToolResultParts,
+                responseMessages: accumulatedResponseMessages,
+              }),
+              stepResult,
+              toolResults: [...toolResultsByCallId.values()],
+            });
+          } catch (error) {
+            attemptController.abort(error);
+            throw error;
           }
-          return withAccumulatedResponseMessages({
-            invalidInputToolCallIds,
-            responseMessages: appendMissingToolResultMessages({
-              append: trailingInlineToolResultParts,
-              responseMessages: accumulatedResponseMessages,
-            }),
-            stepResult,
-            toolResults: [...toolResultsByCallId.values()],
-          });
         }
         const generateResult = await agent.generate({
           abortSignal: config.abortSignal,
@@ -1002,27 +1045,29 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
       // Stage order: drop a gateway-rejected provider tool first, then
       // reissue an empty response; see runModelCallRecoveryPipeline for
       // the skip/act semantics.
-      const recoveryResult = await runModelCallRecoveryPipeline({
-        error,
-        stages: [
-          (current) =>
-            attemptUnsupportedProviderToolRecovery({
-              error: current.error,
-              runOneModelCall,
-              sessionId: session.sessionId,
-              turnId: emissionState.turnId,
-            }),
-          (current) =>
-            attemptEmptyResponseRecovery({
-              emptyDeliveryEnabled,
-              error: current.error,
-              retryCallOptions: current.retryCallOptions,
-              runOneModelCall,
-              sessionId: session.sessionId,
-              turnId: emissionState.turnId,
-            }),
-        ],
-      });
+      const recoveryResult: ModelCallRecoveryBase = isEventSinkFailure(error)
+        ? { error, outcome: "failed" }
+        : await runModelCallRecoveryPipeline({
+            error,
+            stages: [
+              (current) =>
+                attemptUnsupportedProviderToolRecovery({
+                  error: current.error,
+                  runOneModelCall,
+                  sessionId: session.sessionId,
+                  turnId: emissionState.turnId,
+                }),
+              (current) =>
+                attemptEmptyResponseRecovery({
+                  emptyDeliveryEnabled,
+                  error: current.error,
+                  retryCallOptions: current.retryCallOptions,
+                  runOneModelCall,
+                  sessionId: session.sessionId,
+                  turnId: emissionState.turnId,
+                }),
+            ],
+          });
       throwIfTurnAborted(config.abortSignal);
 
       if (recoveryResult.outcome === "recovered") {
@@ -1046,25 +1091,34 @@ export function createToolLoopHarness(config: ToolLoopHarnessConfig): StepFn {
           throw finalError;
         }
 
-        // A durable event-stream write failure reaches this catch only
-        // because `emitStreamContent` runs inside the model-call
-        // try/catch — the model call itself may have succeeded. Label it
-        // as the workflow-infrastructure failure it is instead of
-        // misattributing it to the model provider, and surface the
-        // failing endpoint + platform error code as evidence.
+        const eventSinkFailure = isEventSinkFailure(finalError);
+        if (eventSinkFailure && config.mode === "task") {
+          throw finalError;
+        }
+
+        // Sink failures can surface inside the model-call try/catch after the
+        // model itself succeeds. Keep them out of model error reporting, and
+        // preserve workflow transport diagnostics when its signature exists.
         const streamWriteDetails = extractWorkflowStreamWriteErrorDetails(finalError);
-        if (streamWriteDetails !== null) {
+        if (eventSinkFailure || streamWriteDetails !== null) {
           const errorId = createErrorId();
-          log.error("workflow stream write failed — parking session for retry by the user", {
-            ...streamWriteDetails,
-            errorId,
-            error: finalError,
-            sessionId: session.sessionId,
-            turnId: emissionState.turnId,
-          });
+          const workflowStreamFailure = streamWriteDetails !== null;
+          const details = streamWriteDetails ?? {};
+          log.error(
+            workflowStreamFailure
+              ? "workflow stream write failed — parking session for retry by the user"
+              : "event sink failed — parking session for retry by the user",
+            {
+              ...details,
+              errorId,
+              error: finalError,
+              sessionId: session.sessionId,
+              turnId: emissionState.turnId,
+            },
+          );
           emissionState = await emitRecoverableFailedTurn(emit, emissionState, {
-            code: "WORKFLOW_STREAM_WRITE_FAILED",
-            details: { ...streamWriteDetails, errorId },
+            code: workflowStreamFailure ? "WORKFLOW_STREAM_WRITE_FAILED" : "EVENT_SINK_FAILED",
+            details: { ...details, errorId },
             message: toErrorMessage(finalError),
           });
           const parkedSession = setHarnessEmissionState(session, emissionState);
@@ -1635,6 +1689,9 @@ function isEmptyModelResponse(step: HarnessStepResult): boolean {
  * both shapes into the one-shot empty-response reissue.
  */
 function rethrowNoOutputAsEmptyResponse(error: unknown): never {
+  if (isEventSinkFailure(error)) {
+    throw error;
+  }
   if (isNoOutputGeneratedError(error)) {
     throw new EmptyModelResponseError({ cause: error });
   }
@@ -2388,9 +2445,10 @@ function resolveApprovalKeyFromTools(
 
 /**
  * Retries `fn` with exponential backoff while the thrown error is
- * classified as `"retry"`. Rethrows the last error once attempts are
- * exhausted or the error is classified as something other than
- * transient.
+ * classified as `"retry"`. Event-sink failures are never model retries,
+ * even when their transport error happens to carry a retryable status.
+ * Rethrows the last error once attempts are exhausted or the error is
+ * classified as something other than transient.
  */
 async function runModelCallWithRetries<T>(
   fn: (attempt: number) => Promise<T>,
@@ -2403,7 +2461,12 @@ async function runModelCallWithRetries<T>(
       return await fn(attempt);
     } catch (error) {
       throwIfTurnAborted(abortSignal);
-      if (attempt === MODEL_CALL_MAX_ATTEMPTS || classifyModelCallError(error) !== "retry") {
+      if (
+        isEventSinkFailure(error) ||
+        isWorkflowStreamWriteError(error) ||
+        attempt === MODEL_CALL_MAX_ATTEMPTS ||
+        classifyModelCallError(error) !== "retry"
+      ) {
         throw error;
       }
       const delayMs =
@@ -2415,9 +2478,33 @@ async function runModelCallWithRetries<T>(
         turnId: diag.turnId,
         error,
       });
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await waitForModelRetryDelay(delayMs, abortSignal);
     }
   }
+}
+
+async function waitForModelRetryDelay(
+  delayMs: number,
+  abortSignal: AbortSignal | undefined,
+): Promise<void> {
+  if (abortSignal === undefined) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return;
+  }
+
+  throwIfTurnAborted(abortSignal);
+  await new Promise<void>((resolve) => {
+    const onAbort = (): void => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    const timeout = setTimeout(() => {
+      abortSignal.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+  throwIfTurnAborted(abortSignal);
 }
 
 function findAuthorizationSignalFromToolResults(

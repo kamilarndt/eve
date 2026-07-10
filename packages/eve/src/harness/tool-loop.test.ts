@@ -3053,7 +3053,9 @@ describe("createToolLoopHarness", () => {
       this.stream = vi
         .fn()
         .mockImplementation(async (options: { abortSignal?: AbortSignal; messages: unknown[] }) => {
-          expect(options.abortSignal).toBe(abortController.signal);
+          expect(options.abortSignal).toBeInstanceOf(AbortSignal);
+          expect(options.abortSignal).not.toBe(abortController.signal);
+          expect(options.abortSignal?.aborted).toBe(false);
           if (settings.prepareStep) {
             await settings.prepareStep({
               context: undefined,
@@ -3067,6 +3069,8 @@ describe("createToolLoopHarness", () => {
           return {
             fullStream: (async function* () {
               abortController.abort(abortReason);
+              expect(options.abortSignal?.aborted).toBe(true);
+              expect(options.abortSignal?.reason).toBe(abortReason);
               yield { reason: abortReason.message, type: "abort" };
             })(),
             steps: new Promise<never>(() => {}),
@@ -3113,6 +3117,42 @@ describe("createToolLoopHarness", () => {
     expect(eventTypes).not.toContain("step.failed");
     expect(eventTypes).not.toContain("turn.failed");
     expect(eventTypes).not.toContain("session.failed");
+  });
+
+  it("interrupts model retry backoff when the turn signal aborts", async () => {
+    vi.useFakeTimers();
+    try {
+      const abortController = new AbortController();
+      const cancellation = new TurnCancelledError();
+      const streamMock = vi
+        .fn()
+        .mockRejectedValue(Object.assign(new Error("socket hang up"), { isRetryable: true }));
+      vi.mocked(ToolLoopAgent).mockImplementation(function (this: ToolLoopAgent) {
+        this.stream = streamMock;
+        return this;
+      } as MockAgentConstructor);
+
+      const { emit } = createEventCollector();
+      const runStep = createToolLoopHarness(
+        createTestConfig("conversation", emit, { abortSignal: abortController.signal }),
+      );
+      const run = runStep(createTestSession(), { message: "Hi" });
+      const rejected = expect(run).rejects.toBe(cancellation);
+
+      for (let index = 0; index < 200 && vi.getTimerCount() === 0; index += 1) {
+        await Promise.resolve();
+      }
+      expect(streamMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(1);
+
+      abortController.abort(cancellation);
+
+      await rejected;
+      expect(streamMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not start a model call when the turn signal is already aborted", async () => {

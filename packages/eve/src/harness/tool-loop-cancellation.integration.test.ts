@@ -69,6 +69,39 @@ function createHangingStreamModel(onStreamStarted: () => void): MockLanguageMode
   });
 }
 
+function createSuccessfulStreamModel(): {
+  readonly doStream: ReturnType<typeof vi.fn>;
+  readonly model: MockLanguageModelV3;
+} {
+  const doStream = vi.fn(async () => ({
+    stream: new ReadableStream<StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: "stream-start", warnings: [] });
+        controller.enqueue({ id: "text-1", type: "text-start" });
+        controller.enqueue({ delta: "All done.", id: "text-1", type: "text-delta" });
+        controller.enqueue({ id: "text-1", type: "text-end" });
+        controller.enqueue({
+          finishReason: { raw: undefined, unified: "stop" },
+          type: "finish",
+          usage: {
+            inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 1, total: 1 },
+            outputTokens: { reasoning: 0, text: 1, total: 1 },
+          },
+        });
+        controller.close();
+      },
+    }),
+  }));
+  return {
+    doStream,
+    model: new MockLanguageModelV3({
+      modelId: "integration-model",
+      provider: "eve-integration-mock",
+      doStream,
+    }),
+  };
+}
+
 describe("tool loop cancellation (real AI SDK)", () => {
   it("aborting mid-stream settles with the canonical cancellation and no failure events", async () => {
     const abortController = new AbortController();
@@ -184,17 +217,40 @@ describe("tool loop cancellation (real AI SDK)", () => {
     }
   });
 
-  it("leaves behavior unchanged when the signal never aborts", async () => {
-    const buildModel = (): MockLanguageModelV3 =>
-      new MockLanguageModelV3({
-        modelId: "integration-model",
-        provider: "eve-integration-mock",
-        doStream: async () => ({
+  it.each([
+    { label: "without a parent signal", withParentSignal: false },
+    { label: "with a live parent signal", withParentSignal: true },
+  ])("aborts the provider on a durable emitter failure $label", async ({ withParentSignal }) => {
+    const turnController = new AbortController();
+    const writeError = Object.assign(
+      new Error("Stream write failed: HTTP 503 (PUT https://workflow.test/events): unavailable"),
+      { statusCode: 503 },
+    );
+    let providerSignal: AbortSignal | undefined;
+    let providerAbortReason: unknown;
+    let attempt = 0;
+
+    const doStream = vi
+      .fn()
+      .mockImplementation(async (options: Parameters<MockLanguageModelV3["doStream"]>[0]) => {
+        attempt += 1;
+        providerSignal ??= options.abortSignal;
+
+        return {
           stream: new ReadableStream<StreamPart>({
             start(controller) {
+              options.abortSignal?.addEventListener(
+                "abort",
+                () => {
+                  providerAbortReason = options.abortSignal?.reason;
+                  controller.error(providerAbortReason);
+                },
+                { once: true },
+              );
               controller.enqueue({ type: "stream-start", warnings: [] });
               controller.enqueue({ id: "text-1", type: "text-start" });
-              controller.enqueue({ delta: "All done.", id: "text-1", type: "text-delta" });
+              controller.enqueue({ delta: "Working on it", id: "text-1", type: "text-delta" });
+              if (attempt === 1) return;
               controller.enqueue({ id: "text-1", type: "text-end" });
               controller.enqueue({
                 finishReason: { raw: undefined, unified: "stop" },
@@ -207,7 +263,122 @@ describe("tool loop cancellation (real AI SDK)", () => {
               controller.close();
             },
           }),
-        }),
+        };
+      });
+    const model = new MockLanguageModelV3({
+      modelId: "integration-model",
+      provider: "eve-integration-mock",
+      doStream,
+    });
+
+    const events: HandleMessageStreamEvent[] = [];
+    let writeFailed = false;
+    const emit: HarnessEmitFn = async (event) => {
+      if (!writeFailed && event.type === "message.appended") {
+        writeFailed = true;
+        throw writeError;
+      }
+      events.push(event);
+    };
+    const runStep = createToolLoopHarness(
+      createConfig(
+        model,
+        emit,
+        withParentSignal ? { abortSignal: turnController.signal } : undefined,
+      ),
+    );
+
+    const result = await runStep(createSession(), { message: "Do a lot of work" });
+
+    expect(result.next).toBeNull();
+    expect(doStream).toHaveBeenCalledTimes(1);
+    expect(providerSignal).toBeInstanceOf(AbortSignal);
+    expect(providerSignal?.aborted).toBe(true);
+    expect(providerSignal?.reason).toBe(writeError);
+    expect(providerAbortReason).toBe(writeError);
+    expect(turnController.signal.aborted).toBe(false);
+    expect(events.find((event) => event.type === "step.failed")?.data).toMatchObject({
+      code: "WORKFLOW_STREAM_WRITE_FAILED",
+      details: { operation: "write", statusCode: 503 },
+      message: writeError.message,
+    });
+    expect(events.map((event) => event.type)).toContain("session.waiting");
+  });
+
+  it("does not model-retry a retryable event-sink failure", async () => {
+    const sinkError = Object.assign(new Error("channel event sink unavailable"), {
+      isRetryable: true,
+    });
+    const { doStream, model } = createSuccessfulStreamModel();
+
+    const events: HandleMessageStreamEvent[] = [];
+    let writeFailed = false;
+    const emit: HarnessEmitFn = async (event) => {
+      if (!writeFailed && event.type === "message.appended") {
+        writeFailed = true;
+        throw sinkError;
+      }
+      events.push(event);
+    };
+
+    const result = await createToolLoopHarness(createConfig(model, emit))(createSession(), {
+      message: "Do some work",
+    });
+
+    expect(result.next).toBeNull();
+    expect(doStream).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.type === "step.failed")?.data).toMatchObject({
+      code: "EVENT_SINK_FAILED",
+      message: sinkError.message,
+    });
+  });
+
+  it("rethrows an event-sink failure in task mode without retrying the model", async () => {
+    const sinkError = Object.assign(new Error("task event sink unavailable"), {
+      isRetryable: true,
+    });
+    const { doStream, model } = createSuccessfulStreamModel();
+    let writeFailed = false;
+    const emit: HarnessEmitFn = async (event) => {
+      if (!writeFailed && event.type === "message.appended") {
+        writeFailed = true;
+        throw sinkError;
+      }
+    };
+    const runStep = createToolLoopHarness(createConfig(model, emit, { mode: "task" }));
+
+    await expect(runStep(createSession(), { message: "Do some work" })).rejects.toBe(sinkError);
+    expect(doStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves behavior unchanged when the signal never aborts", async () => {
+    const providerSignals: Array<AbortSignal | undefined> = [];
+    const buildModel = (): MockLanguageModelV3 =>
+      new MockLanguageModelV3({
+        modelId: "integration-model",
+        provider: "eve-integration-mock",
+        doStream: async (options) => {
+          providerSignals.push(options.abortSignal);
+          return {
+            stream: new ReadableStream<StreamPart>({
+              start(controller) {
+                controller.enqueue({ type: "stream-start", warnings: [] });
+                controller.enqueue({ id: "text-1", type: "text-start" });
+                controller.enqueue({ delta: "All done.", id: "text-1", type: "text-delta" });
+                controller.enqueue({ id: "text-1", type: "text-end" });
+                controller.enqueue({
+                  finishReason: { raw: undefined, unified: "stop" },
+                  type: "finish",
+                  usage: {
+                    inputTokens: { cacheRead: 0, cacheWrite: 0, noCache: 1, total: 1 },
+                    outputTokens: { reasoning: 0, text: 1, total: 1 },
+                  },
+                });
+                controller.close();
+              },
+            }),
+          };
+        },
       });
 
     const inert = createEventCollector();
@@ -223,5 +394,11 @@ describe("tool loop cancellation (real AI SDK)", () => {
 
     expect(inertResult.next).toBe(bareResult.next);
     expect(inert.events.map((event) => event.type)).toEqual(bare.events.map((event) => event.type));
+    expect(providerSignals).toHaveLength(2);
+    expect(providerSignals[0]).not.toBe(providerSignals[1]);
+    for (const signal of providerSignals) {
+      expect(signal).toBeInstanceOf(AbortSignal);
+      expect(signal?.aborted).toBe(false);
+    }
   });
 });

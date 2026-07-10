@@ -48,7 +48,7 @@ import type {
 } from "#runtime/actions/types.js";
 import { createProviderStreamActionBatch } from "#harness/stream-actions.js";
 import { normalizeModelStreamError } from "#harness/model-call-error.js";
-import { createOrderedStreamEmitter } from "#harness/ordered-stream-emitter.js";
+import type { createOrderedStreamEmitter } from "#harness/ordered-stream-emitter.js";
 import { interruptStreamOnFailure } from "#harness/interruptible-stream.js";
 import { isInlineAuthorizationToolResult } from "#harness/inline-tool-authorization.js";
 import type {
@@ -338,36 +338,40 @@ interface EmittedStreamContent {
 
 interface StreamActionEmissionOptions {
   readonly excludedActionToolNames: ReadonlySet<string>;
+  readonly onConsumptionFailure?: (error: unknown) => void;
   readonly tools: HarnessToolMap;
 }
 
+type OrderedStreamEmitter = ReturnType<typeof createOrderedStreamEmitter>;
+
 /**
- * Consumes the AI SDK `fullStream` and emits real-time text and reasoning
- * events.
- *
- * Emits local tool events in source order. Provider calls that arrive in one
- * stream batch into one request event before their first result. A result
- * without a streamed call resumes a call from an earlier step.
+ * Consumes the AI SDK `fullStream` with a caller-owned emitter whose failure
+ * signal is wired to the model request. Emits tools in source order, batching
+ * provider calls before their first result and resuming unstreamed calls.
  */
 export async function emitStreamContent(
-  emitFn: HarnessEmitFn,
+  orderedEmitter: OrderedStreamEmitter,
   state: HarnessEmissionState,
   fullStream: AsyncIterable<TextStreamPart<ToolSet>>,
   options?: StreamActionEmissionOptions,
 ): Promise<EmittedStreamContent> {
-  const orderedEmitter = createOrderedStreamEmitter(emitFn);
   const providerActionBatch = createProviderStreamActionBatch({
     emitFn: orderedEmitter.emit,
     state,
   });
   try {
-    return await consumeStreamContent(
-      orderedEmitter.emit,
-      state,
-      interruptStreamOnFailure(fullStream, orderedEmitter.failureSignal),
-      providerActionBatch,
-      options,
-    );
+    try {
+      return await consumeStreamContent(
+        orderedEmitter.emit,
+        state,
+        interruptStreamOnFailure(fullStream, orderedEmitter.failureSignal),
+        providerActionBatch,
+        options,
+      );
+    } catch (error) {
+      options?.onConsumptionFailure?.(error);
+      throw error;
+    }
   } finally {
     try {
       await providerActionBatch.cancel();

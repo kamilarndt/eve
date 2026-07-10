@@ -97,18 +97,24 @@ describe("tool loop streamed provider retries", () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
 
     let attempt = 0;
-    const doStream = vi.fn(async () => ({
-      stream: new ReadableStream<StreamPart>({
-        start(controller) {
-          attempt += 1;
-          if (attempt === 1) {
-            enqueueOverload(controller, "Discard this partial response.");
-            return;
-          }
-          enqueueTextSuccess(controller, "Recovered answer.");
-        },
-      }),
-    }));
+    const providerSignals: Array<AbortSignal | undefined> = [];
+    const signalsInitiallyAborted: boolean[] = [];
+    const doStream = vi.fn(async (options: Parameters<MockLanguageModelV3["doStream"]>[0]) => {
+      providerSignals.push(options.abortSignal);
+      signalsInitiallyAborted.push(options.abortSignal?.aborted ?? true);
+      return {
+        stream: new ReadableStream<StreamPart>({
+          start(controller) {
+            attempt += 1;
+            if (attempt === 1) {
+              enqueueOverload(controller, "Discard this partial response.");
+              return;
+            }
+            enqueueTextSuccess(controller, "Recovered answer.");
+          },
+        }),
+      };
+    });
     const model = new MockLanguageModelV3({
       doStream,
       modelId: "retry-integration-model",
@@ -133,6 +139,10 @@ describe("tool loop streamed provider retries", () => {
     expect(events.filter((event) => event.type === "step.failed")).toHaveLength(0);
     expect(events.filter((event) => event.type === "turn.failed")).toHaveLength(0);
     expect(events.filter((event) => event.type === "session.failed")).toHaveLength(0);
+    expect(signalsInitiallyAborted).toEqual([false, false]);
+    expect(providerSignals[0]).not.toBe(providerSignals[1]);
+    expect(providerSignals[0]?.aborted).toBe(true);
+    expect(providerSignals[1]?.aborted).toBe(false);
   });
 
   it("fails once after the overloaded retry attempts are exhausted", async () => {
