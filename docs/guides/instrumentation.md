@@ -138,21 +138,19 @@ Per-turn usage tags are written on each step of a turn, accumulating cumulative 
 - `$eve.cost_usd`: cumulative turn cost reported by AI Gateway when available
 - `$eve.tool_count`: number of tools available to the turn
 
-Issue tags describe individual actionable problems inside a run without storing prompt,
-output, or error-message content. Each occurrence writes `$eve.issue` as compact,
-versioned JSON:
+Issue events describe individual actionable problems inside a run without storing
+prompt, output, or error-message content. When deployed on Vercel, eve reports
+redacted issue-source events, and Vercel derives issue groups from:
 
-- `v`: schema version (`1`)
-- `t`: issue type, such as `action_failed`, `action_rejected`, or `step_failed`
-- `c`: stable error code, such as `OUTPUT_SCHEMA_NOT_FULFILLED`
-- `s`: source, such as `tool`, `workflow`, `subagent`, `skill`, or `remote_subagent`
-- `tool`: tool or subagent name when the issue came from an action
-- `turn`: turn id for deep-linking to the affected turn
-- `call`: tool-call id for deep-linking to the affected tool call when available
-- `at`: ISO timestamp for the issue
+- issue type, such as `action_failed`, `action_rejected`, or `step_failed`
+- stable error code, such as `OUTPUT_SCHEMA_NOT_FULFILLED`
+- source, such as `tool`, `workflow`, `subagent`, `skill`, or `remote_subagent`
+- tool, skill, or subagent name when available
+- turn id and tool call id when available
+- ISO timestamp for the issue
 
 Session state, issue counts, last-seen timestamps, and error-rate metrics are
-derived by the Vercel platform from workflow state and these issue facts.
+derived by the Vercel platform from workflow state and these issue events.
 
 Tag writes are best-effort: a failure is logged once per process and then swallowed, so a broken tag emit never breaks the agent.
 

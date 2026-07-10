@@ -503,7 +503,9 @@ export async function emitTerminalSessionFailureStep(input: {
     detail: typeof details.detail === "string" ? details.detail : undefined,
   });
 
-  const event = createSessionFailedEvent({ code, details, message, sessionId });
+  const event = timestampHandleMessageStreamEvent(
+    createSessionFailedEvent({ code, details, message, sessionId }),
+  );
   await reportEveObservabilityEvent(event);
 
   // Best-effort: invoke the adapter handler so channels surface the
@@ -530,7 +532,7 @@ export async function emitTerminalSessionFailureStep(input: {
   try {
     const writer = input.parentWritable.getWriter();
     try {
-      await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(event)));
+      await writer.write(encodeMessageStreamEvent(event));
     } finally {
       writer.releaseLock();
     }

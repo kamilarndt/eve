@@ -33,6 +33,10 @@ describe("reportEveObservabilityEvent", () => {
     const event = {
       type: "action.result" as const,
       data: {
+        error: {
+          code: "ETIMEDOUT",
+          message: "Linear API timed out after 10s",
+        },
         result: {
           callId: "call_1",
           isError: true,
@@ -51,7 +55,24 @@ describe("reportEveObservabilityEvent", () => {
 
     await reportEveObservabilityEvent(event);
 
-    expect(reportMock).toHaveBeenCalledWith(event);
+    expect(reportMock).toHaveBeenCalledWith({
+      type: "action.result",
+      data: {
+        error: { code: "ETIMEDOUT" },
+        result: {
+          callId: "call_1",
+          kind: "tool-result",
+          name: "linear.createIssue",
+          output: { code: "ETIMEDOUT" },
+          toolName: "linear.createIssue",
+        },
+        sequence: 2,
+        status: "failed",
+        stepIndex: 0,
+        turnId: "turn_1",
+      },
+      meta: { at: "2026-07-09T00:00:00.000Z" },
+    });
   });
 
   it("reports child subagent issue events", async () => {
@@ -64,6 +85,7 @@ describe("reportEveObservabilityEvent", () => {
           type: "turn.failed" as const,
           data: {
             code: "REMOTE_SUBAGENT_FAILED",
+            details: { prompt: "private child prompt" },
             message: "Subagent failed",
             sequence: 3,
             turnId: "turn_child",
@@ -74,6 +96,20 @@ describe("reportEveObservabilityEvent", () => {
 
     await reportEveObservabilityEvent(event);
 
-    expect(reportMock).toHaveBeenCalledWith(event);
+    expect(reportMock).toHaveBeenCalledWith({
+      type: "subagent.event",
+      data: {
+        callId: "call_1",
+        subagentName: "deployment-reviewer",
+        event: {
+          type: "turn.failed",
+          data: {
+            code: "REMOTE_SUBAGENT_FAILED",
+            sequence: 3,
+            turnId: "turn_child",
+          },
+        },
+      },
+    });
   });
 });
