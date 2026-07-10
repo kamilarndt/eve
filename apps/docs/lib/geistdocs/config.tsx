@@ -32,6 +32,8 @@ export const config = defineConfig({
   logo: <Logo />,
   github,
   nav,
+  // The nav already carries an explicit GitHub link; skip the built-in icon.
+  navbarGithub: { enabled: false },
   navbarOssProducts,
   basePath,
   siteId,
