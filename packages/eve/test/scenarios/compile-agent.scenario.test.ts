@@ -570,13 +570,13 @@ describe("compileAgent", () => {
         "node_modules/@acme/crm/package.json": `${JSON.stringify({
           name: "@acme/crm",
           type: "module",
-          eve: { extension: "ext" },
-          exports: { ".": "./ext/index.mjs" },
+          eve: { extension: "extension" },
+          exports: { ".": "./extension/index.mjs" },
         })}\n`,
-        "node_modules/@acme/crm/ext/index.mjs": "export default {};\n",
-        "node_modules/@acme/crm/ext/instructions/policy.mjs":
+        "node_modules/@acme/crm/extension/index.mjs": "export default {};\n",
+        "node_modules/@acme/crm/extension/instructions/policy.mjs":
           'export default { markdown: "Prefer the CRM over guessing." };\n',
-        "node_modules/@acme/crm/ext/tools/crm_search.mjs": [
+        "node_modules/@acme/crm/extension/tools/crm_search.mjs": [
           'import { defineTool } from "eve/tools";',
           "",
           "export default defineTool({",
@@ -600,7 +600,7 @@ describe("compileAgent", () => {
     expect(result.manifest.instructions?.markdown).toContain("Prefer the CRM over guessing.");
 
     const moduleMapText = await readFile(result.paths.moduleMapPath, "utf8");
-    expect(moduleMapText).toContain("@acme/crm/ext/tools/crm_search.mjs");
+    expect(moduleMapText).toContain("@acme/crm/extension/tools/crm_search.mjs");
     expect(moduleMapText).toContain('"ext:crm:tools/crm_search.mjs"');
   });
 
@@ -1078,7 +1078,7 @@ describe("compileAgent", () => {
         "export default {",
         '  kind: "remote",',
         '  description: "Answer weather questions remotely.",',
-        '  url: "https://weather.example.com",',
+        '  url: () => process.env.WEATHER_AGENT_URL ?? "https://weather.example.com",',
         "};",
         "",
       ].join("\n"),
@@ -1119,9 +1119,10 @@ describe("compileAgent", () => {
         nodeId: "subagents/weather.ts",
         path: "/eve/v1/session",
         sourceId: "subagents/weather.ts",
-        url: "https://weather.example.com",
       },
     ]);
+    // A function `url` is resolved at runtime, so nothing is baked here.
+    expect(result.manifest.remoteAgents[0]).not.toHaveProperty("url");
     expect(result.manifest.subagents).toHaveLength(1);
     expect(result.manifest.subagents[0]?.agent.remoteAgents).toMatchObject([
       {
