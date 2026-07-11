@@ -61,7 +61,7 @@ import { reconcileSessionContinuationToken } from "#execution/reconcile-session-
 import { hydrateDurableSession, refreshSessionFromTurnAgent } from "#execution/session.js";
 import { buildTurnAttributes, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import { normalizeEveAttributes } from "#runtime/attributes/normalize.js";
-import { reportEveObservabilityEvent } from "#runtime/observability/report.js";
+import { reportEveExecutionErrorOccurrence } from "#runtime/observability/report.js";
 import { resolveSessionSkillRoot } from "#execution/workflow-skill-root.js";
 import {
   createWorkflowRuntime,
@@ -257,7 +257,7 @@ export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResu
     const toEmit = await callAdapterEventHandler(adapter, event, adapterCtx);
     setChannelContext(ctx, { ...adapter, state: { ...adapterCtx.state } });
     const timed = timestampHandleMessageStreamEvent(toEmit);
-    await reportEveObservabilityEvent(timed);
+    await reportEveExecutionErrorOccurrence(timed);
     await writer.write(encodeMessageStreamEvent(timed));
     return toEmit;
   };
@@ -506,7 +506,7 @@ export async function emitTerminalSessionFailureStep(input: {
   const event = timestampHandleMessageStreamEvent(
     createSessionFailedEvent({ code, details, message, sessionId }),
   );
-  await reportEveObservabilityEvent(event);
+  await reportEveExecutionErrorOccurrence(event);
 
   // Best-effort: invoke the adapter handler so channels surface the
   // failure. Errors are logged, never rethrown — the outer workflow

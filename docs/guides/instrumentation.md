@@ -138,19 +138,15 @@ Per-turn usage tags are written on each step of a turn, accumulating cumulative 
 - `$eve.cost_usd`: cumulative turn cost reported by AI Gateway when available
 - `$eve.tool_count`: number of tools available to the turn
 
-Issue events describe individual actionable problems inside a run without storing
-prompt, output, or error-message content. When deployed on Vercel, eve reports
-redacted issue-source events, and Vercel derives issue groups from:
+Execution error events describe failed execution paths inside a run without
+storing prompt, output, or error-message content. When deployed on Vercel, eve
+reports redacted execution error events for failed tool calls, failed workflow
+steps, failed turns, failed sessions, and failed subagent work. Denied or
+rejected tool-call approvals are not execution errors.
 
-- issue type, such as `action_failed`, `action_rejected`, or `step_failed`
-- stable error code, such as `OUTPUT_SCHEMA_NOT_FULFILLED`
-- source, such as `tool`, `workflow`, `subagent`, `skill`, or `remote_subagent`
-- tool, skill, or subagent name when available
-- turn id and tool call id when available
-- ISO timestamp for the issue
-
-Session state, issue counts, last-seen timestamps, and error-rate metrics are
-derived by the Vercel platform from workflow state and these issue events.
+Session state, waiting state, running state, token usage, cost, and error-rate
+metrics are derived by the Vercel platform from workflow state, eve run
+attributes, and these execution error events.
 
 Tag writes are best-effort: a failure is logged once per process and then swallowed, so a broken tag emit never breaks the agent.
 

@@ -3,19 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const reportMock = vi.fn();
 
 vi.mock("#compiled/@workflow/core/index.js", () => ({
-  experimental_reportObservabilityEvent: (...args: unknown[]) => reportMock(...args),
+  experimental_reportExecutionErrorOccurrence: (...args: unknown[]) => reportMock(...args),
 }));
 
-const { reportEveObservabilityEvent } = await import("./report.js");
+const { reportEveExecutionErrorOccurrence } = await import("./report.js");
 
-describe("reportEveObservabilityEvent", () => {
+describe("reportEveExecutionErrorOccurrence", () => {
   beforeEach(() => {
     reportMock.mockReset();
     reportMock.mockResolvedValue(undefined);
   });
 
-  it("skips non-issue stream events", async () => {
-    await reportEveObservabilityEvent({
+  it("skips non-error stream events", async () => {
+    await reportEveExecutionErrorOccurrence({
       type: "message.appended",
       data: {
         messageDelta: "hello",
@@ -41,7 +41,6 @@ describe("reportEveObservabilityEvent", () => {
           callId: "call_1",
           isError: true,
           kind: "tool-result" as const,
-          name: "linear.createIssue",
           output: { code: "ETIMEDOUT" },
           toolName: "linear.createIssue",
         },
@@ -53,7 +52,7 @@ describe("reportEveObservabilityEvent", () => {
       meta: { at: "2026-07-09T00:00:00.000Z" },
     };
 
-    await reportEveObservabilityEvent(event);
+    await reportEveExecutionErrorOccurrence(event);
 
     expect(reportMock).toHaveBeenCalledWith({
       type: "action.result",
@@ -62,7 +61,6 @@ describe("reportEveObservabilityEvent", () => {
         result: {
           callId: "call_1",
           kind: "tool-result",
-          name: "linear.createIssue",
           output: { code: "ETIMEDOUT" },
           toolName: "linear.createIssue",
         },
@@ -75,7 +73,28 @@ describe("reportEveObservabilityEvent", () => {
     });
   });
 
-  it("reports child subagent issue events", async () => {
+  it("skips rejected action results", async () => {
+    await reportEveExecutionErrorOccurrence({
+      type: "action.result",
+      data: {
+        result: {
+          callId: "call_1",
+          kind: "tool-result",
+          output: { message: "Blocked by policy" },
+          toolName: "linear.createIssue",
+        },
+        sequence: 2,
+        status: "rejected",
+        stepIndex: 0,
+        turnId: "turn_1",
+      },
+      meta: { at: "2026-07-09T00:00:00.000Z" },
+    });
+
+    expect(reportMock).not.toHaveBeenCalled();
+  });
+
+  it("reports child subagent execution error events", async () => {
     const event = {
       type: "subagent.event" as const,
       data: {
@@ -94,7 +113,7 @@ describe("reportEveObservabilityEvent", () => {
       },
     };
 
-    await reportEveObservabilityEvent(event);
+    await reportEveExecutionErrorOccurrence(event);
 
     expect(reportMock).toHaveBeenCalledWith({
       type: "subagent.event",

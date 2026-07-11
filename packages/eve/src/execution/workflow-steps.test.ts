@@ -7,7 +7,7 @@ import { ContextKey } from "#context/key.js";
 import { AuthKey, ContinuationTokenKey, ModeKey, SessionIdKey } from "#context/keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { serializeContext } from "#context/serialize.js";
-import { reportEveObservabilityEvent } from "#runtime/observability/report.js";
+import { reportEveExecutionErrorOccurrence } from "#runtime/observability/report.js";
 import { setPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
 import { DEFAULT_SUBAGENT_MAX_DEPTH } from "#harness/subagent-depth.js";
 import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
@@ -117,7 +117,7 @@ vi.mock("#compiled/@workflow/core/runtime.js", () => ({
 }));
 
 vi.mock("#runtime/observability/report.js", () => ({
-  reportEveObservabilityEvent: vi.fn().mockResolvedValue(undefined),
+  reportEveExecutionErrorOccurrence: vi.fn().mockResolvedValue(undefined),
 }));
 
 const ThreadKey = new ContextKey<string>("test.workflow.thread");
@@ -1089,7 +1089,7 @@ describe("emitTerminalSessionFailureStep", () => {
     expect(data.code).toBe("EveAttachmentError");
     expect(data.message).toContain("attachment staging failed");
     expect(typeof data.details?.errorId).toBe("string");
-    expect(reportEveObservabilityEvent).toHaveBeenCalledWith(
+    expect(reportEveExecutionErrorOccurrence).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "session.failed",
         data: expect.objectContaining({ code: "EveAttachmentError" }),

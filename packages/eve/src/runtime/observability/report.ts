@@ -2,7 +2,7 @@ import type { HandleMessageStreamEvent } from "#protocol/message.js";
 
 let WARNED_ABOUT_REPORT_FAILURE = false;
 
-type EveObservabilityIssueEvent = {
+type EveExecutionErrorOccurrenceEvent = {
   readonly type: string;
   readonly data: Record<string, unknown>;
   readonly meta?: {
@@ -10,7 +10,7 @@ type EveObservabilityIssueEvent = {
   };
 };
 
-function sanitizeIssueRecord(value: unknown): Record<string, unknown> | undefined {
+function sanitizeErrorRecord(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -25,11 +25,13 @@ function sanitizeIssueRecord(value: unknown): Record<string, unknown> | undefine
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
-function sanitizeActionResult(event: HandleMessageStreamEvent): EveObservabilityIssueEvent | null {
+function sanitizeActionResult(
+  event: HandleMessageStreamEvent,
+): EveExecutionErrorOccurrenceEvent | null {
   if (event.type !== "action.result") {
     return null;
   }
-  if (event.data.status !== "failed" && event.data.status !== "rejected") {
+  if (event.data.status !== "failed") {
     return null;
   }
 
@@ -51,7 +53,7 @@ function sanitizeActionResult(event: HandleMessageStreamEvent): EveObservability
       sanitizedResult[key] = value;
     }
   }
-  const output = sanitizeIssueRecord(result.output);
+  const output = sanitizeErrorRecord(result.output);
   if (output) {
     sanitizedResult.output = output;
   }
@@ -63,7 +65,7 @@ function sanitizeActionResult(event: HandleMessageStreamEvent): EveObservability
     stepIndex: event.data.stepIndex,
     turnId: event.data.turnId,
   };
-  const error = sanitizeIssueRecord(event.data.error);
+  const error = sanitizeErrorRecord(event.data.error);
   if (error) {
     data.error = error;
   }
@@ -71,7 +73,9 @@ function sanitizeActionResult(event: HandleMessageStreamEvent): EveObservability
   return { type: event.type, data, meta: event.meta };
 }
 
-function sanitizeFailureEvent(event: HandleMessageStreamEvent): EveObservabilityIssueEvent | null {
+function sanitizeFailureEvent(
+  event: HandleMessageStreamEvent,
+): EveExecutionErrorOccurrenceEvent | null {
   if (
     event.type !== "step.failed" &&
     event.type !== "turn.failed" &&
@@ -94,7 +98,9 @@ function sanitizeFailureEvent(event: HandleMessageStreamEvent): EveObservability
   return { type: event.type, data, meta: event.meta };
 }
 
-function toIssueSourceEvent(event: HandleMessageStreamEvent): EveObservabilityIssueEvent | null {
+function toExecutionErrorOccurrenceEvent(
+  event: HandleMessageStreamEvent,
+): EveExecutionErrorOccurrenceEvent | null {
   const actionResult = sanitizeActionResult(event);
   if (actionResult) {
     return actionResult;
@@ -106,7 +112,7 @@ function toIssueSourceEvent(event: HandleMessageStreamEvent): EveObservabilityIs
   }
 
   if (event.type === "subagent.event") {
-    const child = toIssueSourceEvent(event.data.event);
+    const child = toExecutionErrorOccurrenceEvent(event.data.event);
     if (!child) {
       return null;
     }
@@ -124,9 +130,11 @@ function toIssueSourceEvent(event: HandleMessageStreamEvent): EveObservabilityIs
   return null;
 }
 
-export async function reportEveObservabilityEvent(event: HandleMessageStreamEvent): Promise<void> {
-  const issueEvent = toIssueSourceEvent(event);
-  if (!issueEvent) {
+export async function reportEveExecutionErrorOccurrence(
+  event: HandleMessageStreamEvent,
+): Promise<void> {
+  const executionErrorEvent = toExecutionErrorOccurrenceEvent(event);
+  if (!executionErrorEvent) {
     return;
   }
 
@@ -134,17 +142,26 @@ export async function reportEveObservabilityEvent(event: HandleMessageStreamEven
     const workflowCore = await import("#compiled/@workflow/core/index.js");
     const report = (
       workflowCore as {
-        experimental_reportObservabilityEvent?: (
-          event: EveObservabilityIssueEvent,
+        experimental_reportExecutionErrorOccurrence?: (
+          event: EveExecutionErrorOccurrenceEvent,
         ) => Promise<void> | void;
       }
-    ).experimental_reportObservabilityEvent;
-    await report?.(issueEvent);
+    ).experimental_reportExecutionErrorOccurrence;
+    if (!report) {
+      if (!WARNED_ABOUT_REPORT_FAILURE) {
+        WARNED_ABOUT_REPORT_FAILURE = true;
+        console.warn(
+          "[eve] Workflow execution-error reporting is unavailable in this bundled Workflow runtime; suppressing further warnings this process.",
+        );
+      }
+      return;
+    }
+    await report(executionErrorEvent);
   } catch (error) {
     if (!WARNED_ABOUT_REPORT_FAILURE) {
       WARNED_ABOUT_REPORT_FAILURE = true;
       console.warn(
-        "[eve] reportEveObservabilityEvent failed; suppressing further warnings this process.",
+        "[eve] reportEveExecutionErrorOccurrence failed; suppressing further warnings this process.",
         {
           type: event.type,
           error: (error as Error).message,

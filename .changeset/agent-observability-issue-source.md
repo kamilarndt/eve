@@ -2,4 +2,4 @@
 "eve": patch
 ---
 
-Report structured issue-source events, including `remote_subagent` for remote agent failures, so Vercel can derive issue groups, filter related agent runs, and deep link to the affected turn without replaying traces.
+Report structured execution-error occurrences for failed actions, steps, turns, sessions, and subagent calls so Vercel can power Agent Runs error-rate rollups without counting rejected approvals as runtime errors.
