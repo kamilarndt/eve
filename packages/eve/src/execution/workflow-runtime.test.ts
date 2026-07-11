@@ -5,11 +5,14 @@ import { ChannelRequestIdKey } from "#context/keys.js";
 import { resolveInstalledPackageInfo } from "#internal/application/package.js";
 import {
   createWorkflowRuntime,
+  experimentalWorkflowEntryReference,
+  experimentalWorkflowIterationReference,
   LATEST_DEPLOYMENT_UNSUPPORTED_MESSAGE,
   turnWorkflowReference,
   workflowEntryReference,
 } from "#execution/workflow-runtime.js";
 import { isRuntimeNoActiveSessionError } from "#execution/runtime-errors.js";
+import { TurnCancelledError } from "#harness/turn-cancellation.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
 import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 
@@ -33,6 +36,7 @@ afterEach(() => {
   startMock.mockReset();
   vi.mocked(getCompiledRuntimeAgentBundle).mockReset();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe("workflowEntryReference", () => {
@@ -49,6 +53,12 @@ describe("workflowEntryReference", () => {
     expect(turnWorkflowReference.workflowId).toBe(`workflow//${packageInfo.name}//turnWorkflow`);
     expect(turnWorkflowReference.workflowId).not.toContain("/src/execution/");
     expect(turnWorkflowReference.workflowId).not.toContain("@");
+    expect(experimentalWorkflowEntryReference.workflowId).toBe(
+      `workflow//${packageInfo.name}//experimentalWorkflowEntry`,
+    );
+    expect(experimentalWorkflowIterationReference.workflowId).toBe(
+      `workflow//${packageInfo.name}//experimentalWorkflowIteration`,
+    );
   });
 });
 
@@ -128,6 +138,130 @@ describe("createWorkflowRuntime#deliver", () => {
       kind: "deliver",
       payloads: [{ message: "hello" }],
     });
+  });
+});
+
+describe("createWorkflowRuntime#cancel", () => {
+  it("resumes the session cancellation hook", async () => {
+    resumeHookMock.mockResolvedValue({ runId: "driver-run" });
+    getRunMock.mockReturnValue({ status: Promise.resolve("failed") });
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    await runtime.cancel("driver-run");
+
+    expect(resumeHookMock).toHaveBeenCalledWith("driver-run:cancel", {
+      kind: "cancel",
+    });
+  });
+
+  it("retries when cancellation races workflow hook registration", async () => {
+    vi.useFakeTimers();
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    resumeHookMock
+      .mockRejectedValueOnce(new HookNotFoundError("driver-run:cancel"))
+      .mockResolvedValueOnce({ runId: "driver-run" });
+    getRunMock.mockReturnValueOnce({ status: Promise.resolve("running") }).mockReturnValue({
+      get returnValue() {
+        return Promise.reject(new TurnCancelledError());
+      },
+      status: Promise.resolve("failed"),
+    });
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    const cancellation = runtime.cancel("driver-run");
+    await vi.runAllTimersAsync();
+
+    await expect(cancellation).resolves.toBeUndefined();
+    expect(resumeHookMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows the full 30-second readiness window for a cold cancellation hook", async () => {
+    vi.useFakeTimers();
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    resumeHookMock.mockImplementation(async () => {
+      if (resumeHookMock.mock.calls.length < 300) {
+        throw new HookNotFoundError("driver-run:cancel");
+      }
+      return { runId: "driver-run" };
+    });
+    getRunMock.mockImplementation(() => ({
+      get returnValue() {
+        return Promise.reject(new TurnCancelledError());
+      },
+      status: Promise.resolve(resumeHookMock.mock.calls.length < 300 ? "running" : "failed"),
+    }));
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    const cancellation = runtime.cancel("driver-run");
+    await vi.runAllTimersAsync();
+
+    await expect(cancellation).resolves.toBeUndefined();
+    expect(resumeHookMock).toHaveBeenCalledTimes(300);
+  });
+
+  it("retries cancellation while a resiliently queued run is not visible yet", async () => {
+    vi.useFakeTimers();
+    const { HookNotFoundError, WorkflowRunNotFoundError } =
+      await import("#compiled/@workflow/errors/index.js");
+    resumeHookMock
+      .mockRejectedValueOnce(new HookNotFoundError("driver-run:cancel"))
+      .mockResolvedValueOnce({ runId: "driver-run" });
+    getRunMock
+      .mockReturnValueOnce({ status: Promise.reject(new WorkflowRunNotFoundError("driver-run")) })
+      .mockReturnValue({
+        get returnValue() {
+          return Promise.reject(new TurnCancelledError());
+        },
+        status: Promise.resolve("failed"),
+      });
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    const cancellation = runtime.cancel("driver-run");
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(cancellation).resolves.toBeUndefined();
+    expect(resumeHookMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("treats cancellation of a terminal session as an idempotent no-op", async () => {
+    const { HookNotFoundError } = await import("#compiled/@workflow/errors/index.js");
+    resumeHookMock.mockRejectedValue(new HookNotFoundError("driver-run:cancel"));
+    getRunMock.mockReturnValue({ status: Promise.resolve("completed") });
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    await expect(runtime.cancel("driver-run")).resolves.toBeUndefined();
+
+    expect(resumeHookMock).toHaveBeenCalledOnce();
+  });
+
+  it("reports a missing workflow run as no active session", async () => {
+    vi.useFakeTimers();
+    const { HookNotFoundError, WorkflowRunNotFoundError } =
+      await import("#compiled/@workflow/errors/index.js");
+    resumeHookMock.mockRejectedValue(new HookNotFoundError("missing-run:cancel"));
+    getRunMock.mockReturnValue({
+      status: Promise.reject(new WorkflowRunNotFoundError("missing-run")),
+    });
+    const runtime = createWorkflowRuntime({
+      compiledArtifactsSource: {} as RuntimeCompiledArtifactsSource,
+    });
+
+    const cancellation = runtime.cancel("missing-run");
+    const rejection = expect(cancellation).rejects.toSatisfy(isRuntimeNoActiveSessionError);
+    await vi.runAllTimersAsync();
+
+    await rejection;
+    expect(resumeHookMock).toHaveBeenCalledTimes(300);
   });
 });
 

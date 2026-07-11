@@ -154,6 +154,10 @@ export function collectModuleRefsForManifest(
     moduleSourceRefs.set(manifest.config.model.source.sourceId, manifest.config.model.source);
   }
 
+  if (manifest.experimentalWorkflow !== undefined) {
+    moduleSourceRefs.set(manifest.experimentalWorkflow.sourceId, manifest.experimentalWorkflow);
+  }
+
   for (const channel of manifest.channels) {
     // Disabled channel entries don't have a source module — they're a
     // marker that the matching framework default should be removed.

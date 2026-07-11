@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
 import { getWorkflowRuntimeActionInterrupts } from "#harness/workflow-runtime-action-state.js";
+import { continueWorkflowProgram, executeWorkflowProgram } from "#harness/workflow-program.js";
 import { applyWorkflowTool } from "#harness/workflow-sandbox.js";
 import { buildToolSet } from "#harness/tools.js";
 import type { HarnessToolMap } from "#harness/types.js";
@@ -45,6 +46,33 @@ const continuationSecurity = {
 };
 
 describe("Workflow concurrent continuation", () => {
+  it("executes a detached saved program without a model call", async () => {
+    await expect(
+      executeWorkflowProgram({
+        continuationSecurity,
+        context: {
+          input: { accountId: "acct_1" },
+          iteration: 2,
+          scheduledAt: "2026-07-10T20:00:00.000Z",
+          state: { cursor: "cursor_1" },
+        },
+        outerToolCallId: "detached-iteration-2",
+        program: {
+          js: "return { accountId: input.accountId, cursor: state.cursor, iteration, scheduledAt };",
+        },
+        tools: new Map(),
+      }),
+    ).resolves.toEqual({
+      output: {
+        accountId: "acct_1",
+        cursor: "cursor_1",
+        iteration: 2,
+        scheduledAt: "2026-07-10T20:00:00.000Z",
+      },
+      status: "completed",
+    });
+  });
+
   it("collects promptly interrupted Promise.all siblings in one ledger", async () => {
     const tools = orchestrationTools();
     const { modelTools } = await applyWorkflowTool({
@@ -133,6 +161,42 @@ describe("Workflow concurrent continuation", () => {
     ).resolves.toEqual({
       output: ["alpha-result", "beta-result"],
       status: "completed",
+    });
+  });
+
+  it("aborts resumed program code after its child interrupt resolves", async () => {
+    const tools = orchestrationTools();
+    const initial = await executeWorkflowProgram({
+      continuationSecurity,
+      context: {
+        input: null,
+        iteration: 1,
+        scheduledAt: "2026-07-10T20:00:00.000Z",
+      },
+      outerToolCallId: "resumed-loop",
+      program: {
+        js: 'await tools["echo-marker"]({ message: "before-loop" }); while (true) {}',
+      },
+      tools,
+    });
+    expect(initial.status).toBe("interrupted");
+    if (initial.status !== "interrupted") throw new Error("Expected child interrupt.");
+
+    const abortController = new AbortController();
+    const abortReason = new Error("stop resumed dynamic workflow");
+    abortController.abort(abortReason);
+
+    await expect(
+      continueWorkflowProgram({
+        abortSignal: abortController.signal,
+        continuationSecurity,
+        interrupt: initial.interrupt,
+        resolution: "child-result",
+        tools,
+      }),
+    ).rejects.toMatchObject({
+      code: "CODE_MODE_ABORTED",
+      message: "Code mode execution was aborted.",
     });
   });
 });

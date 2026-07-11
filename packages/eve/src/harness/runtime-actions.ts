@@ -45,6 +45,7 @@ interface PendingRuntimeActionEventMetadata {
 interface PendingRuntimeActionBatch {
   readonly actions: readonly RuntimeActionRequest[];
   readonly childContinuationTokens?: Readonly<Record<string, string>>;
+  readonly childSessionIds?: Readonly<Record<string, string>>;
   readonly event: PendingRuntimeActionEventMetadata;
   readonly responseMessages: readonly ModelMessage[];
 }
@@ -122,9 +123,10 @@ export function setPendingRuntimeActionBatch(input: {
  * so {@link resolvePendingRuntimeActions} can clear proxy-input
  * entries when the child finishes.
  */
-export function recordPendingSubagentChildToken(input: {
+export function recordPendingSubagentChild(input: {
   readonly callId: string;
   readonly childContinuationToken: string;
+  readonly childSessionId: string;
   readonly session: HarnessSession;
 }): HarnessSession {
   const batch = getPendingRuntimeActionBatch(input.session.state);
@@ -140,9 +142,40 @@ export function recordPendingSubagentChildToken(input: {
       ...batch.childContinuationTokens,
       [input.callId]: input.childContinuationToken,
     },
+    childSessionIds: {
+      ...batch.childSessionIds,
+      [input.callId]: input.childSessionId,
+    },
   } satisfies PendingRuntimeActionBatch;
 
   return { ...input.session, state };
+}
+
+export interface PendingLocalSubagentSession {
+  readonly callId: string;
+  readonly continuationToken: string;
+  readonly nodeId: string;
+  readonly sessionId: string;
+}
+
+/** Returns the active local child runs recorded on the pending action batch. */
+export function getPendingLocalSubagentSessions(
+  state: SessionStateMap | undefined,
+): readonly PendingLocalSubagentSession[] {
+  const batch = getPendingRuntimeActionBatch(state);
+  if (batch === undefined) return [];
+
+  const continuationTokens = batch.childContinuationTokens;
+  const sessionIds = batch.childSessionIds;
+  if (continuationTokens === undefined || sessionIds === undefined) return [];
+
+  return batch.actions.flatMap((action) => {
+    if (action.kind !== "subagent-call") return [];
+    const continuationToken = continuationTokens[action.callId];
+    const sessionId = sessionIds[action.callId];
+    if (continuationToken === undefined || sessionId === undefined) return [];
+    return [{ callId: action.callId, continuationToken, nodeId: action.nodeId, sessionId }];
+  });
 }
 
 /**

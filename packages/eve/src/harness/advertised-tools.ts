@@ -11,7 +11,7 @@ import type { WorkflowSandboxLifecycle } from "#shared/workflow-sandbox.js";
 
 type AdvertisedToolSession = Pick<
   HarnessSession,
-  "rootSessionId" | "subagentDepth" | "subagentMaxDepth"
+  "localSubagentsOnly" | "rootSessionId" | "subagentDepth" | "subagentMaxDepth"
 >;
 
 type AdvertisedToolMapInput = {
@@ -113,6 +113,9 @@ function filterSubagentToolDefinitionsAtDepthLimit(
   const filteredTools: HarnessToolDefinition[] = [];
 
   for (const tool of tools) {
+    if (session.localSubagentsOnly === true && isRemoteAgentTool(tool)) {
+      continue;
+    }
     if (delegationLimit.reached && isDelegatedRuntimeActionTool(tool)) {
       continue;
     }
@@ -129,6 +132,9 @@ function filterSubagentToolMapAtDepthLimit(
   const filteredTools = new Map<string, HarnessToolDefinition>();
 
   for (const [name, tool] of tools) {
+    if (session.localSubagentsOnly === true && isRemoteAgentTool(tool)) {
+      continue;
+    }
     if (delegationLimit.reached && isDelegatedRuntimeActionTool(tool)) {
       continue;
     }
@@ -159,6 +165,10 @@ function filterWorkflowHostToolsForRootSession(
 function isDelegatedRuntimeActionTool(definition: HarnessToolDefinition): boolean {
   const runtimeAction = definition.runtimeAction;
   return runtimeAction?.kind === "subagent-call" || runtimeAction?.kind === "remote-agent-call";
+}
+
+function isRemoteAgentTool(definition: HarnessToolDefinition): boolean {
+  return definition.runtimeAction?.kind === "remote-agent-call";
 }
 
 function isToolDefinitionList(

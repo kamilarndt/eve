@@ -23,6 +23,28 @@ describe("applyWorkflowTransform", () => {
     });
   });
 
+  it.each([
+    ["experimentalWorkflowEntry", "src/execution/experimental-workflow-entry.ts"],
+    ["experimentalWorkflowIteration", "src/execution/experimental-workflow-entry.ts"],
+  ] as const)("keeps the %s cross-deployment id stable", async (functionName, filename) => {
+    const transformed = await applyWorkflowTransform(
+      filename,
+      [
+        `export async function ${functionName}(): Promise<void> {`,
+        '  "use workflow";',
+        "}",
+        "",
+      ].join("\n"),
+      "workflow",
+      resolvePackageSourceFilePath(filename),
+      resolvePackageRoot(),
+    );
+
+    expect(transformed.workflowManifest.workflows?.[filename]?.[functionName]).toEqual({
+      workflowId: `workflow//eve//${functionName}`,
+    });
+  });
+
   it("registers step functions in step mode", async () => {
     const transformed = await applyWorkflowTransform(
       "steps/ping.ts",

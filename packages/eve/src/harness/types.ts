@@ -64,6 +64,8 @@ export interface HarnessSession {
   readonly continuationToken: string;
   readonly history: ModelMessage[];
   readonly limits?: SessionLimits;
+  /** Persistent workflow policy that excludes remote-agent delegation. */
+  readonly localSubagentsOnly?: boolean;
   readonly outputSchema?: JsonObject;
   /**
    * Stable identifier of the top user-facing session in the dispatch

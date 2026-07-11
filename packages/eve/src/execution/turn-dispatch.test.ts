@@ -6,15 +6,24 @@ import { forwardTurnDeliveryStep } from "#execution/forward-turn-delivery-step.j
 import type { SessionDeliveryHook } from "#execution/session-delivery-hook.js";
 import { dispatchAndAwaitTurn } from "#execution/turn-dispatch.js";
 import type { TurnControlPayload } from "#execution/turn-control-protocol.js";
+import {
+  dispatchTurnStep,
+  probeTurnWorkflowSettlementStep,
+  requestTurnWorkflowCancellationStep,
+} from "#execution/workflow-steps.js";
+import { TurnCancelledError } from "#harness/turn-cancellation.js";
 
 const createHookMock = vi.fn();
 
 vi.mock("#compiled/@workflow/core/index.js", () => ({
   createHook: (...args: unknown[]) => createHookMock(...args),
+  sleep: vi.fn(async () => undefined),
 }));
 
 vi.mock("./workflow-steps.js", () => ({
   dispatchTurnStep: vi.fn(async () => ({ runId: "turn-run" })),
+  probeTurnWorkflowSettlementStep: vi.fn(async () => true),
+  requestTurnWorkflowCancellationStep: vi.fn(async () => "turn-run"),
 }));
 
 vi.mock("./forward-turn-delivery-step.js", () => ({
@@ -25,6 +34,78 @@ describe("dispatchAndAwaitTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createHookMock.mockReset();
+  });
+
+  it("forwards the session cancellation signal to the turn", async () => {
+    const abortSignal = new AbortController().signal;
+    const state = createState("http:test");
+    installControlHook([
+      {
+        action: { kind: "done", output: "ok", serializedContext: {}, sessionState: state },
+        kind: "turn-result",
+      },
+    ]);
+
+    await dispatchAndAwaitTurn({
+      abortSignal,
+      bufferedDeliveries: [],
+      controlToken: "turn-control",
+      delivery: { kind: "deliver", payloads: [{ message: "start" }] },
+      deliveryHook: createDeliveryHook(),
+      mode: "task",
+      parentWritable: new WritableStream<Uint8Array>(),
+      serializedContext: {},
+      sessionState: state,
+    });
+
+    expect(dispatchTurnStep).toHaveBeenCalledWith(expect.objectContaining({ abortSignal }));
+  });
+
+  it("waits for the cancelled turn workflow to settle before returning", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new TurnCancelledError());
+    createHookMock.mockReturnValue(
+      createMockHook(() => new Promise<IteratorResult<TurnControlPayload>>(() => {})),
+    );
+    let releaseSettlement: (() => void) | undefined;
+    vi.mocked(probeTurnWorkflowSettlementStep)
+      .mockResolvedValueOnce(false)
+      .mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (releaseSettlement = () => resolve(true))),
+      );
+
+    const cancellation = dispatchAndAwaitTurn({
+      abortSignal: abortController.signal,
+      bufferedDeliveries: [],
+      controlToken: "turn-control",
+      delivery: { kind: "deliver", payloads: [{ message: "start" }] },
+      deliveryHook: createDeliveryHook(),
+      mode: "task",
+      parentWritable: new WritableStream<Uint8Array>(),
+      serializedContext: {},
+      sessionState: createState("http:test"),
+    });
+    await vi.waitFor(() =>
+      expect(probeTurnWorkflowSettlementStep).toHaveBeenCalledWith("turn-run"),
+    );
+    expect(requestTurnWorkflowCancellationStep).toHaveBeenCalledWith({
+      cancelToken: "turn-control:cancel",
+      fallbackRunId: "turn-run",
+    });
+    let settled = false;
+    void cancellation.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseSettlement?.();
+    await expect(cancellation).rejects.toBeInstanceOf(TurnCancelledError);
   });
 
   it("rekeys the public hook when the active turn changes its continuation token", async () => {

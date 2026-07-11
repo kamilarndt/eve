@@ -22,7 +22,11 @@ import type {
 import type { OpenAPISpecSource } from "#public/definitions/connections/openapi.js";
 import type { CompiledWorkspaceResourceRoot } from "#compiler/manifest.js";
 import type { WorkspaceRuntimeSpec } from "#runtime/workspace/types.js";
-import type { JsonObject } from "#shared/json.js";
+import type {
+  ExperimentalWorkflowAdvance,
+  ExperimentalWorkflowReferenceSchema,
+} from "#shared/experimental-workflow-definition.js";
+import type { JsonObject, JsonValue } from "#shared/json.js";
 import type { Optional } from "#shared/optional.js";
 import type { Node } from "#shared/node.js";
 import type {
@@ -42,6 +46,13 @@ import type { SandboxBootstrapContext, SandboxSessionContext } from "#shared/san
  * Runtime-owned source ref describing one additive config module import.
  */
 export type ResolvedModuleSourceRef = Readonly<ModuleSourceRef>;
+
+/** Live configured ExperimentalWorkflow adapter hydrated from authored source. */
+export interface ResolvedExperimentalWorkflowDefinition extends ResolvedModuleSourceRef {
+  readonly referenceSchema: ExperimentalWorkflowReferenceSchema;
+  load(reference: JsonValue): Promise<unknown>;
+  advance(input: ExperimentalWorkflowAdvance): Promise<unknown>;
+}
 
 /**
  * Authored instructions prompt resolved from `instructions.md` or
@@ -386,6 +397,8 @@ export interface ResolvedAgent {
    * filter the framework default tool set.
    */
   readonly disabledFrameworkTools: readonly string[];
+  /** App-owned persistence adapter for detached dynamic workflows, when configured. */
+  readonly experimentalWorkflow?: ResolvedExperimentalWorkflowDefinition;
   /**
    * Whether the author opted into the framework `Workflow` orchestration tool
    * by re-exporting the `Workflow` marker as the default export of a file in

@@ -18,6 +18,15 @@ export type CompiledToolEntry =
   | { readonly kind: "tool"; readonly definition: CompiledToolDefinition }
   | { readonly kind: "disabled"; readonly name: string }
   | { readonly kind: "enable-workflow" }
+  | {
+      readonly kind: "configured-workflow";
+      readonly definition: {
+        readonly exportName?: string;
+        readonly logicalPath: string;
+        readonly sourceId: string;
+        readonly sourceKind: "module";
+      };
+    }
   | { readonly kind: "dynamic-tool"; readonly definition: CompiledDynamicToolDefinition };
 
 /**
@@ -56,6 +65,18 @@ export async function compileToolEntry(
 
   if (entry.kind === "enable-workflow") {
     return { kind: "enable-workflow" };
+  }
+
+  if (entry.kind === "configured-workflow") {
+    return {
+      kind: "configured-workflow",
+      definition: {
+        exportName: source.exportName,
+        logicalPath: source.logicalPath,
+        sourceId: source.sourceId,
+        sourceKind: "module",
+      },
+    };
   }
 
   if (entry.kind === "dynamic-tool") {

@@ -2,6 +2,8 @@ const TURN_CANCELLED_ERROR_NAME = "TurnCancelledError";
 
 /** Terminal outcome of a cancelled turn. */
 export class TurnCancelledError extends Error {
+  readonly fatal = true;
+
   constructor(message = "The turn was cancelled.") {
     super(message);
     this.name = TURN_CANCELLED_ERROR_NAME;
@@ -33,4 +35,33 @@ export function throwIfTurnAborted(abortSignal: AbortSignal | undefined): void {
     throw abortSignal.reason;
   }
   throw new TurnCancelledError();
+}
+
+/** Races asynchronous turn work against its cancellation signal. */
+export async function raceWithTurnAbort<T>(
+  promise: Promise<T>,
+  abortSignal: AbortSignal | undefined,
+): Promise<T> {
+  if (abortSignal === undefined) {
+    return await promise;
+  }
+
+  throwIfTurnAborted(abortSignal);
+  let onAbort: () => void = () => {};
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => {
+      try {
+        throwIfTurnAborted(abortSignal);
+      } catch (error) {
+        reject(error);
+      }
+    };
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
+  }
 }

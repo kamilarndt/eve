@@ -1,4 +1,4 @@
-import { HookNotFoundError } from "#compiled/@workflow/errors/index.js";
+import { HookNotFoundError, WorkflowRunNotFoundError } from "#compiled/@workflow/errors/index.js";
 
 import type {
   DeliverInput,
@@ -9,6 +9,7 @@ import type {
   Runtime,
 } from "#channel/types.js";
 import { serializeContext } from "#context/serialize.js";
+import { LocalSubagentsOnlyKey } from "#context/keys.js";
 import {
   buildSessionAttributes,
   buildSubagentRootAttributes,
@@ -33,9 +34,16 @@ import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-
 import { buildRunContext } from "#execution/runtime-context.js";
 import { parseNdjsonStream } from "#execution/ndjson-stream.js";
 import { RuntimeNoActiveSessionError } from "#execution/runtime-errors.js";
+import { isTurnCancellation } from "#harness/turn-cancellation.js";
 
 const WORKFLOW_ENTRY_NAME = "workflowEntry";
 const TURN_WORKFLOW_NAME = "turnWorkflow";
+const EXPERIMENTAL_WORKFLOW_ENTRY_NAME = "experimentalWorkflowEntry";
+const EXPERIMENTAL_WORKFLOW_ITERATION_NAME = "experimentalWorkflowIteration";
+const SESSION_CANCEL_HOOK_RETRY_ATTEMPTS = 300;
+const SESSION_CANCEL_HOOK_RETRY_DELAY_MS = 100;
+const SESSION_CANCEL_SETTLE_ATTEMPTS = 300;
+const SESSION_CANCEL_SETTLE_DELAY_MS = 100;
 const EVE_PACKAGE_INFO = resolveInstalledPackageInfo();
 
 export const LATEST_DEPLOYMENT_UNSUPPORTED_MESSAGE =
@@ -54,6 +62,8 @@ export const LATEST_DEPLOYMENT_UNSUPPORTED_MESSAGE =
 export const STABLE_WORKFLOW_NAMES: ReadonlySet<string> = new Set([
   WORKFLOW_ENTRY_NAME,
   TURN_WORKFLOW_NAME,
+  EXPERIMENTAL_WORKFLOW_ENTRY_NAME,
+  EXPERIMENTAL_WORKFLOW_ITERATION_NAME,
 ]);
 
 const STABLE_ID_BASE = EVE_PACKAGE_INFO.name;
@@ -85,21 +95,97 @@ export const turnWorkflowReference = {
   workflowId: `workflow//${STABLE_ID_BASE}//${TURN_WORKFLOW_NAME}`,
 };
 
+/** Stable latest-deployment reference for configured dynamic workflow iterations. */
+export const experimentalWorkflowEntryReference = {
+  workflowId: `workflow//${STABLE_ID_BASE}//${EXPERIMENTAL_WORKFLOW_ENTRY_NAME}`,
+};
+
+/** Stable latest-deployment reference for one dynamic workflow program iteration. */
+export const experimentalWorkflowIterationReference = {
+  workflowId: `workflow//${STABLE_ID_BASE}//${EXPERIMENTAL_WORKFLOW_ITERATION_NAME}`,
+};
+
 /**
  * Creates a workflow-backed runtime whose long-lived driver owns the
  * event stream and dispatches each turn as a child workflow run.
  */
+export interface CancellableWorkflowRuntime extends Runtime {
+  cancel(sessionId: string): Promise<void>;
+}
+
+/** Delivers one cancel request and reports whether the run is already terminal. */
+export async function requestWorkflowRunCancellation(sessionId: string): Promise<boolean> {
+  try {
+    await resumeHook(`${sessionId}:cancel`, { kind: "cancel" });
+  } catch (error) {
+    if (!HookNotFoundError.is(error)) throw error;
+  }
+
+  let status: Awaited<ReturnType<typeof readWorkflowRunStatus>>;
+  try {
+    status = await readWorkflowRunStatus(sessionId);
+  } catch (error) {
+    if (WorkflowRunNotFoundError.is(error)) return false;
+    throw error;
+  }
+  if (status === "pending" || status === "running") return false;
+  // A terminal child no longer owns live descendants: every turn failure
+  // recursively settles its recorded children before the workflow exits.
+  // Cleanup callers therefore care only that ownership is terminal, not
+  // whether the child's own result succeeded.
+  return true;
+}
+
 export function createWorkflowRuntime(config: {
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
+  readonly localSubagentsOnly?: boolean;
   readonly nodeId?: string;
-}): Runtime {
+}): CancellableWorkflowRuntime {
   return {
+    async cancel(sessionId: string): Promise<void> {
+      const token = `${sessionId}:cancel`;
+      for (let attempt = 0; attempt < SESSION_CANCEL_HOOK_RETRY_ATTEMPTS; attempt += 1) {
+        try {
+          await resumeHook(token, { kind: "cancel" });
+          await waitForWorkflowRunToSettle(sessionId);
+          return;
+        } catch (error) {
+          if (!HookNotFoundError.is(error)) {
+            logError(log, "failed to cancel active session", error, { sessionId });
+            throw error;
+          }
+          let status: Awaited<ReturnType<typeof readWorkflowRunStatus>>;
+          try {
+            status = await readWorkflowRunStatus(sessionId);
+          } catch (statusError) {
+            if (!WorkflowRunNotFoundError.is(statusError)) throw statusError;
+            if (attempt === SESSION_CANCEL_HOOK_RETRY_ATTEMPTS - 1) {
+              throw new RuntimeNoActiveSessionError(sessionId);
+            }
+            await new Promise((resolve) => setTimeout(resolve, SESSION_CANCEL_HOOK_RETRY_DELAY_MS));
+            continue;
+          }
+          if (status === "completed" || status === "failed" || status === "cancelled") {
+            await assertWorkflowRunCancelledOrSuccessful(sessionId, status);
+            return;
+          }
+          if (attempt === SESSION_CANCEL_HOOK_RETRY_ATTEMPTS - 1) {
+            throw new RuntimeNoActiveSessionError(sessionId);
+          }
+          await new Promise((resolve) => setTimeout(resolve, SESSION_CANCEL_HOOK_RETRY_DELAY_MS));
+        }
+      }
+    },
+
     async run(input: RunInput): Promise<RunHandle> {
       const bundle = await getCompiledRuntimeAgentBundle({
         compiledArtifactsSource: config.compiledArtifactsSource,
         nodeId: config.nodeId,
       });
       const ctx = buildRunContext({ bundle, run: input });
+      if (config.localSubagentsOnly === true) {
+        ctx.set(LocalSubagentsOnlyKey, true);
+      }
       const serializedContext = serializeContext(ctx);
       const parentLineage = readParentLineage(serializedContext);
       const attributes =
@@ -189,6 +275,39 @@ export function createWorkflowRuntime(config: {
       );
     },
   };
+}
+
+async function readWorkflowRunStatus(
+  sessionId: string,
+): Promise<"cancelled" | "completed" | "failed" | "pending" | "running"> {
+  return await getRun(sessionId).status;
+}
+
+async function waitForWorkflowRunToSettle(sessionId: string): Promise<void> {
+  for (let attempt = 0; attempt < SESSION_CANCEL_SETTLE_ATTEMPTS; attempt += 1) {
+    const status = await readWorkflowRunStatus(sessionId);
+    if (status === "completed" || status === "failed" || status === "cancelled") {
+      await assertWorkflowRunCancelledOrSuccessful(sessionId, status);
+      return;
+    }
+    if (attempt === SESSION_CANCEL_SETTLE_ATTEMPTS - 1) {
+      throw new Error(`Timed out waiting for session "${sessionId}" to cancel.`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, SESSION_CANCEL_SETTLE_DELAY_MS));
+  }
+}
+
+async function assertWorkflowRunCancelledOrSuccessful(
+  sessionId: string,
+  status: "cancelled" | "completed" | "failed",
+): Promise<void> {
+  if (status !== "failed") return;
+  try {
+    await getRun(sessionId).returnValue;
+  } catch (error) {
+    if (isTurnCancellation(error)) return;
+    throw error;
+  }
 }
 
 /**

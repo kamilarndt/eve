@@ -18,6 +18,27 @@ interface WorkflowToolSet {
   readonly modelTools: ToolSet;
 }
 
+const WORKFLOW_RUNTIME_ACTION_ERROR_RESOLUTION_KIND =
+  "eve.workflow-runtime-action-error-resolution";
+
+interface WorkflowRuntimeActionErrorResolution {
+  readonly kind: typeof WORKFLOW_RUNTIME_ACTION_ERROR_RESOLUTION_KIND;
+  readonly message: string;
+  readonly output: unknown;
+}
+
+/** Marks a child failure so replay rejects the saved agent call instead of returning it. */
+export function createWorkflowRuntimeActionErrorResolution(
+  output: unknown,
+): WorkflowRuntimeActionErrorResolution {
+  const serialized = typeof output === "string" ? output : JSON.stringify(output);
+  return {
+    kind: WORKFLOW_RUNTIME_ACTION_ERROR_RESOLUTION_KIND,
+    message: serialized ?? String(output),
+    output,
+  };
+}
+
 /**
  * Adds the dynamic `Workflow` tool while leaving every ordinary model tool
  * untouched. Only subagent and remote-agent runtime actions enter the sandbox.
@@ -78,28 +99,46 @@ function workflowApiReference(generatedDescription: string): string {
 
 /** Rebuilds the subagent-only host surface used to resume a parked workflow. */
 export function buildWorkflowHostTools(input: { readonly tools: HarnessToolMap }): ToolSet {
-  return createWorkflowHostTools(input.tools, input.tools.keys());
+  return createWorkflowHostTools(input.tools, input.tools.keys(), false);
 }
 
-function createWorkflowHostTools(tools: HarnessToolMap, names: Iterable<string>): ToolSet {
+/** Host surface for saved programs, where failed child results reject the agent call. */
+export function buildDetachedWorkflowHostTools(input: { readonly tools: HarnessToolMap }): ToolSet {
+  return createWorkflowHostTools(input.tools, input.tools.keys(), true);
+}
+
+function createWorkflowHostTools(
+  tools: HarnessToolMap,
+  names: Iterable<string>,
+  throwErrorResolutions = false,
+): ToolSet {
   const hostTools: Record<string, ToolSet[string]> = {};
 
   for (const name of names) {
     const tool = tools.get(name);
     if (tool?.runtimeAction !== undefined) {
-      hostTools[name] = createWorkflowRuntimeActionHostTool(tool);
+      if (throwErrorResolutions && tool.runtimeAction.kind === "remote-agent-call") {
+        continue;
+      }
+      hostTools[name] = createWorkflowRuntimeActionHostTool(tool, throwErrorResolutions);
     }
   }
 
   return hostTools as ToolSet;
 }
 
-function createWorkflowRuntimeActionHostTool(harnessTool: HarnessToolDefinition): ToolSet[string] {
+function createWorkflowRuntimeActionHostTool(
+  harnessTool: HarnessToolDefinition,
+  throwErrorResolutions: boolean,
+): ToolSet[string] {
   return {
     description: harnessTool.description,
     inputSchema: harnessTool.inputSchema,
     execute: async (toolInput: unknown, options: unknown) => {
       const resolution = readWorkflowSandboxResolution(options);
+      if (throwErrorResolutions && isWorkflowRuntimeActionErrorResolution(resolution)) {
+        throw new Error(resolution.message, { cause: resolution.output });
+      }
       if (resolution !== undefined) return resolution;
 
       return requestWorkflowSandboxInterrupt({
@@ -110,4 +149,15 @@ function createWorkflowRuntimeActionHostTool(harnessTool: HarnessToolDefinition)
       });
     },
   } as ToolSet[string];
+}
+
+function isWorkflowRuntimeActionErrorResolution(
+  value: unknown,
+): value is WorkflowRuntimeActionErrorResolution {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Reflect.get(value, "kind") === WORKFLOW_RUNTIME_ACTION_ERROR_RESOLUTION_KIND &&
+    typeof Reflect.get(value, "message") === "string"
+  );
 }

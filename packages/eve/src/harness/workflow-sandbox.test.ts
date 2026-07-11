@@ -2,7 +2,12 @@ import { asSchema, jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
 
 import type { HarnessToolDefinition } from "#harness/execute-tool.js";
-import { applyWorkflowTool, buildWorkflowHostTools } from "#harness/workflow-sandbox.js";
+import {
+  applyWorkflowTool,
+  buildDetachedWorkflowHostTools,
+  buildWorkflowHostTools,
+  createWorkflowRuntimeActionErrorResolution,
+} from "#harness/workflow-sandbox.js";
 import { buildToolSet } from "#harness/tools.js";
 import type { HarnessToolMap } from "#harness/types.js";
 
@@ -123,6 +128,25 @@ describe("applyWorkflowTool", () => {
     expect(hostTools.researcher).toBeDefined();
     expect(hostTools.remote_reviewer).toBeDefined();
     expect(hostTools.bash).toBeUndefined();
+  });
+
+  it("rethrows failed child resolutions inside the saved program", async () => {
+    const hostTools = buildDetachedWorkflowHostTools({ tools: orchestrationTools() });
+
+    await expect(
+      hostTools.researcher?.execute?.({}, {
+        codeModeInterrupt: {
+          resolution: createWorkflowRuntimeActionErrorResolution({ message: "child failed" }),
+        },
+      } as never),
+    ).rejects.toThrow('{"message":"child failed"}');
+  });
+
+  it("excludes remote agents from detached programs because they cannot be cancelled", () => {
+    const hostTools = buildDetachedWorkflowHostTools({ tools: orchestrationTools() });
+
+    expect(hostTools.researcher).toBeDefined();
+    expect(hostTools.remote_reviewer).toBeUndefined();
   });
 
   it("does not construct ordinary tools while rebuilding the continuation surface", () => {

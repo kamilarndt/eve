@@ -35,6 +35,7 @@ type NormalizedToolEntry =
   | { readonly kind: "tool"; readonly definition: NormalizedAuthoredTool }
   | { readonly kind: "disabled" }
   | { readonly kind: "enable-workflow" }
+  | { readonly kind: "configured-workflow" }
   | {
       readonly kind: "dynamic-tool";
       readonly eventNames: readonly DynamicToolEventName[];
@@ -59,7 +60,35 @@ export function normalizeToolDefinition(value: unknown, message: string): Normal
     return { kind: "disabled" };
   }
   if (isEnableWorkflowToolSentinel(value)) {
-    return { kind: "enable-workflow" };
+    if (typeof value === "function") {
+      return { kind: "enable-workflow" };
+    }
+
+    const workflow = expectObjectRecord(value, message);
+    if (!("referenceSchema" in workflow)) {
+      expectOnlyKnownKeys(workflow, ["kind"], message);
+      return { kind: "enable-workflow" };
+    }
+
+    expectOnlyKnownKeys(
+      workflow,
+      ["advance", "kind", "load", "referenceSchema", "start", "stop"],
+      message,
+    );
+    const referenceSchema = expectObjectRecord(workflow.referenceSchema, message);
+    if (!("~standard" in referenceSchema)) throw new Error(message);
+    const standard = expectObjectRecord(referenceSchema["~standard"], message);
+    if (standard.version !== 1 || typeof standard.vendor !== "string") throw new Error(message);
+    expectFunction(standard.validate, message);
+    const jsonSchema = expectObjectRecord(standard.jsonSchema, message);
+    expectFunction(jsonSchema.input, message);
+    expectFunction(jsonSchema.output, message);
+    normalizeJsonSchemaDefinition(workflow.referenceSchema);
+    expectFunction(workflow.load, message);
+    expectFunction(workflow.advance, message);
+    expectFunction(workflow.start, message);
+    expectFunction(workflow.stop, message);
+    return { kind: "configured-workflow" };
   }
 
   const record = expectObjectRecord(value, message);

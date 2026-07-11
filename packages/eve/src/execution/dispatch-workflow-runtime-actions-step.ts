@@ -25,6 +25,7 @@ const log = createLogger("execution.dispatch-workflow-runtime-actions");
 
 /** Dispatches the child-agent action currently blocking a dynamic workflow. */
 export async function dispatchWorkflowRuntimeActionsStep(input: {
+  readonly abortSignal?: AbortSignal;
   readonly callbackBaseUrl?: string;
   readonly parentContinuationToken?: string;
   readonly parentWritable: WritableStream<Uint8Array>;
@@ -84,6 +85,7 @@ export async function dispatchWorkflowRuntimeActionsStep(input: {
   });
 
   const dispatched = await dispatchRuntimeActionsStep({
+    abortSignal: input.abortSignal,
     callbackBaseUrl: input.callbackBaseUrl,
     parentContinuationToken: input.parentContinuationToken,
     parentWritable: input.parentWritable,

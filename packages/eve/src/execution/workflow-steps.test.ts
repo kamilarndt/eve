@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ChannelAdapter, ChannelAdapterContext } from "#channel/adapter.js";
 import type { DeliverPayload, SubagentInputRequestHookPayload } from "#channel/types.js";
@@ -7,8 +7,12 @@ import { ContextKey } from "#context/key.js";
 import { AuthKey, ContinuationTokenKey, ModeKey, SessionIdKey } from "#context/keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { serializeContext } from "#context/serialize.js";
-import { setPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
+import {
+  getPendingLocalSubagentSessions,
+  setPendingRuntimeActionBatch,
+} from "#harness/runtime-actions.js";
 import { DEFAULT_SUBAGENT_MAX_DEPTH } from "#harness/subagent-depth.js";
+import { TurnCancelledError } from "#harness/turn-cancellation.js";
 import { getPendingAuthorization, setPendingAuthorization } from "#harness/authorization.js";
 import type { HarnessSession, StepResult } from "#harness/types.js";
 import { createEmptyHookRegistry } from "#runtime/hooks/registry.js";
@@ -82,7 +86,9 @@ function createStubSessionState(overrides: Partial<DurableSessionState> = {}): D
 }
 
 const DEFAULT_WORKFLOW_STREAM_NAMESPACE = "__default__";
+const getHookByTokenMock = vi.fn();
 const getRunMock = vi.fn();
+const resumeHookMock = vi.fn();
 const startMock = vi.fn();
 const workflowWritesByNamespace = new Map<string, unknown[]>();
 
@@ -107,10 +113,25 @@ vi.mock("../runtime/sessions/compiled-agent-cache.js", () => ({
 }));
 
 vi.mock("#compiled/@workflow/core/runtime.js", () => ({
+  getHookByToken: (...args: unknown[]) => getHookByTokenMock(...args),
   getRun: (...args: unknown[]) => getRunMock(...args),
-  resumeHook: vi.fn(),
+  resumeHook: (...args: unknown[]) => resumeHookMock(...args),
   start: (...args: unknown[]) => startMock(...args),
 }));
+
+beforeEach(() => {
+  const readsByToken = new Map<string, number>();
+  getHookByTokenMock.mockImplementation(async (token: string) => {
+    const reads = (readsByToken.get(token) ?? 0) + 1;
+    readsByToken.set(token, reads);
+    if (reads === 1) {
+      const error = new Error("Hook not found");
+      error.name = "HookNotFoundError";
+      throw error;
+    }
+    return { runId: token.endsWith(":inbox") ? "turn-run" : "child-run" };
+  });
+});
 
 const ThreadKey = new ContextKey<string>("test.workflow.thread");
 const TestTurnAgent = {
@@ -176,11 +197,14 @@ function createSerializedContext(): Record<string, unknown> {
 }
 
 afterEach(() => {
+  getHookByTokenMock.mockReset();
   getRunMock.mockReset();
+  resumeHookMock.mockReset();
   startMock.mockReset();
   workflowWritesByNamespace.clear();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -207,7 +231,7 @@ describe("dispatchTurnStep", () => {
   it("starts turn workflows on the latest deployment in Vercel production", async () => {
     vi.stubEnv("VERCEL_ENV", "production");
     const input = createTurnInput();
-    startMock.mockResolvedValue({ runId: "turn-run" });
+    startMock.mockResolvedValue({ runId: "losing-candidate" });
 
     await expect(dispatchTurnStep(input)).resolves.toEqual({ runId: "turn-run" });
 
@@ -225,6 +249,30 @@ describe("dispatchTurnStep", () => {
         deploymentId: "latest",
       },
     );
+  });
+
+  it("adopts an existing turn owner without starting a duplicate", async () => {
+    getHookByTokenMock.mockResolvedValue({ runId: "existing-owner" });
+
+    await expect(dispatchTurnStep(createTurnInput())).resolves.toEqual({
+      runId: "existing-owner",
+    });
+
+    expect(startMock).not.toHaveBeenCalled();
+  });
+
+  it("retains a queued turn candidate when ownership publication exceeds the bounded wait", async () => {
+    vi.useFakeTimers();
+    getHookByTokenMock.mockRejectedValue(
+      Object.assign(new Error("Hook not found"), { name: "HookNotFoundError" }),
+    );
+    getRunMock.mockReturnValue({ status: Promise.resolve("pending") });
+    startMock.mockResolvedValue({ runId: "queued-turn" });
+
+    const dispatched = dispatchTurnStep(createTurnInput());
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(dispatched).resolves.toEqual({ runId: "queued-turn" });
   });
 
   it("pins turn workflows to the current deployment off production", async () => {
@@ -317,7 +365,7 @@ describe("dispatchRuntimeActionsStep", () => {
       turnAgent: TestTurnAgent,
     } as never;
     vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
-    startMock.mockResolvedValue({ runId: "child-run" });
+    startMock.mockResolvedValue({ runId: "losing-candidate" });
     getRunMock.mockReturnValue({
       getReadable: () =>
         new ReadableStream<Uint8Array>({
@@ -412,6 +460,254 @@ describe("dispatchRuntimeActionsStep", () => {
       ],
       expect.any(Object),
     );
+    expect(getPendingLocalSubagentSessions(result.sessionState.snapshot?.session.state)).toEqual([
+      expect.objectContaining({ callId: "call-1", sessionId: "child-run" }),
+    ]);
+  });
+
+  it("persists a queued child candidate when ownership publication exceeds the bounded wait", async () => {
+    vi.useFakeTimers();
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue({
+      adapterRegistry: {
+        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
+      },
+      compiledArtifactsSource: {},
+      graph: {
+        nodesByNodeId: new Map(),
+        root: { sandboxRegistry: { sandbox: null }, turnAgent: TestTurnAgent },
+      },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: { subagentsByNodeId: new Map() },
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never);
+    getHookByTokenMock.mockRejectedValue(
+      Object.assign(new Error("Hook not found"), { name: "HookNotFoundError" }),
+    );
+    getRunMock.mockReturnValue({ status: Promise.resolve("pending") });
+    startMock.mockResolvedValue({ runId: "queued-child" });
+    const session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId: "call-1",
+          description: "queued child",
+          input: { message: "wait for ownership" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "subagents/delegate",
+          subagentName: "delegate",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+      responseMessages: [],
+      session: createStubSession({
+        continuationToken: "http:parent",
+        sessionId: "parent-session",
+      }),
+    });
+    installSessionStoreMocks([session]);
+
+    const dispatched = dispatchRuntimeActionsStep({
+      parentContinuationToken: "turn-inbox",
+      parentWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
+      sessionState: createStubSessionState({ sessionId: "parent-session" }),
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    const result = await dispatched;
+
+    expect(getPendingLocalSubagentSessions(result.sessionState.snapshot?.session.state)).toEqual([
+      expect.objectContaining({ callId: "call-1", sessionId: "queued-child" }),
+    ]);
+  });
+
+  it("cancels a started candidate when owner discovery fails", async () => {
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue({
+      adapterRegistry: {
+        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
+      },
+      compiledArtifactsSource: {},
+      graph: {
+        nodesByNodeId: new Map(),
+        root: { sandboxRegistry: { sandbox: null }, turnAgent: TestTurnAgent },
+      },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: { subagentsByNodeId: new Map() },
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never);
+    const ownerLookupFailure = new Error("owner lookup unavailable");
+    getHookByTokenMock
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Hook not found"), { name: "HookNotFoundError" }),
+      )
+      .mockRejectedValueOnce(ownerLookupFailure);
+    getRunMock.mockReturnValue({ status: Promise.resolve("completed") });
+    resumeHookMock.mockResolvedValue({ runId: "queued-child" });
+    startMock.mockResolvedValue({ runId: "queued-child" });
+    const session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId: "call-1",
+          description: "queued child",
+          input: { message: "wait for ownership" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "subagents/delegate",
+          subagentName: "delegate",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+      responseMessages: [],
+      session: createStubSession({
+        continuationToken: "http:parent",
+        sessionId: "parent-session",
+      }),
+    });
+    installSessionStoreMocks([session]);
+
+    await expect(
+      dispatchRuntimeActionsStep({
+        parentContinuationToken: "turn-inbox",
+        parentWritable: createTestWritable(),
+        serializedContext: createSerializedContext(),
+        sessionState: createStubSessionState({ sessionId: "parent-session" }),
+      }),
+    ).rejects.toBe(ownerLookupFailure);
+
+    expect(resumeHookMock).toHaveBeenCalledWith("queued-child:cancel", { kind: "cancel" });
+  });
+
+  it("finishes and persists the fanout when cancellation lands after it starts", async () => {
+    const abortController = new AbortController();
+    const compiledBundle = {
+      adapterRegistry: {
+        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
+      },
+      compiledArtifactsSource: {},
+      graph: {
+        nodesByNodeId: new Map(),
+        root: { sandboxRegistry: { sandbox: null }, turnAgent: TestTurnAgent },
+      },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: { subagentsByNodeId: new Map() },
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never;
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+    let starts = 0;
+    startMock.mockImplementation(async () => {
+      starts += 1;
+      if (starts === 1) abortController.abort(new TurnCancelledError());
+      return { runId: `candidate-${String(starts)}` };
+    });
+
+    const session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId: "call-1",
+          description: "first child",
+          input: { message: "first" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "subagents/delegate",
+          subagentName: "delegate",
+        },
+        {
+          callId: "call-2",
+          description: "second child",
+          input: { message: "second" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "subagents/delegate",
+          subagentName: "delegate",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+      responseMessages: [],
+      session: createStubSession({
+        continuationToken: "http:parent",
+        sessionId: "parent-session",
+      }),
+    });
+    installSessionStoreMocks([session]);
+
+    const result = await dispatchRuntimeActionsStep({
+      abortSignal: abortController.signal,
+      parentContinuationToken: "turn-inbox",
+      parentWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
+      sessionState: createStubSessionState({ sessionId: "parent-session" }),
+    });
+
+    expect(startMock).toHaveBeenCalledTimes(2);
+    expect(getPendingLocalSubagentSessions(result.sessionState.snapshot?.session.state)).toEqual([
+      expect.objectContaining({ callId: "call-1", sessionId: "child-run" }),
+      expect.objectContaining({ callId: "call-2", sessionId: "child-run" }),
+    ]);
+  });
+
+  it("waits for delayed ownership without starting work on an aborted replay", async () => {
+    const abortController = new AbortController();
+    abortController.abort(new TurnCancelledError());
+    const compiledBundle = {
+      adapterRegistry: {
+        adaptersByKind: new Map([[threadContextAdapter.kind, threadContextAdapter]]),
+      },
+      compiledArtifactsSource: {},
+      graph: {
+        nodesByNodeId: new Map(),
+        root: { sandboxRegistry: { sandbox: null }, turnAgent: TestTurnAgent },
+      },
+      hookRegistry: createEmptyHookRegistry(),
+      resolvedAgent: { config: {} },
+      subagentRegistry: { subagentsByNodeId: new Map() },
+      toolRegistry: {},
+      turnAgent: TestTurnAgent,
+    } as never;
+    vi.mocked(getCompiledRuntimeAgentBundle).mockResolvedValue(compiledBundle);
+    const session = setPendingRuntimeActionBatch({
+      actions: [
+        {
+          callId: "call-1",
+          description: "first child",
+          input: { message: "first" },
+          kind: "subagent-call",
+          name: "delegate",
+          nodeId: "subagents/delegate",
+          subagentName: "delegate",
+        },
+      ],
+      event: { sequence: 0, stepIndex: 0, turnId: "turn_0" },
+      responseMessages: [],
+      session: createStubSession({
+        continuationToken: "http:parent",
+        sessionId: "parent-session",
+      }),
+    });
+    installSessionStoreMocks([session]);
+
+    const result = await dispatchRuntimeActionsStep({
+      abortSignal: abortController.signal,
+      parentContinuationToken: "turn-inbox",
+      parentWritable: createTestWritable(),
+      serializedContext: createSerializedContext(),
+      sessionState: createStubSessionState({ sessionId: "parent-session" }),
+    });
+
+    expect(startMock).not.toHaveBeenCalled();
+    expect(getPendingLocalSubagentSessions(result.sessionState.snapshot?.session.state)).toEqual([
+      {
+        callId: "call-1",
+        continuationToken: "subagent:parent-session:call-1",
+        nodeId: "subagents/delegate",
+        sessionId: "child-run",
+      },
+    ]);
+    expect(getHookByTokenMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns a failed subagent result when remote session creation fails", async () => {

@@ -41,7 +41,7 @@ export const ROOT_COMPILED_AGENT_NODE_ID = "__root__";
 /**
  * Current compiled manifest schema version.
  */
-export const COMPILED_AGENT_MANIFEST_VERSION = 35;
+export const COMPILED_AGENT_MANIFEST_VERSION = 36;
 
 /**
  * Compiled channel entry preserved in the compiled manifest.
@@ -176,6 +176,9 @@ export type CompiledConnectionDefinition = z.infer<typeof compiledConnectionDefi
  * Normalized authored tool metadata preserved in the compiled manifest.
  */
 export type CompiledToolDefinition = InternalToolDefinition & ModuleSourceRef;
+
+/** Configured ExperimentalWorkflow authored module retained for runtime hydration. */
+export type CompiledExperimentalWorkflowDefinition = ModuleSourceRef;
 
 /**
  * Compiled dynamic tool resolver entry. The resolver function lives in the
@@ -574,6 +577,16 @@ const compiledToolDefinitionSchema = z
   })
   .strict();
 
+const compiledExperimentalWorkflowDefinitionSchema: z.ZodType<CompiledExperimentalWorkflowDefinition> =
+  z
+    .object({
+      exportName: z.string().optional(),
+      logicalPath: z.string(),
+      sourceId: z.string(),
+      sourceKind: z.literal("module"),
+    })
+    .strict();
+
 const compiledDynamicToolDefinitionSchema: z.ZodType<CompiledDynamicToolDefinition> = z
   .object({
     eventNames: z.array(z.string()).readonly(),
@@ -632,6 +645,7 @@ const compiledAgentNodeManifestSchema = z
     connections: z.array(compiledConnectionDefinitionSchema),
     diagnosticsSummary: discoverDiagnosticsSummarySchema,
     disabledFrameworkTools: z.array(z.string()).readonly(),
+    experimentalWorkflow: compiledExperimentalWorkflowDefinitionSchema.optional(),
     workflowEnabled: z.boolean().default(false),
     dynamicInstructions: z.array(compiledDynamicInstructionsDefinitionSchema).default([]),
     dynamicSkills: z.array(compiledDynamicSkillDefinitionSchema).default([]),
@@ -719,6 +733,7 @@ export const compiledAgentManifestSchema = z
     connections: z.array(compiledConnectionDefinitionSchema),
     diagnosticsSummary: discoverDiagnosticsSummarySchema,
     disabledFrameworkTools: z.array(z.string()).readonly(),
+    experimentalWorkflow: compiledExperimentalWorkflowDefinitionSchema.optional(),
     workflowEnabled: z.boolean().default(false),
     dynamicInstructions: z.array(compiledDynamicInstructionsDefinitionSchema).default([]),
     dynamicSkills: z.array(compiledDynamicSkillDefinitionSchema).default([]),
@@ -750,6 +765,7 @@ export function createCompiledAgentNodeManifest(input: {
   readonly connections?: readonly CompiledConnectionDefinition[];
   readonly diagnosticsSummary?: DiscoverDiagnosticsSummary;
   readonly disabledFrameworkTools?: readonly string[];
+  readonly experimentalWorkflow?: CompiledExperimentalWorkflowDefinition;
   readonly workflowEnabled?: boolean;
   readonly dynamicInstructions?: readonly CompiledDynamicInstructionsDefinition[];
   readonly dynamicSkills?: readonly CompiledDynamicSkillDefinition[];
@@ -853,6 +869,10 @@ export function createCompiledAgentNodeManifest(input: {
     node.instructions = input.instructions;
   }
 
+  if (input.experimentalWorkflow !== undefined) {
+    node.experimentalWorkflow = { ...input.experimentalWorkflow };
+  }
+
   return node;
 }
 
@@ -902,6 +922,7 @@ export function createCompiledAgentManifest(input: {
   readonly connections?: readonly CompiledConnectionDefinition[];
   readonly diagnosticsSummary?: DiscoverDiagnosticsSummary;
   readonly disabledFrameworkTools?: readonly string[];
+  readonly experimentalWorkflow?: CompiledExperimentalWorkflowDefinition;
   readonly workflowEnabled?: boolean;
   readonly dynamicSkills?: readonly CompiledDynamicSkillDefinition[];
   readonly dynamicTools?: readonly CompiledDynamicToolDefinition[];

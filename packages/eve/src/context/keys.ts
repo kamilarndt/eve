@@ -68,6 +68,8 @@ export const ChannelInstrumentationKey = new ContextKey<ChannelInstrumentationPr
 export const ModeKey = new ContextKey<RunMode>("eve.mode");
 export const ParentSessionKey = new ContextKey<SessionParent>("eve.parentSession");
 export const SubagentDepthKey = new ContextKey<number>("eve.subagentDepth");
+/** Restricts a persistent workflow and every descendant to local agents. */
+export const LocalSubagentsOnlyKey = new ContextKey<boolean>("eve.localSubagentsOnly");
 
 /**
  * Session-level capability flags (see {@link SessionCapabilities}). Set

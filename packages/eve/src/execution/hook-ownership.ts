@@ -35,6 +35,18 @@ export async function disposeHook(hook: {
   }
 }
 
+/** Disposes an owned hook whose raced iterator.next() may still be pending. */
+export async function disposeHookWithPendingRead<T>(
+  hook: Parameters<typeof disposeHook>[0],
+  iterator: AsyncIterator<T>,
+): Promise<void> {
+  // Workflow Hook iterators do not guarantee that return() settles while a
+  // prior next() is outstanding. Disposal is the durable cleanup event; the
+  // losing read promise must be abandoned rather than awaited.
+  void iterator;
+  await disposeHook(hook);
+}
+
 async function disposeAndThrow(hook: Hook<unknown>, error: unknown): Promise<never> {
   try {
     await disposeHook(hook);

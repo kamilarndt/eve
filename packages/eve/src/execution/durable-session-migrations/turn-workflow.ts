@@ -44,6 +44,7 @@ export interface TurnWorkflowInput {
 }
 
 export interface TurnWorkflowDispatchInput {
+  readonly abortSignal?: AbortSignal;
   readonly capabilities: SessionCapabilities | undefined;
   readonly completionToken: string;
   readonly delivery: HookPayload;
@@ -62,6 +63,7 @@ export function createTurnWorkflowInput(input: TurnWorkflowDispatchInput): TurnW
     driverCapabilities: { turnInbox: true },
     mode: input.mode,
     stepInput: {
+      abortSignal: input.abortSignal,
       input: input.delivery,
       parentWritable: input.parentWritable,
       serializedContext: input.serializedContext,

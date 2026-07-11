@@ -9,8 +9,58 @@ import {
 import type { CompiledModuleMap } from "../src/compiler/module-map.js";
 import { TEST_DEFAULT_MODEL_ID } from "../src/internal/testing/app-harness.js";
 import { ResolveAgentError, resolveAgent } from "../src/runtime/resolve-agent.js";
+import { ExperimentalWorkflow } from "../src/public/definitions/tool.js";
 
 describe("resolveAgent", () => {
+  it("hydrates configured ExperimentalWorkflow callbacks from its authored module", async () => {
+    const load = async () => null;
+    const advance = async () => null;
+    const definition = ExperimentalWorkflow({
+      referenceSchema: z.object({ loopId: z.string() }),
+      load,
+      advance,
+    });
+    const manifest = createCompiledAgentManifest({
+      agentRoot: "/app/agent",
+      appRoot: "/app",
+      config: {
+        model: {
+          id: TEST_DEFAULT_MODEL_ID,
+          routing: { kind: "gateway", target: "openai" },
+        },
+        name: "workflow-agent",
+      },
+      experimentalWorkflow: {
+        logicalPath: "tools/workflow.ts",
+        sourceId: "tools/workflow.ts",
+        sourceKind: "module",
+      },
+      workflowEnabled: true,
+    });
+
+    const resolved = await resolveAgent({
+      manifest,
+      moduleMap: {
+        nodes: {
+          [ROOT_COMPILED_AGENT_NODE_ID]: {
+            modules: {
+              "tools/workflow.ts": { default: definition },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.workflowEnabled).toBe(true);
+    expect(resolved.experimentalWorkflow).toMatchObject({
+      logicalPath: "tools/workflow.ts",
+      sourceId: "tools/workflow.ts",
+      sourceKind: "module",
+      load,
+      advance,
+    });
+  });
+
   it("hydrates compiled authored metadata and attaches tool execute functions", async () => {
     const slackChannelDefinition: CompiledChannelDefinition = {
       kind: "channel",

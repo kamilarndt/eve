@@ -4,6 +4,7 @@ import type { DeliverHookPayload } from "#channel/types.js";
 import { sendTurnControlStep, type TurnInboxPayload } from "#execution/turn-control-protocol.js";
 import { dispatchRuntimeActionsStep } from "#execution/dispatch-runtime-actions-step.js";
 import { dispatchWorkflowRuntimeActionsStep } from "#execution/dispatch-workflow-runtime-actions-step.js";
+import { cancelPendingLocalSubagentsUntilSettled } from "#execution/cancel-pending-local-subagents-until-settled.js";
 import {
   migrateTurnWorkflowInput,
   type TurnStepInput,
@@ -12,7 +13,7 @@ import {
 import {
   claimHookOwnership,
   closeHookIterator,
-  disposeHook,
+  disposeHookWithPendingRead,
   isHookConflictError,
 } from "#execution/hook-ownership.js";
 import type { NextDriverAction } from "#execution/next-driver-action.js";
@@ -24,6 +25,7 @@ import { normalizeSerializableError } from "#execution/workflow-errors.js";
 import { turnStep } from "#execution/workflow-steps.js";
 import { resolveRuntimeActionResultsForKeys } from "#harness/runtime-actions.js";
 import type { RuntimeActionResult } from "#runtime/actions/types.js";
+import { raceWithTurnAbort, TurnCancelledError } from "#harness/turn-cancellation.js";
 
 const TASK_MODE_WAIT_ERROR_MESSAGE = "Task mode cannot wait for follow-up input (`next: null`).";
 
@@ -47,7 +49,12 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
   // Hook promises and iterators share one durable cursor. Create the iterator before
   // claiming so conflict replay is consumed by getConflict(), not a later iterator read.
   const iterator = inbox[Symbol.asyncIterator]();
+  const abortController = new AbortController();
+  if (input.stepInput.abortSignal?.aborted === true) {
+    abortController.abort(new TurnCancelledError());
+  }
   const cursor = new TurnExecutionCursor({
+    abortSignal: abortController.signal,
     controlToken: input.completionToken,
     parentWritable: input.stepInput.parentWritable,
     serializedContext: input.stepInput.serializedContext,
@@ -62,6 +69,10 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
   const bufferedDeliveries: DeliverHookPayload[] = [];
   let nextStepInput = input.stepInput.input;
   let ownsInbox = false;
+  let cancelHook: ReturnType<typeof createHook<{ readonly kind: "turn-cancel" }>> | undefined;
+  let cancelIterator: AsyncIterator<{ readonly kind: "turn-cancel" }> | undefined;
+  let cancelWatcher: Promise<void> | undefined;
+  let ownsCancelHook = false;
 
   try {
     try {
@@ -71,6 +82,16 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
       if (isHookConflictError(error)) return;
       throw error;
     }
+
+    cancelHook = createHook<{ readonly kind: "turn-cancel" }>({
+      token: `${input.completionToken}:cancel`,
+    });
+    cancelIterator = cancelHook[Symbol.asyncIterator]();
+    await claimHookOwnership(cancelHook);
+    ownsCancelHook = true;
+    cancelWatcher = cancelIterator.next().then((next) => {
+      if (!next.done) abortController.abort(new TurnCancelledError());
+    });
 
     while (true) {
       const result = await turnStep(cursor.createStepInput(nextStepInput));
@@ -104,6 +125,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
             ? dispatchWorkflowRuntimeActionsStep
             : dispatchRuntimeActionsStep;
         const dispatchResult = await dispatch({
+          abortSignal: abortController.signal,
           callbackBaseUrl: resolveWorkflowCallbackBaseUrl(getWorkflowMetadata().url),
           parentContinuationToken: inbox.token,
           parentWritable: cursor.parentWritable,
@@ -120,6 +142,7 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
           iterator,
           nextDeliveryRequestId,
           pendingActionKeys,
+          abortSignal: abortController.signal,
         });
         nextStepInput = { kind: "runtime-action-result", results };
         continue;
@@ -148,15 +171,26 @@ async function runTurnOwnedWorkflow(input: TurnWorkflowInput): Promise<void> {
       nextStepInput = undefined;
     }
   } catch (error) {
+    await cancelPendingLocalSubagentsUntilSettled({
+      serializedContext: cursor.serializedContext,
+      sessionState: cursor.sessionState,
+    });
     await cursor.send({ error: normalizeSerializableError(error), kind: "turn-error" });
     throw error;
   } finally {
-    await closeHookIterator(iterator);
-    if (ownsInbox) await disposeHook(inbox);
+    if (ownsCancelHook && cancelHook !== undefined && cancelIterator !== undefined) {
+      await disposeHookWithPendingRead(cancelHook, cancelIterator);
+    } else if (cancelIterator !== undefined) {
+      await closeHookIterator(cancelIterator);
+    }
+    void cancelWatcher;
+    if (ownsInbox) await disposeHookWithPendingRead(inbox, iterator);
+    else await closeHookIterator(iterator);
   }
 }
 
 async function waitForRuntimeActionResults(input: {
+  readonly abortSignal?: AbortSignal;
   readonly bufferedDeliveries: DeliverHookPayload[];
   readonly cursor: TurnExecutionCursor;
   readonly inboxToken: string;
@@ -195,7 +229,7 @@ async function waitForRuntimeActionResults(input: {
       });
     }
 
-    const next = await input.iterator.next();
+    const next = await raceWithTurnAbort(input.iterator.next(), input.abortSignal);
     if (next.done) throw new Error("Turn inbox closed before runtime actions completed.");
 
     const value = next.value;
@@ -310,6 +344,7 @@ async function runLegacyTurnWorkflow(input: TurnWorkflowInput): Promise<void> {
       }
 
       currentStepInput = {
+        abortSignal: currentStepInput.abortSignal,
         input: undefined,
         parentWritable: currentStepInput.parentWritable,
         serializedContext: result.serializedContext,

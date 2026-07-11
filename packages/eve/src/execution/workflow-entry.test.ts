@@ -91,6 +91,7 @@ describe("workflowEntry", () => {
   beforeEach(() => {
     vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", "");
     vi.stubEnv("VERCEL_ENV", "");
+    vi.mocked(dispatchTurnStep).mockImplementation(async () => ({ runId: "turn-run" }));
   });
 
   afterEach(() => {
@@ -123,8 +124,13 @@ describe("workflowEntry", () => {
     expect(createSessionStep).toHaveBeenCalledWith({
       compiledArtifactsSource: {},
       continuationToken: "http:test",
+      inheritedLimits: undefined,
+      localSubagentsOnly: false,
       nodeId: undefined,
+      outputSchema: undefined,
+      rootSessionId: undefined,
       sessionId: "wrun_test_123",
+      subagentDepth: undefined,
     });
     expect(dispatchTurnStep).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -305,6 +311,98 @@ describe("workflowEntry", () => {
     });
   });
 
+  it("aborts an active task when the session cancellation hook resumes", async () => {
+    const sessionState = createBaseSessionState();
+    let turnSignal: AbortSignal | undefined;
+    let turnSettled = false;
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    vi.mocked(createHook).mockImplementation((options?: { readonly token?: string }) => {
+      const token = options?.token ?? "";
+      if (token.endsWith(":cancel")) {
+        return createMockHook({ token, values: [{ kind: "cancel" }] }) as never;
+      }
+      return createMockHook({
+        next: () => new Promise<IteratorResult<unknown>>(() => {}),
+        token,
+        values: [],
+      }) as never;
+    });
+    vi.mocked(dispatchTurnStep).mockImplementation(async (input) => {
+      turnSignal = input.abortSignal;
+      if (turnSignal === undefined) {
+        throw new Error("Session cancellation signal was not forwarded to the turn.");
+      }
+      return await new Promise<never>((_resolve, reject) => {
+        turnSignal?.addEventListener("abort", () => reject(turnSignal?.reason), { once: true });
+      }).finally(() => {
+        turnSettled = true;
+      });
+    });
+
+    await expect(
+      workflowEntry({
+        input: { message: "keep working" },
+        serializedContext: createSerializedContext({ "eve.mode": "task" }),
+      }),
+    ).rejects.toMatchObject({ name: "TurnCancelledError" });
+
+    expect(turnSignal?.aborted).toBe(true);
+    expect(turnSettled).toBe(true);
+    expect(dispatchTurnStep).toHaveBeenCalledOnce();
+    expect(emitTerminalSessionFailureStep).toHaveBeenCalledOnce();
+    expect(fireSessionCallbackStep).toHaveBeenCalledOnce();
+    expect(routeDeliverToChildren).not.toHaveBeenCalled();
+  });
+
+  it("cancels a parked conversation without waiting for another delivery", async () => {
+    const sessionState = createBaseSessionState();
+    let releaseCancellation: (() => void) | undefined;
+    const parked = new Promise<void>((resolve) => {
+      releaseCancellation = resolve;
+    });
+    vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
+    vi.mocked(createHook).mockImplementation((options?: { readonly token?: string }) => {
+      const token = options?.token ?? "";
+      if (token.endsWith(":cancel")) {
+        return createMockHook({
+          next: async () => {
+            await parked;
+            return { done: false, value: { kind: "cancel" } };
+          },
+          token,
+          values: [],
+        }) as never;
+      }
+      if (isTurnCompletionToken(token)) {
+        return createMockHook({
+          next: async () => {
+            releaseCancellation?.();
+            return { done: false, value: turnResult({ action: "park", sessionState }) };
+          },
+          token,
+          values: [],
+        }) as never;
+      }
+      return createMockHook({
+        next: () => new Promise<IteratorResult<unknown>>(() => {}),
+        token,
+        values: [],
+      }) as never;
+    });
+
+    await expect(
+      workflowEntry({
+        input: { message: "start" },
+        serializedContext: createSerializedContext(),
+      }),
+    ).rejects.toMatchObject({ name: "TurnCancelledError" });
+
+    expect(dispatchTurnStep).toHaveBeenCalledOnce();
+    expect(emitTerminalSessionFailureStep).toHaveBeenCalledOnce();
+    expect(fireSessionCallbackStep).toHaveBeenCalledOnce();
+    expect(routeDeliverToChildren).not.toHaveBeenCalled();
+  });
+
   it("passes the resumed channel request id to the next turn", async () => {
     const sessionState = createBaseSessionState();
     vi.mocked(createSessionStep).mockResolvedValue(createSessionStepResultForMock(sessionState));
@@ -356,6 +454,13 @@ describe("workflowEntry", () => {
     let completionIndex = 0;
     vi.mocked(createHook).mockImplementation((options?: { readonly token?: string }) => {
       const token = options?.token ?? "";
+      if (token.endsWith(":cancel")) {
+        return createMockHook({
+          next: () => new Promise<IteratorResult<unknown>>(() => {}),
+          token,
+          values: [],
+        }) as never;
+      }
       if (isTurnCompletionToken(token)) {
         return createMockHook<TurnControlPayload>({
           next: async () => {
@@ -424,6 +529,13 @@ describe("workflowEntry", () => {
 
     vi.mocked(createHook).mockImplementation((options?: { readonly token?: string }) => {
       const token = options?.token ?? "";
+      if (token.endsWith(":cancel")) {
+        return createMockHook({
+          next: () => new Promise<IteratorResult<unknown>>(() => {}),
+          token,
+          values: [],
+        }) as never;
+      }
       if (token.endsWith(":turn-control:0")) {
         return createMockHook({
           token,
@@ -765,6 +877,14 @@ function installHookMocks(input: {
       return createMockHook({ token, values: [] }) as never;
     }
 
+    if (token.endsWith(":cancel")) {
+      return createMockHook({
+        next: () => new Promise<IteratorResult<unknown>>(() => {}),
+        token,
+        values: [],
+      }) as never;
+    }
+
     const config = deliveryHooks.shift() ?? { token, values: [] };
     if (config.token !== token) {
       throw new Error(`Expected delivery hook token "${config.token}", received "${token}".`);
@@ -833,7 +953,10 @@ function nonTurnHookTokens(): string[] {
     .mock.calls.map((call) => call[0]?.token)
     .filter(
       (token): token is string =>
-        token !== undefined && !token.endsWith(":auth") && !isTurnCompletionToken(token),
+        token !== undefined &&
+        !token.endsWith(":auth") &&
+        !token.endsWith(":cancel") &&
+        !isTurnCompletionToken(token),
     );
 }
 

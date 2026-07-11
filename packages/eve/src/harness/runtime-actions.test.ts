@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  getPendingLocalSubagentSessions,
+  recordPendingSubagentChild,
   resolvePendingRuntimeActions,
   setPendingRuntimeActionBatch,
 } from "#harness/runtime-actions.js";
@@ -101,5 +103,25 @@ describe("resolvePendingRuntimeActions", () => {
       inputTokens: 1_000,
       outputTokens: 100,
     });
+  });
+});
+
+describe("pending local subagent sessions", () => {
+  it("persists the child session id beside its continuation token", () => {
+    const session = recordPendingSubagentChild({
+      callId: "call-1",
+      childContinuationToken: "child-continuation",
+      childSessionId: "child-session",
+      session: createParkedSession(),
+    });
+
+    expect(getPendingLocalSubagentSessions(session.state)).toEqual([
+      {
+        callId: "call-1",
+        continuationToken: "child-continuation",
+        nodeId: "subagents/researcher",
+        sessionId: "child-session",
+      },
+    ]);
   });
 });

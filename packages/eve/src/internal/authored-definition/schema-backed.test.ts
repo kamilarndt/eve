@@ -46,6 +46,103 @@ describe("normalizeToolDefinition", () => {
     expect(entry).toEqual({ kind: "enable-workflow" });
   });
 
+  it("preserves the bare opt-in when the authored-module loader invokes the callable marker", () => {
+    const materialized = Reflect.apply(ExperimentalWorkflow, undefined, []);
+
+    expect(normalizeToolDefinition(materialized, FAILURE_MESSAGE)).toEqual({
+      kind: "enable-workflow",
+    });
+  });
+
+  it("returns a configured-workflow entry for a callable ExperimentalWorkflow definition", () => {
+    const workflow = ExperimentalWorkflow({
+      referenceSchema: z.object({ loopId: z.string() }),
+      async load(reference) {
+        const loopId: string = reference.loopId;
+        // @ts-expect-error references are inferred from referenceSchema.
+        const missing = reference.missing;
+        void loopId;
+        void missing;
+        return {
+          cadence: { kind: "after-completion", delaySeconds: 10 },
+          dueAt: "2026-07-10T16:00:00.000Z",
+          input: { prompt: "Check open incidents." },
+          iteration: 0,
+          program: { js: "return input.prompt;" },
+        };
+      },
+      async advance(input) {
+        const loopId: string = input.reference.loopId;
+        void loopId;
+        return null;
+      },
+    });
+
+    const entry = normalizeToolDefinition(workflow, FAILURE_MESSAGE);
+
+    expect(entry).toEqual({ kind: "configured-workflow" });
+    expect(typeof workflow.start).toBe("function");
+    expect(typeof workflow.stop).toBe("function");
+  });
+
+  it("rejects a configured ExperimentalWorkflow without both persistence callbacks", () => {
+    expect(() =>
+      normalizeToolDefinition(
+        {
+          kind: "eve:enable-workflow-tool",
+          referenceSchema: z.object({ loopId: z.string() }),
+          load: async () => null,
+        },
+        FAILURE_MESSAGE,
+      ),
+    ).toThrow(FAILURE_MESSAGE);
+  });
+
+  it("rejects a configured ExperimentalWorkflow without a Standard JSON Schema reference", () => {
+    expect(() =>
+      normalizeToolDefinition(
+        {
+          advance: async () => null,
+          kind: "eve:enable-workflow-tool",
+          load: async () => null,
+          referenceSchema: { type: "object" },
+        },
+        FAILURE_MESSAGE,
+      ),
+    ).toThrow(FAILURE_MESSAGE);
+  });
+
+  it.each(["validate", "version", "vendor", "output"] as const)(
+    "rejects a forged configured workflow schema missing %s at compile time",
+    (missing) => {
+      const standard: Record<string, unknown> = {
+        jsonSchema: { input: () => ({}), output: () => ({}) },
+        validate: (value: unknown) => ({ value }),
+        vendor: "test",
+        version: 1,
+      };
+      if (missing === "output") {
+        standard.jsonSchema = { input: () => ({}) };
+      } else {
+        delete standard[missing];
+      }
+
+      expect(() =>
+        normalizeToolDefinition(
+          {
+            advance: async () => null,
+            kind: "eve:enable-workflow-tool",
+            load: async () => null,
+            referenceSchema: { "~standard": standard },
+            start: async () => ({ runId: "run" }),
+            stop: async () => ({ stopped: true }),
+          },
+          FAILURE_MESSAGE,
+        ),
+      ).toThrow(FAILURE_MESSAGE);
+    },
+  );
+
   it("rejects authored tool exports that carry an authored `name` field", () => {
     expect(() =>
       normalizeToolDefinition(

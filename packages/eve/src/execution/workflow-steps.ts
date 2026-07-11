@@ -1,4 +1,7 @@
 import { buildAdapterContext } from "#channel/adapter-context.js";
+import { readActiveHookOwner } from "#execution/active-hook-owner.js";
+import { HookNotFoundError, WorkflowRunNotFoundError } from "#compiled/@workflow/errors/index.js";
+import { FatalError } from "#compiled/@workflow/core/index.js";
 import { callAdapterEventHandler, defaultDeliverResult } from "#channel/adapter.js";
 import type { DeliverPayload, SessionAuthContext } from "#channel/types.js";
 import { dispatchStreamEventHooks } from "#context/hook-lifecycle.js";
@@ -20,6 +23,7 @@ import {
 } from "#harness/workflow-runtime-action-state.js";
 import { getPendingWorkflowInterrupt } from "#harness/workflow-interrupt-state.js";
 import { getPendingRuntimeActionBatch } from "#harness/runtime-actions.js";
+import { isTurnCancellation } from "#harness/turn-cancellation.js";
 import type { HarnessSession, StepInput, StepResult } from "#harness/types.js";
 import { getTurnUsageState, toUsage } from "#harness/turn-tag-state.js";
 import type { TokenUsage } from "#shared/token-usage.js";
@@ -67,7 +71,10 @@ import {
   startWorkflowPreferLatest,
   turnWorkflowReference,
 } from "#execution/workflow-runtime.js";
-import { resumeHook } from "#internal/workflow/runtime.js";
+import { getHookByToken, getRun, resumeHook } from "#internal/workflow/runtime.js";
+
+const TURN_OWNER_HOOK_RETRY_ATTEMPTS = 300;
+const TURN_OWNER_HOOK_RETRY_DELAY_MS = 100;
 
 /**
  * Result of one durable harness step, consumed by the turn workflow.
@@ -111,6 +118,15 @@ export type { TurnStepInput };
 export async function turnStep(rawInput: TurnStepInput): Promise<DurableStepResult> {
   "use step";
 
+  try {
+    return await executeTurnStep(rawInput);
+  } catch (error) {
+    if (!isTurnCancellation(error)) throw error;
+    throw Object.assign(new FatalError("The turn was cancelled."), { cause: error });
+  }
+}
+
+async function executeTurnStep(rawInput: TurnStepInput): Promise<DurableStepResult> {
   let input = rawInput;
 
   let durableSession = await readDurableSession(input.sessionState);
@@ -577,6 +593,10 @@ export async function dispatchTurnStep(
 ): Promise<{ readonly runId: string }> {
   "use step";
 
+  const inboxToken = `${input.completionToken}:inbox`;
+  const activeOwner = await readActiveHookOwner(inboxToken, "Turn inbox hook");
+  if (activeOwner !== null) return activeOwner;
+
   const run = await startWorkflowPreferLatest(
     turnWorkflowReference,
     [createTurnWorkflowInput(input)],
@@ -592,5 +612,73 @@ export async function dispatchTurnStep(
     },
   );
 
+  for (let attempt = 0; attempt < TURN_OWNER_HOOK_RETRY_ATTEMPTS; attempt += 1) {
+    const owner = await readActiveHookOwner(inboxToken, "Turn inbox hook");
+    if (owner !== null) return owner;
+
+    let status: Awaited<typeof run.status> | undefined;
+    try {
+      status = await run.status;
+    } catch (error) {
+      if (!WorkflowRunNotFoundError.is(error)) throw error;
+    }
+    if (status === "cancelled" || status === "completed" || status === "failed") {
+      return { runId: run.runId };
+    }
+    if (attempt === TURN_OWNER_HOOK_RETRY_ATTEMPTS - 1) {
+      // Preserve the durably started candidate. The driver can continue probing
+      // this run and the stable cancel hook instead of orphaning a queued turn.
+      return { runId: run.runId };
+    }
+    await new Promise((resolve) => setTimeout(resolve, TURN_OWNER_HOOK_RETRY_DELAY_MS));
+  }
   return { runId: run.runId };
+}
+
+/** Probes one dispatched turn without occupying a step worker for its lifetime. */
+export async function probeTurnWorkflowSettlementStep(runId: string): Promise<boolean> {
+  "use step";
+
+  const run = getRun(runId);
+  let status: Awaited<typeof run.status>;
+  try {
+    status = await run.status;
+  } catch (error) {
+    if (WorkflowRunNotFoundError.is(error)) return false;
+    throw error;
+  }
+  if (status === "pending" || status === "running") return false;
+
+  try {
+    await run.returnValue;
+  } catch (error) {
+    if (!isTurnCancellation(error)) throw error;
+  }
+  return true;
+}
+
+/** Requests cancellation once the turn's private hook becomes visible. */
+export async function requestTurnWorkflowCancellationStep(input: {
+  readonly cancelToken: string;
+  readonly fallbackRunId: string;
+}): Promise<string | null> {
+  "use step";
+
+  try {
+    const owner = await getHookByToken(input.cancelToken);
+    await resumeHook(owner, { kind: "turn-cancel" });
+    return owner.runId;
+  } catch (error) {
+    if (!HookNotFoundError.is(error)) throw error;
+  }
+
+  try {
+    const status = await getRun(input.fallbackRunId).status;
+    return status === "cancelled" || status === "completed" || status === "failed"
+      ? input.fallbackRunId
+      : null;
+  } catch (error) {
+    if (WorkflowRunNotFoundError.is(error)) return null;
+    throw error;
+  }
 }

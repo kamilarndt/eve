@@ -7,6 +7,7 @@ import {
   type CompiledExtensionMount,
   type CompiledDynamicSkillDefinition,
   type CompiledDynamicToolDefinition,
+  type CompiledExperimentalWorkflowDefinition,
   type CompiledInstructionsDefinition,
   type CompiledSkillDefinition,
   type CompiledToolDefinition,
@@ -107,6 +108,7 @@ async function compileAgentNodeManifest(
   const dynamicTools: CompiledDynamicToolDefinition[] = [];
   const disabledFrameworkTools: string[] = [];
   let workflowEnabled = false;
+  let experimentalWorkflow: CompiledExperimentalWorkflowDefinition | undefined;
 
   for (const entry of compiledToolEntries) {
     if (entry.kind === "tool") {
@@ -115,6 +117,17 @@ async function compileAgentNodeManifest(
       dynamicTools.push(entry.definition);
     } else if (entry.kind === "enable-workflow") {
       workflowEnabled = true;
+    } else if (entry.kind === "configured-workflow") {
+      if (options.allowWorkflowConfig === false) {
+        throw new Error(
+          `Configured ExperimentalWorkflow is only supported on the root agent. Remove "${entry.definition.logicalPath}" from "${manifest.agentId}".`,
+        );
+      }
+      if (experimentalWorkflow !== undefined) {
+        throw new Error("Only one configured ExperimentalWorkflow may be authored per agent.");
+      }
+      workflowEnabled = true;
+      experimentalWorkflow = entry.definition;
     } else {
       disabledFrameworkTools.push(entry.name);
     }
@@ -246,6 +259,7 @@ async function compileAgentNodeManifest(
     connections,
     diagnosticsSummary: manifest.diagnosticsSummary,
     disabledFrameworkTools,
+    experimentalWorkflow,
     workflowEnabled,
     dynamicSkills,
     dynamicTools,

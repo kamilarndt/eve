@@ -8,18 +8,21 @@
  */
 
 import { buildAdapterContext } from "#channel/adapter-context.js";
+import { readActiveHookOwner } from "#execution/active-hook-owner.js";
 import { callAdapterEventHandler } from "#channel/adapter.js";
+import { WorkflowRunNotFoundError } from "#compiled/@workflow/errors/index.js";
 import {
   AuthKey,
   CapabilitiesKey,
   ChannelInstrumentationKey,
   InitiatorAuthKey,
+  LocalSubagentsOnlyKey,
 } from "#context/keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { deserializeContext } from "#context/serialize.js";
 import {
   getPendingRuntimeActionBatch,
-  recordPendingSubagentChildToken,
+  recordPendingSubagentChild,
 } from "#harness/runtime-actions.js";
 import {
   createSubagentCalledEvent,
@@ -39,10 +42,12 @@ import {
   resolveRemoteAgentForAction,
   startRemoteAgentSession,
 } from "#execution/remote-agent-dispatch.js";
-import { hydrateDurableSession } from "#execution/session.js";
+import { hydrateDurableSession, mintSubagentContinuationToken } from "#execution/session.js";
 import { buildSubagentRunInput, type SubagentInputSource } from "#execution/subagent-tool.js";
 import { createWorkflowRuntime, workflowEntryReference } from "#execution/workflow-runtime.js";
+import { cancelLocalSubagentChildren } from "#execution/cancel-local-subagent-children.js";
 import { createLogger, logError } from "#internal/logging.js";
+import { getRun } from "#internal/workflow/runtime.js";
 import { toErrorMessage } from "#shared/errors.js";
 import {
   type DelegatedRuntimeActionRequest,
@@ -53,8 +58,12 @@ import {
 } from "#harness/subagent-depth.js";
 
 const log = createLogger("execution.dispatch-runtime-actions");
+const CHILD_OWNER_HOOK_RETRY_ATTEMPTS = 300;
+const CHILD_OWNER_HOOK_RETRY_DELAY_MS = 100;
+const ABORTED_REPLAY_OWNER_PUBLICATION_TIMEOUT_MS = 30_000;
 
 export async function dispatchRuntimeActionsStep(input: {
+  readonly abortSignal?: AbortSignal;
   readonly callbackBaseUrl?: string;
   /** Internal hook that receives child completion and HITL payloads. */
   readonly parentContinuationToken?: string;
@@ -88,6 +97,7 @@ export async function dispatchRuntimeActionsStep(input: {
   const capabilities = ctx.get(CapabilitiesKey);
   const channelMetadata = ctx.get(ChannelInstrumentationKey);
   const initiatorAuth = ctx.get(InitiatorAuthKey) ?? null;
+  const localSubagentsOnly = ctx.get(LocalSubagentsOnlyKey) === true;
   const writer = input.parentWritable.getWriter();
 
   const adapterCtx = buildAdapterContext(adapter, ctx);
@@ -100,7 +110,32 @@ export async function dispatchRuntimeActionsStep(input: {
 
   let nextSession = session;
   const results: RuntimeSubagentResultActionResult[] = [];
+  const startedLocalChildren: Array<{
+    readonly runtime: ReturnType<typeof createWorkflowRuntime>;
+    readonly sessionId: string;
+  }> = [];
+  const mayStartMissingActions = input.abortSignal?.aborted !== true;
+  const abortedReplayOwners = mayStartMissingActions
+    ? undefined
+    : await waitForAbortedReplayOwners(
+        batch.actions.flatMap((action) =>
+          action.kind === "subagent-call"
+            ? [
+                {
+                  callId: action.callId,
+                  continuationToken: mintSubagentContinuationToken(
+                    `${session.sessionId}:${action.callId}`,
+                  ),
+                },
+              ]
+            : [],
+        ),
+      );
 
+  // Once fan-out starts, finish and persist the whole short start batch. A
+  // mid-loop abort would otherwise strand already-started children whose ids
+  // never reach the durable parent cursor. On an already-aborted replay, only
+  // adopt owners made visible by the lost attempt; do not start new work.
   try {
     for (const action of batch.actions) {
       if (delegationLimit.reached && isSubagentDelegationAction(action)) {
@@ -112,6 +147,19 @@ export async function dispatchRuntimeActionsStep(input: {
           subagentName: getSubagentDelegationName(action),
         });
         results.push(createSubagentDepthLimitResult({ action, delegationLimit }));
+        continue;
+      }
+      if (localSubagentsOnly && action.kind === "remote-agent-call") {
+        results.push({
+          callId: action.callId,
+          isError: true,
+          kind: "subagent-result",
+          output: {
+            code: "PERSISTENT_WORKFLOW_REMOTE_AGENT_FORBIDDEN",
+            message: "Persistent workflows may call only local subagents.",
+          },
+          subagentName: action.remoteAgentName,
+        });
         continue;
       }
 
@@ -129,6 +177,7 @@ export async function dispatchRuntimeActionsStep(input: {
               : { type: "runtime" };
           const childRuntime = createWorkflowRuntime({
             compiledArtifactsSource: bundle.compiledArtifactsSource,
+            localSubagentsOnly,
             nodeId: action.nodeId,
           });
           const { childContinuationToken, runInput } = buildSubagentRunInput({
@@ -143,19 +192,51 @@ export async function dispatchRuntimeActionsStep(input: {
             session,
             source,
           });
-          const handle = await childRuntime.run(runInput);
-
-          nextSession = recordPendingSubagentChildToken({
+          const activeOwner =
+            abortedReplayOwners?.get(action.callId) ??
+            (await readActiveHookOwner(childContinuationToken, "Local subagent continuation hook"));
+          if (activeOwner !== null) {
+            childSessionId = activeOwner.runId;
+          } else {
+            if (!mayStartMissingActions) continue;
+            const handle = await childRuntime.run(runInput);
+            childSessionId = handle.sessionId;
+          }
+          // Record the durably started candidate before owner discovery. The
+          // lookup can still fail for an unrelated backend error; catch cleanup
+          // must retain an address for every run already started by this step.
+          startedLocalChildren.push({ runtime: childRuntime, sessionId: childSessionId });
+          nextSession = recordPendingSubagentChild({
             callId: action.callId,
             childContinuationToken,
+            childSessionId,
             session: nextSession,
           });
-          childSessionId = handle.sessionId;
+          if (activeOwner === null) {
+            const ownerSessionId = await waitForLocalSubagentOwner({
+              candidateRunId: childSessionId,
+              continuationToken: childContinuationToken,
+            });
+            if (ownerSessionId !== childSessionId) {
+              childSessionId = ownerSessionId;
+              startedLocalChildren[startedLocalChildren.length - 1] = {
+                runtime: childRuntime,
+                sessionId: childSessionId,
+              };
+              nextSession = recordPendingSubagentChild({
+                callId: action.callId,
+                childContinuationToken,
+                childSessionId,
+                session: nextSession,
+              });
+            }
+          }
           name = action.name;
           toolName = action.subagentName;
           break;
         }
         case "remote-agent-call": {
+          if (!mayStartMissingActions) continue;
           let resolvedRemote;
           try {
             resolvedRemote = resolveRemoteAgentForAction({
@@ -205,6 +286,21 @@ export async function dispatchRuntimeActionsStep(input: {
       );
       await writer.write(encodeMessageStreamEvent(timestampHandleMessageStreamEvent(parentEvent)));
     }
+  } catch (error) {
+    try {
+      await cancelLocalSubagentChildren(
+        startedLocalChildren.map((child) => ({
+          cancel: () => child.runtime.cancel(child.sessionId),
+          sessionId: child.sessionId,
+        })),
+      );
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Runtime action dispatch failed and local child cleanup did not complete: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+      );
+    }
+    throw error;
   } finally {
     writer.releaseLock();
   }
@@ -215,6 +311,70 @@ export async function dispatchRuntimeActionsStep(input: {
       : createDurableSessionState({ session: nextSession });
 
   return { results, sessionState: nextState };
+}
+
+async function waitForAbortedReplayOwners(
+  children: readonly { readonly callId: string; readonly continuationToken: string }[],
+): Promise<ReadonlyMap<string, { readonly runId: string }>> {
+  const owners = new Map<string, { readonly runId: string }>();
+  const pending = new Map(children.map((child) => [child.callId, child]));
+  const deadline = Date.now() + ABORTED_REPLAY_OWNER_PUBLICATION_TIMEOUT_MS;
+
+  while (pending.size > 0) {
+    const observations = await Promise.all(
+      [...pending.values()].map(async (child) => ({
+        child,
+        owner: await readActiveHookOwner(
+          child.continuationToken,
+          "Local subagent continuation hook",
+        ),
+      })),
+    );
+    for (const { child, owner } of observations) {
+      if (owner === null) continue;
+      owners.set(child.callId, owner);
+      pending.delete(child.callId);
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (pending.size === 0 || remainingMs <= 0) break;
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(CHILD_OWNER_HOOK_RETRY_DELAY_MS, remainingMs)),
+    );
+  }
+
+  return owners;
+}
+
+async function waitForLocalSubagentOwner(input: {
+  readonly candidateRunId: string;
+  readonly continuationToken: string;
+}): Promise<string> {
+  for (let attempt = 0; attempt < CHILD_OWNER_HOOK_RETRY_ATTEMPTS; attempt += 1) {
+    const owner = await readActiveHookOwner(
+      input.continuationToken,
+      "Local subagent continuation hook",
+    );
+    if (owner !== null) return owner.runId;
+
+    let status: Awaited<ReturnType<typeof getRun>["status"]> | undefined;
+    try {
+      status = await getRun(input.candidateRunId).status;
+    } catch (error) {
+      if (!WorkflowRunNotFoundError.is(error)) throw error;
+    }
+    if (status === "cancelled" || status === "completed" || status === "failed") {
+      return input.candidateRunId;
+    }
+    if (attempt === CHILD_OWNER_HOOK_RETRY_ATTEMPTS - 1) {
+      // The start itself is already durable. Keep the candidate addressable in
+      // parent state so a later result or cancellation can still settle it even
+      // when hook publication is delayed beyond this step's bounded wait.
+      return input.candidateRunId;
+    }
+    await new Promise((resolve) => setTimeout(resolve, CHILD_OWNER_HOOK_RETRY_DELAY_MS));
+  }
+  return input.candidateRunId;
 }
 
 function createRemoteAgentStartFailureResult(input: {

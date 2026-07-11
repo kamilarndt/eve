@@ -8,6 +8,7 @@ import type {
   SessionCapabilities,
 } from "#channel/types.js";
 import { coalesceDeliveries } from "#harness/messages.js";
+import { LocalSubagentsOnlyKey } from "#context/keys.js";
 import { readChannelRequestId, readRootSessionId } from "#execution/eve-workflow-attributes.js";
 import type { RunMode } from "#shared/run-mode.js";
 import type { RuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
@@ -30,6 +31,12 @@ import {
   type SessionDeliveryHook,
 } from "#execution/session-delivery-hook.js";
 import { readSerializedSubagentDepth } from "#harness/subagent-depth.js";
+import {
+  isTurnCancellation,
+  raceWithTurnAbort,
+  throwIfTurnAborted,
+  TurnCancelledError,
+} from "#harness/turn-cancellation.js";
 
 // workflow-entry.ts is the durable workflow body — the bundler rejects
 // node built-ins here, so `internal/logging.ts` cannot be imported.
@@ -83,6 +90,9 @@ export async function workflowEntry(input: WorkflowEntryInput): Promise<Workflow
   input.serializedContext["eve.sessionId"] = sessionId;
 
   const driverWritable = getWritable<Uint8Array>();
+  const abortController = new AbortController();
+  const cancelHook = createHook<{ readonly kind: "cancel" }>({ token: `${sessionId}:cancel` });
+  const cancelIterator = cancelHook[Symbol.asyncIterator]();
 
   try {
     // Derived once and reused for createSession + tag emission so the
@@ -94,6 +104,7 @@ export async function workflowEntry(input: WorkflowEntryInput): Promise<Workflow
       compiledArtifactsSource: serializedBundle.source,
       continuationToken,
       inheritedLimits: input.limits,
+      localSubagentsOnly: input.serializedContext[LocalSubagentsOnlyKey.name] === true,
       nodeId: serializedBundle.nodeId,
       outputSchema: input.input.outputSchema,
       rootSessionId: rootSessionIdFromParent,
@@ -101,7 +112,8 @@ export async function workflowEntry(input: WorkflowEntryInput): Promise<Workflow
       subagentDepth,
     });
 
-    return await runDriverLoop({
+    const driverResult = runDriverLoop({
+      abortSignal: abortController.signal,
       capabilities,
       driverWritable,
       initialInput: {
@@ -119,6 +131,26 @@ export async function workflowEntry(input: WorkflowEntryInput): Promise<Workflow
       serializedContext: input.serializedContext,
       sessionState,
     });
+    const outcome = await Promise.race([
+      driverResult.then((result) => ({ kind: "driver" as const, result })),
+      cancelIterator.next().then((result) => ({ kind: "cancel" as const, result })),
+    ]);
+
+    if (outcome.kind === "driver") {
+      return outcome.result;
+    }
+    if (outcome.result.done) {
+      return await driverResult;
+    }
+
+    const cancellation = new TurnCancelledError("The session was cancelled.");
+    abortController.abort(cancellation);
+    try {
+      await driverResult;
+    } catch (error) {
+      if (!isTurnCancellation(error)) throw error;
+    }
+    throw cancellation;
   } catch (error) {
     // Safety net for failures the tool-loop harness does not already
     // surface as `session.failed` (deserialization, runtime-action
@@ -139,10 +171,13 @@ export async function workflowEntry(input: WorkflowEntryInput): Promise<Workflow
       serializedContext: input.serializedContext,
     });
     throw error;
+  } finally {
+    await disposeHook(cancelHook);
   }
 }
 
 async function runDriverLoop(input: {
+  readonly abortSignal: AbortSignal;
   readonly capabilities?: SessionCapabilities;
   readonly driverWritable: WritableStream<Uint8Array>;
   readonly initialInput: HookPayload;
@@ -173,6 +208,7 @@ async function runDriverLoop(input: {
     }
 
     let action: NextDriverAction = await dispatchAndAwaitTurn({
+      abortSignal: input.abortSignal,
       bufferedDeliveries,
       capabilities: input.capabilities,
       controlToken: nextTurnControlToken(),
@@ -225,6 +261,7 @@ async function runDriverLoop(input: {
         }
 
         action = await dispatchAndAwaitTurn({
+          abortSignal: input.abortSignal,
           bufferedDeliveries,
           capabilities: input.capabilities,
           controlToken: nextTurnControlToken(),
@@ -242,6 +279,7 @@ async function runDriverLoop(input: {
       }
 
       const nextDeliver = await waitForNextDeliver({
+        abortSignal: input.abortSignal,
         bufferedDeliveries,
         deliveryHook,
       });
@@ -263,6 +301,7 @@ async function runDriverLoop(input: {
       }
 
       action = await dispatchAndAwaitTurn({
+        abortSignal: input.abortSignal,
         bufferedDeliveries,
         capabilities: input.capabilities,
         controlToken: nextTurnControlToken(),
@@ -311,15 +350,17 @@ async function finalizeDone(input: {
 }
 
 async function waitForNextDeliver(input: {
+  readonly abortSignal: AbortSignal;
   readonly bufferedDeliveries: DeliverHookPayload[];
   readonly deliveryHook: SessionDeliveryHook;
 }): Promise<DeliverHookPayload | null> {
+  throwIfTurnAborted(input.abortSignal);
   if (input.bufferedDeliveries.length > 0) {
     return coalesceDeliveries(input.bufferedDeliveries.splice(0));
   }
 
   while (true) {
-    const first = await input.deliveryHook.next();
+    const first = await raceWithTurnAbort(input.deliveryHook.next(), input.abortSignal);
     input.deliveryHook.consumeNext();
 
     if (first.done) {

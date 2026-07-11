@@ -65,6 +65,7 @@ export interface CreateSessionInput {
   readonly sessionId: string;
   readonly turnAgent: RuntimeTurnAgent;
   readonly limits?: AuthoredSessionLimits;
+  readonly localSubagentsOnly?: boolean;
   readonly outputSchema?: HarnessSession["outputSchema"];
   readonly skillRoot?: string;
   readonly subagentDepth?: number;
@@ -105,6 +106,9 @@ export function createSession(input: CreateSessionInput): HarnessSession {
     session.rootSessionId = input.rootSessionId;
   }
   session.limits = resolveSessionLimits(input);
+  if (input.localSubagentsOnly === true) {
+    session.localSubagentsOnly = true;
+  }
   if (input.outputSchema !== undefined) {
     session.outputSchema = input.outputSchema;
   }
@@ -197,6 +201,7 @@ export function projectToDurableSession(session: HarnessSession): DurableSession
     continuationToken: string;
     history: HarnessSession["history"];
     limits?: HarnessSession["limits"];
+    localSubagentsOnly?: boolean;
     outputSchema?: HarnessSession["outputSchema"];
     rootSessionId?: string;
     sandboxState?: HarnessSession["sandboxState"];
@@ -226,6 +231,9 @@ export function projectToDurableSession(session: HarnessSession): DurableSession
   }
   if (session.limits !== undefined) {
     durable.limits = session.limits;
+  }
+  if (session.localSubagentsOnly === true) {
+    durable.localSubagentsOnly = true;
   }
   if (session.outputSchema !== undefined) {
     durable.outputSchema = session.outputSchema;
@@ -294,6 +302,9 @@ export function hydrateDurableSession(input: {
   // an uncapped session uncapped instead of re-applying the root default.
   if (durable.limits !== undefined) {
     session.limits = durable.limits;
+  }
+  if (durable.localSubagentsOnly === true) {
+    session.localSubagentsOnly = true;
   }
   if (durable.outputSchema !== undefined) {
     session.outputSchema = durable.outputSchema;

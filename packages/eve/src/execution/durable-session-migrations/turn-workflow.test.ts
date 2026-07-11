@@ -33,12 +33,14 @@ describe("turn workflow wire migrations", () => {
   });
 
   it("creates versioned workflow input for new turn workflow starts", () => {
+    const abortSignal = new AbortController().signal;
     const delivery = createDelivery();
     const parentWritable = new WritableStream<Uint8Array>();
     const sessionState = createSessionState();
 
     expect(
       createTurnWorkflowInput({
+        abortSignal,
         capabilities: undefined,
         completionToken: "turn-token",
         delivery,
@@ -53,6 +55,7 @@ describe("turn workflow wire migrations", () => {
       driverCapabilities: { turnInbox: true },
       mode: "conversation",
       stepInput: {
+        abortSignal,
         input: delivery,
         parentWritable,
         serializedContext: { state: "driver" },

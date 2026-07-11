@@ -4,7 +4,16 @@ import { stampDefinitionKey } from "#public/tool-result-narrowing.js";
 import type { PublicToolDefinition, ToolModelOutput } from "#shared/tool-definition.js";
 import type { SessionContext } from "#public/definitions/callback-context.js";
 import type { Approval } from "#public/definitions/approval.js";
-import type { JsonObject } from "#shared/json.js";
+import type { JsonObject, JsonValue } from "#shared/json.js";
+import type {
+  ExperimentalWorkflowConfig,
+  ExperimentalWorkflowControlContext,
+  ExperimentalWorkflowDefinition,
+  ExperimentalWorkflowReferenceSchema,
+  ExperimentalWorkflowStartResult,
+  ExperimentalWorkflowStopInput,
+  ExperimentalWorkflowStopResult,
+} from "#shared/experimental-workflow-definition.js";
 import type {
   AuthorizationDefinition,
   ConnectionAuthorizationContext,
@@ -345,6 +354,18 @@ export interface EnableWorkflowToolSentinel {
   readonly kind: typeof ENABLE_WORKFLOW_TOOL_SENTINEL_KIND;
 }
 
+/** Callable opt-in that may retain an app-owned dynamic workflow adapter. */
+export interface ExperimentalWorkflowFactory extends EnableWorkflowToolSentinel {
+  (): EnableWorkflowToolSentinel;
+  <
+    TReferenceSchema extends ExperimentalWorkflowReferenceSchema,
+    TInput extends JsonValue = JsonValue,
+    TState extends JsonValue = JsonValue,
+  >(
+    definition: ExperimentalWorkflowConfig<TReferenceSchema, TInput, TState>,
+  ): ExperimentalWorkflowDefinition<TReferenceSchema, TInput, TState>;
+}
+
 /**
  * Opt-in marker for the framework `Workflow` tool, an isolated JavaScript sandbox whose
  * only callable operations are this agent's subagents and remote agents, for
@@ -362,9 +383,55 @@ export interface EnableWorkflowToolSentinel {
  * The capability is experimental. The resulting model-facing tool is still
  * called `Workflow`.
  */
-export const ExperimentalWorkflow: EnableWorkflowToolSentinel = Object.freeze({
+function configureExperimentalWorkflow(): EnableWorkflowToolSentinel;
+function configureExperimentalWorkflow<
+  TReferenceSchema extends ExperimentalWorkflowReferenceSchema,
+  TInput extends JsonValue = JsonValue,
+  TState extends JsonValue = JsonValue,
+>(
+  definition: ExperimentalWorkflowConfig<TReferenceSchema, TInput, TState>,
+): ExperimentalWorkflowDefinition<TReferenceSchema, TInput, TState>;
+function configureExperimentalWorkflow<
+  TReferenceSchema extends ExperimentalWorkflowReferenceSchema,
+  TInput extends JsonValue = JsonValue,
+  TState extends JsonValue = JsonValue,
+>(
+  definition?: ExperimentalWorkflowConfig<TReferenceSchema, TInput, TState>,
+): EnableWorkflowToolSentinel | ExperimentalWorkflowDefinition<TReferenceSchema, TInput, TState> {
+  if (definition === undefined) return enableWorkflowMarker;
+  return Object.freeze({
+    ...definition,
+    kind: ENABLE_WORKFLOW_TOOL_SENTINEL_KIND,
+    async start(
+      reference: StandardJSONSchemaV1.InferInput<TReferenceSchema>,
+      context: ExperimentalWorkflowControlContext,
+    ): Promise<ExperimentalWorkflowStartResult> {
+      const { startExperimentalWorkflow } =
+        await import("#execution/experimental-workflow-controller.js");
+      return await startExperimentalWorkflow(reference, context.abortSignal);
+    },
+    async stop(
+      input: ExperimentalWorkflowStopInput<StandardJSONSchemaV1.InferInput<TReferenceSchema>>,
+      context: ExperimentalWorkflowControlContext,
+    ): Promise<ExperimentalWorkflowStopResult> {
+      const { stopExperimentalWorkflow } =
+        await import("#execution/experimental-workflow-controller.js");
+      return await stopExperimentalWorkflow(input, context.abortSignal);
+    },
+  });
+}
+
+const enableWorkflowMarker: EnableWorkflowToolSentinel = {
   kind: ENABLE_WORKFLOW_TOOL_SENTINEL_KIND,
-});
+};
+
+/**
+ * Opts into the model-facing Workflow tool. Calling it with an app-owned
+ * persistence adapter also retains that configured definition at runtime.
+ */
+export const ExperimentalWorkflow: ExperimentalWorkflowFactory = Object.freeze(
+  Object.assign(configureExperimentalWorkflow, enableWorkflowMarker),
+);
 
 /**
  * Type guard: returns whether `value` is the {@link ExperimentalWorkflow}
@@ -372,8 +439,26 @@ export const ExperimentalWorkflow: EnableWorkflowToolSentinel = Object.freeze({
  */
 export function isEnableWorkflowToolSentinel(value: unknown): value is EnableWorkflowToolSentinel {
   return (
-    typeof value === "object" &&
+    (typeof value === "object" || typeof value === "function") &&
     value !== null &&
     (value as { kind?: unknown }).kind === ENABLE_WORKFLOW_TOOL_SENTINEL_KIND
   );
 }
+
+export type {
+  ExperimentalWorkflowAdvance,
+  ExperimentalWorkflowAdvanceOutcome,
+  ExperimentalWorkflowAfterCompletionCadence,
+  ExperimentalWorkflowCadence,
+  ExperimentalWorkflowConfig,
+  ExperimentalWorkflowControlContext,
+  ExperimentalWorkflowDailyTimesCadence,
+  ExperimentalWorkflowDefinition,
+  ExperimentalWorkflowFixedRateCadence,
+  ExperimentalWorkflowProgram,
+  ExperimentalWorkflowReferenceSchema,
+  ExperimentalWorkflowSnapshot,
+  ExperimentalWorkflowStartResult,
+  ExperimentalWorkflowStopInput,
+  ExperimentalWorkflowStopResult,
+} from "#shared/experimental-workflow-definition.js";

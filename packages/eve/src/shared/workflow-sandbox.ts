@@ -17,6 +17,7 @@ type WorkflowSandboxModule = Pick<
   | "createCodeModeTool"
   | "getCodeModeInterrupt"
   | "requestCodeModeInterrupt"
+  | "runCodeMode"
   | "unwrapCodeModeResult"
 >;
 
@@ -47,6 +48,28 @@ export async function createWorkflowSandboxTool(input: {
   ) as ToolSet[string];
 }
 
+/** Executes saved workflow JavaScript directly, without a model-facing tool call. */
+export async function runWorkflowSandboxProgram(input: {
+  readonly abortSignal?: AbortSignal;
+  readonly continuationSecurity: WorkflowSandboxContinuationSecurity;
+  readonly hostTools: ToolSet;
+  readonly js: string;
+  readonly lifecycle?: WorkflowSandboxLifecycle;
+  readonly outerToolCallId: string;
+}): Promise<unknown> {
+  const { runCodeMode } = await loadWorkflowSandboxModule();
+  return await runCodeMode({
+    js: input.js,
+    options: createWorkflowSandboxOptions(input.continuationSecurity, input.lifecycle),
+    toolExecutionOptions: {
+      abortSignal: input.abortSignal,
+      messages: [],
+      toolCallId: input.outerToolCallId,
+    },
+    tools: input.hostTools,
+  });
+}
+
 export async function requestWorkflowSandboxInterrupt(input: {
   readonly kind: string;
   readonly runtimeAction: unknown;
@@ -66,6 +89,7 @@ export async function getWorkflowSandboxInterrupt(
 }
 
 export async function continueWorkflowSandboxInterrupt(input: {
+  readonly abortSignal?: AbortSignal;
   readonly continuationSecurity: WorkflowSandboxContinuationSecurity;
   readonly interrupt: WorkflowSandboxInterrupt;
   readonly lifecycle?: WorkflowSandboxLifecycle;
@@ -77,6 +101,9 @@ export async function continueWorkflowSandboxInterrupt(input: {
     interrupt: input.interrupt,
     options: createWorkflowSandboxOptions(input.continuationSecurity, input.lifecycle),
     resolution: input.resolution,
+    ...(input.abortSignal === undefined
+      ? {}
+      : { toolExecutionOptions: { abortSignal: input.abortSignal } }),
     tools: input.tools,
   } as never);
 }

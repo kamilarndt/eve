@@ -85,6 +85,26 @@ describe("getAdvertisedTools", () => {
     expect([...advertisedTools.keys()]).toEqual(["add", "delegate"]);
   });
 
+  it("keeps local descendants but removes remote agents in persistent workflow children", () => {
+    const tools = new Map([
+      ["add", createTool("add")],
+      ["grandchild", createSubagentTool("grandchild")],
+      ["remote", createRemoteAgentTool("remote")],
+    ]) satisfies HarnessToolMap;
+
+    const advertisedTools = getAdvertisedTools({
+      session: {
+        localSubagentsOnly: true,
+        rootSessionId: "persistent-root",
+        subagentDepth: 1,
+        subagentMaxDepth: 3,
+      },
+      tools,
+    });
+
+    expect([...advertisedTools.keys()]).toEqual(["add", "grandchild"]);
+  });
+
   it("does not add Workflow in runtime subagent sessions", async () => {
     const tools = new Map([["delegate", createSubagentTool("delegate")]]) satisfies HarnessToolMap;
 
@@ -142,6 +162,18 @@ function createSubagentTool(name: string): HarnessToolDefinition {
     runtimeAction: {
       kind: "subagent-call",
       nodeId: "workers",
+      subagentName: name,
+    },
+  };
+}
+
+function createRemoteAgentTool(name: string): HarnessToolDefinition {
+  return {
+    ...createTool(name),
+    runtimeAction: {
+      kind: "remote-agent-call",
+      nodeId: "remote-workers",
+      remoteAgentName: name,
       subagentName: name,
     },
   };

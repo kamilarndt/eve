@@ -3,7 +3,7 @@ import { createHook, type Hook } from "#compiled/@workflow/core/index.js";
 import type { DeliverHookPayload } from "#channel/types.js";
 import type { TurnControlPayload } from "#execution/turn-control-protocol.js";
 import { forwardTurnDeliveryStep } from "#execution/forward-turn-delivery-step.js";
-import { closeHookIterator, disposeHook } from "#execution/hook-ownership.js";
+import { disposeHookWithPendingRead } from "#execution/hook-ownership.js";
 import type { NextDriverAction } from "#execution/next-driver-action.js";
 import type { SessionDeliveryHook } from "#execution/session-delivery-hook.js";
 import { rebuildSerializableError } from "#execution/workflow-errors.js";
@@ -36,8 +36,7 @@ export class TurnControlReceiver {
 
   /** Releases the turn control hook and its iterator. */
   async dispose(): Promise<void> {
-    await closeHookIterator(this.controlIterator);
-    await disposeHook(this.control);
+    await disposeHookWithPendingRead(this.control, this.controlIterator);
   }
 
   /** Services control messages until the active turn returns its terminal driver action. */

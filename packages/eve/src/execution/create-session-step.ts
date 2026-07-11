@@ -32,6 +32,7 @@ export async function createSessionStep(input: {
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly continuationToken: string;
   readonly inheritedLimits?: RunSessionLimits;
+  readonly localSubagentsOnly?: boolean;
   readonly outputSchema?: JsonObject;
   readonly nodeId?: string;
   readonly rootSessionId?: string;
@@ -53,6 +54,7 @@ export async function createSessionStep(input: {
       thresholdPercent: bundle.resolvedAgent.config.compaction?.thresholdPercent,
     },
     continuationToken: input.continuationToken,
+    localSubagentsOnly: input.localSubagentsOnly,
     limits: {
       // Inherited token limits are the parent's remaining quota share at
       // dispatch time; an authored `false` uncaps only when there is nothing

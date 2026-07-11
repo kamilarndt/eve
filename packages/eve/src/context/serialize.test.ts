@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { HTTP_ADAPTER } from "#channel/http.js";
 import { createRuntimeAdapterRegistry } from "#runtime/channels/registry.js";
 import { ContextContainer } from "#context/container.js";
 import { ContextKey } from "#context/key.js";
+import { AuthKey } from "#context/keys.js";
+import { createTestRuntime } from "#internal/testing/app-harness.js";
+import { createBundledRuntimeCompiledArtifactsSource } from "#runtime/compiled-artifacts-source.js";
+import { getCompiledRuntimeAgentBundle } from "#runtime/sessions/compiled-agent-cache.js";
 import type { CompiledBundle } from "#runtime/sessions/runtime-context-keys.js";
 import { BundleKey, ChannelKey } from "#runtime/sessions/runtime-context-keys.js";
 import { deserializeContext, serializeContext } from "#context/serialize.js";
@@ -95,5 +100,46 @@ describe("ChannelKey codec", () => {
     );
 
     expect(adapter).toEqual({ kind: "http", state: {} });
+  });
+});
+
+describe("BundleKey codec", () => {
+  it("resolves captured bundled context from the receiving runtime without losing auth or channel", async () => {
+    const oldRuntime = createTestRuntime({ agent: { name: "agent-old" } });
+    const newRuntime = createTestRuntime({ agent: { name: "agent-new" } });
+    const serialized = await oldRuntime.run(async () => {
+      const bundle = await getCompiledRuntimeAgentBundle({
+        compiledArtifactsSource: createBundledRuntimeCompiledArtifactsSource(),
+      });
+      const ctx = new ContextContainer();
+      ctx.set(BundleKey, bundle);
+      ctx.set(ChannelKey, HTTP_ADAPTER);
+      ctx.set(AuthKey, {
+        attributes: { role: "operator" },
+        authenticator: "proof",
+        principalId: "user-123",
+        principalType: "user",
+      });
+      return serializeContext(ctx);
+    });
+    const capturedWire = structuredClone(serialized);
+
+    expect(serialized[BundleKey.name]).toEqual({ source: { kind: "bundled" } });
+
+    const result = await newRuntime.run(async () => {
+      const ctx = await deserializeContext(serialized);
+      return {
+        agentName: ctx.require(BundleKey).resolvedAgent.config.name,
+        channelKind: ctx.require(ChannelKey).kind,
+        principalId: ctx.require(AuthKey)?.principalId,
+      };
+    });
+
+    expect(result).toEqual({
+      agentName: "agent-new",
+      channelKind: "http",
+      principalId: "user-123",
+    });
+    expect(serialized).toEqual(capturedWire);
   });
 });

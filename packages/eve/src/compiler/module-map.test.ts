@@ -79,6 +79,23 @@ describe("createCompiledModuleMapSource", () => {
 });
 
 describe("collectModuleRefsForManifest", () => {
+  it("includes the configured ExperimentalWorkflow source", () => {
+    const manifest: CompiledAgentManifest = {
+      ...createManifestWithTool("/agent"),
+      experimentalWorkflow: {
+        logicalPath: "tools/workflow.ts",
+        sourceId: "tools/workflow.ts",
+        sourceKind: "module",
+      },
+    };
+
+    expect(collectModuleRefsForManifest(manifest)).toContainEqual({
+      logicalPath: "tools/workflow.ts",
+      sourceId: "tools/workflow.ts",
+      sourceKind: "module",
+    });
+  });
+
   it("includes module-sourced schedules with run() so the dispatcher can load the handler", () => {
     const manifest = createManifestWithTool("/agent");
     const manifestWithSchedule: CompiledAgentManifest = {

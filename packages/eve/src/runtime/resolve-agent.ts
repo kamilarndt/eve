@@ -17,6 +17,7 @@ import { resolveSandboxDefinition } from "#runtime/resolve-sandbox.js";
 import { resolveDynamicInstructionsDefinition } from "#runtime/resolve-dynamic-instructions.js";
 import { resolveDynamicSkillDefinition } from "#runtime/resolve-dynamic-skill.js";
 import { resolveDynamicToolDefinition } from "#runtime/resolve-dynamic-tool.js";
+import { resolveExperimentalWorkflowDefinition } from "#runtime/resolve-experimental-workflow.js";
 import { resolveToolDefinition } from "#runtime/resolve-tool.js";
 import type {
   ResolvedAgent,
@@ -99,6 +100,14 @@ export async function resolveAgent(input: ResolveAgentInput): Promise<ResolvedAg
     input.manifest.sandbox === null
       ? null
       : await resolveSandboxDefinition(input.manifest.sandbox, input.moduleMap, input.nodeId);
+  const experimentalWorkflow =
+    input.manifest.experimentalWorkflow === undefined
+      ? undefined
+      : await resolveExperimentalWorkflowDefinition(
+          input.manifest.experimentalWorkflow,
+          input.moduleMap,
+          input.nodeId,
+        );
   const instructions = createResolvedInstructionsDefinition(input.manifest.instructions);
   const workspaceResourceRoot = input.manifest.workspaceResourceRoot;
   const resolvedAgent: ResolvedAgent = {
@@ -107,6 +116,7 @@ export async function resolveAgent(input: ResolveAgentInput): Promise<ResolvedAg
     connections: resolvedConnections,
     disabledFrameworkChannels,
     disabledFrameworkTools: [...input.manifest.disabledFrameworkTools],
+    experimentalWorkflow,
     workflowEnabled: input.manifest.workflowEnabled,
     dynamicInstructionsResolvers: resolvedDynamicInstructionsResolvers,
     dynamicSkillResolvers: resolvedDynamicSkillResolvers,
