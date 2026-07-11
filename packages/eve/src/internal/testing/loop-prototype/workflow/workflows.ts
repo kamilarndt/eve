@@ -9,29 +9,48 @@ import {
 
 import { getRun, resumeHook, start } from "#internal/workflow/runtime.js";
 
-import { executionId } from "../ids.js";
+import {
+  checkpointOwnedState,
+  delegateCheckpoint,
+  initialCheckpoint,
+  TurnCheckpointProtocol,
+} from "../checkpoint-protocol.js";
+import {
+  createExecuteToolEffect,
+  createGenerateEffect,
+  readExecuteToolResult,
+  readGenerateResult,
+} from "../effect-definitions.js";
+import { childId, eventId, eventLogId, executionId, operationId, requestChildId } from "../ids.js";
 import { runSession, runTurn } from "../programs.js";
 import { DeclaredEffectFailure, EffectProtocolError, SqlitePrototypeService } from "../service.js";
 import type {
-  AnyChildHandle,
+  ApprovalRequest,
   ChildHandle,
   ChildId,
-  ChildNotice,
+  DelegatedSessionInput,
   Delivery,
-  DriverUpdate,
   EffectCall,
-  EffectName,
   EffectResult,
+  EventLogId,
   EventRecord,
   ExecutionId,
+  GenerateInput,
+  GeneratedTurn,
   LoopBackend,
-  ReceiveWait,
+  PrototypeStartInput,
+  RequestResult,
   SessionCheckpoint,
-  SessionChildSpec,
+  SessionId,
   SessionProgramInput,
+  SessionState,
+  Stream,
+  StreamEvent,
   TerminalOutcome,
-  TurnChildSpec,
+  ToolRequest,
+  TurnHandle,
   TurnOutcome,
+  TurnProgramInput,
 } from "../types.js";
 
 export interface WorkflowEventEnvelope {
@@ -40,38 +59,30 @@ export interface WorkflowEventEnvelope {
 }
 
 interface WorkflowSessionInput {
+  readonly continuationToken: string;
   readonly databasePath: string;
   readonly executionId: ExecutionId;
   readonly parent:
     | { readonly kind: "root" }
-    | {
-        readonly childId: SessionChildSpec["id"];
-        readonly kind: "session-child";
-        readonly noticeToken: string;
-      };
+    | { readonly childId: ChildId; readonly kind: "session-child"; readonly noticeToken: string };
   readonly programInput: SessionProgramInput;
-  /**
-   * Records the intended production routing policy in durable input. The local
-   * World has one deployment, so it cannot prove that deployment routing.
-   */
   readonly routingIntent: "pinned";
+  readonly streamLogId: EventLogId;
 }
 
 interface WorkflowTurnInput {
+  readonly checkpoint: SessionCheckpoint;
   readonly databasePath: string;
   readonly eventWritable: WritableStream<WorkflowEventEnvelope>;
   readonly executionId: ExecutionId;
   readonly parent: {
-    readonly childId: TurnChildSpec["id"];
+    readonly childId: ChildId;
     readonly kind: "turn-child";
     readonly noticeToken: string;
   };
-  readonly programInput: TurnChildSpec["input"];
-  /**
-   * Records the intended production routing policy in durable input. The local
-   * World has one deployment, so it cannot prove that deployment routing.
-   */
+  readonly programInput: TurnProgramInput;
   readonly routingIntent: "latest-compatible";
+  readonly streamLogId: EventLogId;
 }
 
 type WorkflowParent = WorkflowSessionInput["parent"] | WorkflowTurnInput["parent"];
@@ -80,9 +91,9 @@ type WorkflowChildNotice =
   | {
       readonly ackToken: string;
       readonly backendRunId: string;
-      readonly childId: TurnChildSpec["id"];
+      readonly checkpoint: SessionCheckpoint;
+      readonly childId: ChildId;
       readonly kind: "checkpoint";
-      readonly update: DriverUpdate;
     }
   | {
       readonly backendRunId: string;
@@ -91,28 +102,20 @@ type WorkflowChildNotice =
     };
 
 interface CheckpointAck {
-  readonly childId: TurnChildSpec["id"];
+  readonly childId: ChildId;
   readonly kind: "checkpoint-ack";
   readonly revision: number;
 }
 
-interface ChildChannelBase {
+interface ChildControl {
   readonly hook: Hook<WorkflowChildNotice>;
   readonly iterator: AsyncIterator<WorkflowChildNotice>;
 }
 
-interface TurnChildChannel extends ChildChannelBase {
-  readonly handle: ChildHandle<"turn">;
-  readonly kind: "turn";
-  readonly pendingAcks: Map<number, string>;
+interface StartedChild {
+  readonly backendRunId: string;
+  readonly control: ChildControl;
 }
-
-interface SessionChildChannel extends ChildChannelBase {
-  readonly handle: ChildHandle<"session">;
-  readonly kind: "session";
-}
-
-type ChildChannel = TurnChildChannel | SessionChildChannel;
 
 const deliveryHook = defineHook<Delivery>();
 const childNoticeHook = defineHook<WorkflowChildNotice>();
@@ -121,10 +124,9 @@ const checkpointAckHook = defineHook<CheckpointAck>();
 export async function workflowSession(input: WorkflowSessionInput): Promise<TerminalOutcome> {
   "use workflow";
 
-  const delivery = deliveryHook.create({ token: input.programInput.continuationToken });
+  const delivery = deliveryHook.create({ token: input.continuationToken });
   const deliveryIterator = delivery[Symbol.asyncIterator]();
   await claimHook(delivery);
-
   const backend = new WorkflowLoopBackend({
     backendRunId: getWorkflowMetadata().workflowRunId,
     databasePath: input.databasePath,
@@ -132,6 +134,8 @@ export async function workflowSession(input: WorkflowSessionInput): Promise<Term
     eventWritable: getWritable<WorkflowEventEnvelope>(),
     executionId: input.executionId,
     parent: input.parent,
+    sessionId: input.programInput.sessionId,
+    streamLogId: input.streamLogId,
   });
 
   try {
@@ -153,10 +157,13 @@ export async function workflowTurn(input: WorkflowTurnInput): Promise<TurnOutcom
 
   const backend = new WorkflowLoopBackend({
     backendRunId: getWorkflowMetadata().workflowRunId,
+    checkpoint: input.checkpoint,
     databasePath: input.databasePath,
     eventWritable: input.eventWritable,
     executionId: input.executionId,
     parent: input.parent,
+    sessionId: input.programInput.state.sessionId,
+    streamLogId: input.streamLogId,
   });
 
   try {
@@ -171,292 +178,303 @@ export async function workflowTurn(input: WorkflowTurnInput): Promise<TurnOutcom
   }
 }
 
-class WorkflowLoopBackend implements LoopBackend {
-  readonly executionId: LoopBackend["executionId"];
+class WorkflowStream implements Stream {
+  readonly #beforeAppend: () => Promise<void>;
+  readonly #databasePath: string;
+  readonly #logId: EventLogId;
+  readonly #writable: WritableStream<WorkflowEventEnvelope>;
 
+  constructor(
+    databasePath: string,
+    writable: WritableStream<WorkflowEventEnvelope>,
+    logId: EventLogId,
+    beforeAppend: () => Promise<void>,
+  ) {
+    this.#beforeAppend = beforeAppend;
+    this.#databasePath = databasePath;
+    this.#logId = logId;
+    this.#writable = writable;
+  }
+
+  async append(event: StreamEvent): Promise<void> {
+    await this.#beforeAppend();
+    await appendEventStep(this.#databasePath, this.#writable, this.#logId, event);
+  }
+}
+
+class WorkflowLoopBackend implements LoopBackend {
+  readonly executionId: ExecutionId;
+  readonly stream: Stream;
   readonly #backendRunId: string;
-  readonly #children = new Map<string, ChildChannel>();
+  readonly #childControls = new Set<ChildControl>();
   readonly #databasePath: string;
   readonly #delivery:
     | { readonly hook: Hook<Delivery>; readonly iterator: AsyncIterator<Delivery> }
     | undefined;
   readonly #eventWritable: WritableStream<WorkflowEventEnvelope>;
   readonly #parent: WorkflowParent;
+  readonly #pendingChildStarts = new Set<Promise<StartedChild>>();
+  readonly #sessionId: SessionId;
+  readonly #streamLogId: EventLogId;
+  #checkpoint: SessionCheckpoint | null;
 
   constructor(input: {
     readonly backendRunId: string;
+    readonly checkpoint?: SessionCheckpoint;
     readonly databasePath: string;
     readonly delivery?: {
       readonly hook: Hook<Delivery>;
       readonly iterator: AsyncIterator<Delivery>;
     };
     readonly eventWritable: WritableStream<WorkflowEventEnvelope>;
-    readonly executionId: LoopBackend["executionId"];
+    readonly executionId: ExecutionId;
     readonly parent: WorkflowParent;
+    readonly sessionId: SessionId;
+    readonly streamLogId: EventLogId;
   }) {
     this.#backendRunId = input.backendRunId;
+    this.#checkpoint = input.checkpoint ?? null;
     this.#databasePath = input.databasePath;
     this.#delivery = input.delivery;
     this.#eventWritable = input.eventWritable;
     this.executionId = input.executionId;
     this.#parent = input.parent;
+    this.#sessionId = input.sessionId;
+    this.#streamLogId = input.streamLogId;
+    this.stream = new WorkflowStream(
+      input.databasePath,
+      input.eventWritable,
+      input.streamLogId,
+      async () => await this.#flushChildStarts(),
+    );
   }
 
-  async acknowledgeChildUpdate(handle: ChildHandle<"turn">, revision: number): Promise<void> {
-    const child = this.#requireTurnChild(handle);
-
-    const token = child.pendingAcks.get(revision);
-    if (token === undefined) {
-      throw new Error(
-        `Turn child "${child.handle.id}" has no pending checkpoint revision ${String(revision)}.`,
-      );
-    }
-
-    await sendControlStep(token, {
-      childId: child.handle.id,
-      kind: "checkpoint-ack",
-      revision,
-    });
-    child.pendingAcks.delete(revision);
-  }
-
-  async appendEvents(events: readonly EventRecord[]): Promise<void> {
-    await appendEventsStep(this.#databasePath, this.#eventWritable, events);
-  }
-
-  async checkpoint(checkpoint: SessionCheckpoint): Promise<void> {
-    await recordCheckpointStep(checkpoint);
+  async checkpoint(state: SessionState): Promise<void> {
+    const next =
+      this.#checkpoint === null
+        ? initialCheckpoint(this.executionId, state)
+        : checkpointOwnedState(this.#checkpoint, this.executionId, state);
+    await recordCheckpointStep(next);
+    this.#checkpoint = next;
 
     if (this.#parent.kind !== "turn-child") return;
-
-    const ackToken = `${this.#backendRunId}:checkpoint:${String(checkpoint.revision)}:ack`;
+    const ackToken = `${this.#backendRunId}:checkpoint:${String(next.revision)}:ack`;
     const ack = checkpointAckHook.create({ token: ackToken });
     await claimHook(ack);
-
     try {
       await sendControlStep(this.#parent.noticeToken, {
         ackToken,
         backendRunId: this.#backendRunId,
+        checkpoint: next,
         childId: this.#parent.childId,
         kind: "checkpoint",
-        update: { checkpoint, kind: "checkpoint" },
       });
       const received = await ack;
       if (
         received.kind !== "checkpoint-ack" ||
         received.childId !== this.#parent.childId ||
-        received.revision !== checkpoint.revision
+        received.revision !== next.revision
       ) {
-        throw new Error(
-          `Turn checkpoint revision ${String(checkpoint.revision)} received a bad ack.`,
-        );
+        throw new Error(`Turn checkpoint revision ${String(next.revision)} received a bad ack.`);
       }
     } finally {
       ack.dispose();
     }
   }
 
-  async dispose(): Promise<void> {
-    if (this.#delivery !== undefined) {
-      await closeHook(this.#delivery.hook, this.#delivery.iterator);
-    }
-
-    for (const child of this.#children.values()) {
-      await closeHook(child.hook, child.iterator);
-    }
-    this.#children.clear();
+  async executeTool(request: ApprovalRequest | ToolRequest): Promise<RequestResult> {
+    const call = createExecuteToolEffect(request);
+    return readExecuteToolResult(call, await runEffectStep(this.#databasePath, call));
   }
 
-  async effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectResult<K>> {
-    return await runEffectStep(this.#databasePath, call);
+  async finish(outcome: TerminalOutcome): Promise<void> {
+    if (this.#checkpoint?.state.phase !== "terminal") {
+      throw new Error("Workflow session finished without a terminal checkpoint.");
+    }
+    await finishSessionStep(this.#databasePath, this.#sessionId, outcome);
+    const terminalOperation = operationId(
+      this.#sessionId,
+      this.#checkpoint.state.nextTurnOrdinal,
+      "finalize",
+    );
+    await this.stream.append({
+      id: eventId(terminalOperation, 0),
+      operationId: terminalOperation,
+      payload: { outcome: outcome.kind, type: "session.terminal" },
+    });
   }
 
-  async finish(_outcome: TerminalOutcome): Promise<void> {}
+  async generate(input: GenerateInput): Promise<GeneratedTurn> {
+    const call = createGenerateEffect(input);
+    return readGenerateResult(call, await runEffectStep(this.#databasePath, call));
+  }
 
-  async receive(_wait: ReceiveWait): Promise<Delivery> {
+  async receive(): Promise<Delivery> {
     if (this.#delivery === undefined) {
       throw new Error("Turn workflows do not own the public delivery hook.");
     }
-
     const next = await this.#delivery.iterator.next();
     if (next.done) throw new Error("Public delivery hook closed while the session was parked.");
     return next.value;
   }
 
-  async startSessionChild(spec: SessionChildSpec): Promise<ChildHandle<"session">> {
+  spawnChild(input: DelegatedSessionInput): ChildHandle {
     if (this.#parent.kind !== "turn-child") {
       throw new Error("Only a turn workflow can start a delegated session.");
     }
-
-    const control = await this.#openChildControl(spec.id);
-    try {
-      const started = await startSessionChildStep({
-        databasePath: this.#databasePath,
-        executionId: executionId(spec.id),
-        parent: {
-          childId: spec.id,
-          kind: "session-child",
-          noticeToken: control.hook.token,
-        },
-        programInput: { ...spec.input, eventLogId: spec.eventLog.id },
-        routingIntent: spec.version,
-      });
-      const handle: ChildHandle<"session"> = {
-        backendRunId: started.backendRunId,
-        id: spec.id,
-        kind: "session",
-      };
-      this.#children.set(handle.backendRunId, {
-        handle,
-        hook: control.hook,
-        iterator: control.iterator,
-        kind: "session",
-      });
-      return handle;
-    } catch (error) {
-      await closeHook(control.hook, control.iterator);
-      throw error;
-    }
+    const id = requestChildId(this.executionId, input.requestId);
+    const started = this.#trackChildStart(this.#startSessionChild(id, input));
+    return {
+      id,
+      wait: async () => {
+        const child = await started;
+        try {
+          await this.#waitForSettled(child.control, id, child.backendRunId);
+          return await awaitSessionChildCompletionStep(child.backendRunId);
+        } finally {
+          await this.#closeControl(child.control);
+        }
+      },
+    };
   }
 
-  async startTurnChild(spec: TurnChildSpec): Promise<ChildHandle<"turn">> {
+  spawnTurn(input: TurnProgramInput): TurnHandle {
     if (this.#parent.kind === "turn-child") {
       throw new Error("A turn workflow cannot start another turn workflow.");
     }
+    if (this.#checkpoint === null) throw new Error("Turn spawned before session initialization.");
+    const id = childId(this.executionId, input.state.nextTurnOrdinal - 1, "turn");
+    const childExecutionId = executionId(id);
+    const delegated = delegateCheckpoint(this.#checkpoint, this.executionId, childExecutionId);
+    this.#checkpoint = delegated;
+    const protocol = new TurnCheckpointProtocol({
+      child: childExecutionId,
+      delegated,
+      parent: this.executionId,
+      persist: async (checkpoint) => {
+        await recordCheckpointStep(checkpoint);
+        this.#checkpoint = checkpoint;
+      },
+    });
+    const started = this.#trackChildStart(this.#startTurnChild(id, delegated, input));
+    return {
+      id,
+      wait: async () => {
+        const child = await started;
+        try {
+          while (true) {
+            const notice = await nextChildNotice(child.control, id, child.backendRunId);
+            if (notice.kind === "settled") {
+              const outcome = await awaitTurnChildCompletionStep(child.backendRunId);
+              await protocol.complete(outcome.state);
+              return outcome;
+            }
+            const revision = await protocol.accept(notice.checkpoint);
+            await sendControlStep(notice.ackToken, {
+              childId: id,
+              kind: "checkpoint-ack",
+              revision,
+            });
+          }
+        } finally {
+          await this.#closeControl(child.control);
+        }
+      },
+    };
+  }
 
-    const control = await this.#openChildControl(spec.id);
+  async dispose(): Promise<void> {
+    if (this.#delivery !== undefined) {
+      await closeHook(this.#delivery.hook, this.#delivery.iterator);
+    }
+    await Promise.all([...this.#childControls].map(async (control) => this.#closeControl(control)));
+  }
+
+  async #startSessionChild(
+    id: ChildId,
+    input: DelegatedSessionInput,
+  ): Promise<{ readonly backendRunId: string; readonly control: ChildControl }> {
+    const control = await this.#openChildControl(id);
     try {
+      const started = await startSessionChildStep({
+        continuationToken: `${input.sessionId}:input`,
+        databasePath: this.#databasePath,
+        executionId: executionId(id),
+        parent: { childId: id, kind: "session-child", noticeToken: control.hook.token },
+        programInput: sessionProgramInput(input),
+        routingIntent: "pinned",
+        streamLogId: eventLogId(`${input.sessionId}:events`),
+      });
+      return { backendRunId: started.backendRunId, control };
+    } catch (error) {
+      await this.#closeControl(control);
+      throw error;
+    }
+  }
+
+  async #flushChildStarts(): Promise<void> {
+    const pending = [...this.#pendingChildStarts];
+    await Promise.all(pending);
+    for (const started of pending) this.#pendingChildStarts.delete(started);
+  }
+
+  #trackChildStart(started: Promise<StartedChild>): Promise<StartedChild> {
+    this.#pendingChildStarts.add(started);
+    return started;
+  }
+
+  async #startTurnChild(
+    id: ChildId,
+    checkpoint: SessionCheckpoint,
+    input: TurnProgramInput,
+  ): Promise<{ readonly backendRunId: string; readonly control: ChildControl }> {
+    const control = await this.#openChildControl(id);
+    try {
+      await recordCheckpointStep(checkpoint);
       const started = await startTurnChildStep({
+        checkpoint,
         databasePath: this.#databasePath,
         eventWritable: this.#eventWritable,
-        executionId: executionId(spec.id),
-        parent: {
-          childId: spec.id,
-          kind: "turn-child",
-          noticeToken: control.hook.token,
-        },
-        programInput: spec.input,
-        routingIntent: spec.version,
+        executionId: executionId(id),
+        parent: { childId: id, kind: "turn-child", noticeToken: control.hook.token },
+        programInput: input,
+        routingIntent: "latest-compatible",
+        streamLogId: this.#streamLogId,
       });
-      const handle: ChildHandle<"turn"> = {
-        backendRunId: started.backendRunId,
-        id: spec.id,
-        kind: "turn",
-      };
-      this.#children.set(handle.backendRunId, {
-        handle,
-        hook: control.hook,
-        iterator: control.iterator,
-        kind: "turn",
-        pendingAcks: new Map(),
-      });
-      return handle;
+      return { backendRunId: started.backendRunId, control };
+    } catch (error) {
+      await this.#closeControl(control);
+      throw error;
+    }
+  }
+
+  async #waitForSettled(control: ChildControl, id: ChildId, backendRunId: string): Promise<void> {
+    const notice = await nextChildNotice(control, id, backendRunId);
+    if (notice.kind === "checkpoint") {
+      throw new Error(`Session child "${id}" reported a borrowed checkpoint.`);
+    }
+  }
+
+  async #openChildControl(id: ChildId): Promise<ChildControl> {
+    const hook = childNoticeHook.create({ token: `${this.#backendRunId}:child:${id}:notices` });
+    const control = { hook, iterator: hook[Symbol.asyncIterator]() };
+    try {
+      await claimHook(hook);
+      this.#childControls.add(control);
+      return control;
     } catch (error) {
       await closeHook(control.hook, control.iterator);
       throw error;
     }
   }
 
-  async waitForChild(handle: ChildHandle<"session">): Promise<ChildNotice<"session">>;
-  async waitForChild(handle: ChildHandle<"turn">): Promise<ChildNotice<"turn">>;
-  async waitForChild(
-    handle: AnyChildHandle,
-  ): Promise<ChildNotice<"session"> | ChildNotice<"turn">> {
-    if (handle.kind === "turn") return await this.#waitForTurnChild(handle);
-    return await this.#waitForSessionChild(handle);
-  }
-
-  async #waitForTurnChild(handle: ChildHandle<"turn">): Promise<ChildNotice<"turn">> {
-    const child = this.#requireTurnChild(handle);
-    const notice = await this.#nextChildNotice(child);
-
-    if (notice.kind === "checkpoint") {
-      child.pendingAcks.set(notice.update.checkpoint.revision, notice.ackToken);
-      return { kind: "update", update: notice.update };
-    }
-
-    try {
-      return {
-        kind: "terminal",
-        output: await awaitTurnChildCompletionStep(handle.backendRunId),
-      };
-    } finally {
-      await this.#closeChild(child);
-    }
-  }
-
-  async #waitForSessionChild(handle: ChildHandle<"session">): Promise<ChildNotice<"session">> {
-    const child = this.#requireSessionChild(handle);
-    const notice = await this.#nextChildNotice(child);
-    if (notice.kind === "checkpoint") {
-      throw new Error(`Session child "${handle.id}" reported a borrowed checkpoint.`);
-    }
-
-    try {
-      return {
-        kind: "terminal",
-        output: await awaitSessionChildCompletionStep(handle.backendRunId),
-      };
-    } finally {
-      await this.#closeChild(child);
-    }
-  }
-
-  async #nextChildNotice(child: ChildChannel): Promise<WorkflowChildNotice> {
-    const next = await child.iterator.next();
-    if (next.done) throw new Error(`Child "${child.handle.id}" closed its notice hook early.`);
-
-    const notice = next.value;
-    if (notice.childId !== child.handle.id || notice.backendRunId !== child.handle.backendRunId) {
-      throw new Error(`Child "${child.handle.id}" sent a notice with mismatched identity.`);
-    }
-    return notice;
-  }
-
-  async #closeChild(child: ChildChannel): Promise<void> {
-    this.#children.delete(child.handle.backendRunId);
-    await closeHook(child.hook, child.iterator);
-  }
-
-  async #openChildControl(childId: ChildId): Promise<{
-    readonly hook: Hook<WorkflowChildNotice>;
-    readonly iterator: AsyncIterator<WorkflowChildNotice>;
-  }> {
-    const hook = childNoticeHook.create({
-      token: `${this.#backendRunId}:child:${childId}:notices`,
-    });
-    const iterator = hook[Symbol.asyncIterator]();
-
-    try {
-      await claimHook(hook);
-      return { hook, iterator };
-    } catch (error) {
-      await closeHook(hook, iterator);
-      throw error;
-    }
-  }
-
-  #requireTurnChild(handle: ChildHandle<"turn">): TurnChildChannel {
-    const child = this.#children.get(handle.backendRunId);
-    if (child === undefined || child.kind !== "turn" || child.handle.id !== handle.id) {
-      throw new Error(`Unknown child "${handle.id}" with run "${handle.backendRunId}".`);
-    }
-    return child;
-  }
-
-  #requireSessionChild(handle: ChildHandle<"session">): SessionChildChannel {
-    const child = this.#children.get(handle.backendRunId);
-    if (child === undefined || child.kind !== "session" || child.handle.id !== handle.id) {
-      throw new Error(`Unknown child "${handle.id}" with run "${handle.backendRunId}".`);
-    }
-    return child;
+  async #closeControl(control: ChildControl): Promise<void> {
+    if (!this.#childControls.delete(control)) return;
+    await closeHook(control.hook, control.iterator);
   }
 }
 
-export async function runEffectStep<K extends EffectName>(
-  databasePath: string,
-  call: EffectCall<K>,
-): Promise<EffectResult<K>> {
+export async function runEffectStep(databasePath: string, call: EffectCall): Promise<EffectResult> {
   "use step";
 
   const service = new SqlitePrototypeService(databasePath);
@@ -478,59 +496,63 @@ export async function runEffectStep<K extends EffectName>(
   }
 }
 
-function effectFailure(error: unknown): { readonly code: string; readonly message: string } {
-  return {
-    code: "EFFECT_FAILED",
-    message: error instanceof Error ? error.message : String(error),
-  };
-}
-
-export async function appendEventsStep(
+export async function appendEventStep(
   databasePath: string,
   writable: WritableStream<WorkflowEventEnvelope>,
-  events: readonly EventRecord[],
+  logId: EventLogId,
+  event: StreamEvent,
 ): Promise<void> {
   "use step";
 
   const service = new SqlitePrototypeService(databasePath);
+  let record: EventRecord;
   try {
-    await service.append(events);
+    record = await service.append(logId, event);
   } finally {
     await service.close();
   }
-
   const writer = writable.getWriter();
   try {
-    for (const event of events) {
-      await writer.write({ event, kind: "prototype-event" });
-    }
+    await writer.write({ event: record, kind: "prototype-event" });
   } finally {
     writer.releaseLock();
   }
 }
 
-export async function recordCheckpointStep(checkpoint: SessionCheckpoint): Promise<void> {
+export async function finishSessionStep(
+  databasePath: string,
+  sessionId: SessionId,
+  outcome: TerminalOutcome,
+): Promise<void> {
   "use step";
 
+  const service = new SqlitePrototypeService(databasePath);
+  try {
+    service.finish(sessionId, outcome);
+  } finally {
+    await service.close();
+  }
+}
+
+export async function recordCheckpointStep(checkpoint: SessionCheckpoint): Promise<void> {
+  "use step";
   if (checkpoint.version !== 1) {
     throw new FatalError(`Unsupported checkpoint version "${String(checkpoint.version)}".`);
   }
 }
 
-export async function startSessionChildStep(input: WorkflowSessionInput): Promise<{
-  readonly backendRunId: string;
-}> {
+export async function startSessionChildStep(
+  input: WorkflowSessionInput,
+): Promise<{ readonly backendRunId: string }> {
   "use step";
-
   const run = await start(workflowSession, [input]);
   return { backendRunId: run.runId };
 }
 
-export async function startTurnChildStep(input: WorkflowTurnInput): Promise<{
-  readonly backendRunId: string;
-}> {
+export async function startTurnChildStep(
+  input: WorkflowTurnInput,
+): Promise<{ readonly backendRunId: string }> {
   "use step";
-
   const run = await start(workflowTurn, [input]);
   return { backendRunId: run.runId };
 }
@@ -539,13 +561,11 @@ export async function awaitSessionChildCompletionStep(
   backendRunId: string,
 ): Promise<TerminalOutcome> {
   "use step";
-
   return await getRun<TerminalOutcome>(backendRunId).returnValue;
 }
 
 export async function awaitTurnChildCompletionStep(backendRunId: string): Promise<TurnOutcome> {
   "use step";
-
   return await getRun<TurnOutcome>(backendRunId).returnValue;
 }
 
@@ -554,13 +574,41 @@ export async function sendControlStep(
   payload: CheckpointAck | WorkflowChildNotice,
 ): Promise<void> {
   "use step";
-
   try {
     await resumeHook(token, payload);
   } catch (error) {
     if (getStepMetadata().attempt > 1 && isHookNotFoundError(error)) return;
     throw error;
   }
+}
+
+function sessionProgramInput(input: SessionProgramInput): SessionProgramInput {
+  return {
+    initialDelivery: input.initialDelivery,
+    mode: input.mode,
+    scenario: input.scenario,
+    sessionId: input.sessionId,
+  };
+}
+
+function effectFailure(error: unknown): { readonly code: string; readonly message: string } {
+  return {
+    code: "EFFECT_FAILED",
+    message: error instanceof Error ? error.message : String(error),
+  };
+}
+
+async function nextChildNotice(
+  control: ChildControl,
+  id: ChildId,
+  backendRunId: string,
+): Promise<WorkflowChildNotice> {
+  const next = await control.iterator.next();
+  if (next.done) throw new Error(`Child "${id}" closed its notice hook early.`);
+  if (next.value.childId !== id || next.value.backendRunId !== backendRunId) {
+    throw new Error(`Child "${id}" sent a notice with mismatched identity.`);
+  }
+  return next.value;
 }
 
 function isHookNotFoundError(error: unknown): boolean {
@@ -582,4 +630,8 @@ async function claimHook(hook: Hook<unknown>): Promise<void> {
 async function closeHook<T>(hook: Hook<T>, iterator: AsyncIterator<T>): Promise<void> {
   if (typeof iterator.return === "function") await iterator.return(undefined);
   hook.dispose();
+}
+
+export function workflowProgramInput(input: PrototypeStartInput): SessionProgramInput {
+  return sessionProgramInput(input);
 }

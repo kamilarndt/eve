@@ -2,13 +2,14 @@ import { defineSignal } from "@temporalio/workflow";
 
 import type {
   Delivery,
-  DriverUpdate,
   EffectCall,
-  EffectName,
   EffectResult,
-  EventRecord,
+  EventLogId,
   ExecutionId,
+  SessionCheckpoint,
+  SessionId,
   SessionProgramInput,
+  StreamEvent,
   TerminalOutcome,
   TurnOutcome,
   TurnProgramInput,
@@ -23,15 +24,16 @@ export const TEMPORAL_CHILD_ACKNOWLEDGED_SIGNAL = "eve.loop.child-acknowledged";
 
 export const temporalDeliverySignal = defineSignal<[Delivery]>(TEMPORAL_DELIVERY_SIGNAL);
 export const temporalChildUpdateSignal = defineSignal<
-  [{ readonly childWorkflowId: string; readonly update: DriverUpdate }]
+  [{ readonly checkpoint: SessionCheckpoint; readonly childWorkflowId: string }]
 >(TEMPORAL_CHILD_UPDATE_SIGNAL);
 export const temporalChildAcknowledgedSignal = defineSignal<[number]>(
   TEMPORAL_CHILD_ACKNOWLEDGED_SIGNAL,
 );
 
 export interface TemporalActivities {
-  appendEvents(events: readonly EventRecord[]): Promise<void>;
-  effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectResult<K>>;
+  appendEvent(logId: EventLogId, event: StreamEvent): Promise<void>;
+  effect(call: EffectCall): Promise<EffectResult>;
+  finish(sessionId: SessionId, outcome: TerminalOutcome): Promise<void>;
 }
 
 export interface TemporalSessionWorkflowInput {
@@ -40,14 +42,17 @@ export interface TemporalSessionWorkflowInput {
   readonly kind: "session";
   readonly routingIntent: "pinned";
   readonly taskQueue: string;
+  readonly streamLogId: EventLogId;
 }
 
 export interface TemporalTurnWorkflowInput {
   readonly executionId: ExecutionId;
+  readonly checkpoint: SessionCheckpoint;
   readonly input: TurnProgramInput;
   readonly kind: "turn";
   readonly routingIntent: "latest-compatible";
   readonly taskQueue: string;
+  readonly streamLogId: EventLogId;
 }
 
 export type TemporalSessionWorkflow = (

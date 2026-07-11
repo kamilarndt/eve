@@ -13,6 +13,8 @@ export async function temporalSessionWorkflow(
   const backend = new TemporalLoopBackend({
     executionId: envelope.executionId,
     kind: "session",
+    sessionId: envelope.input.sessionId,
+    streamLogId: envelope.streamLogId,
     taskQueue: envelope.taskQueue,
   });
   return await runSession(backend, envelope.input);
@@ -23,16 +25,15 @@ export async function temporalTurnWorkflow(
 ): Promise<TurnOutcome> {
   const info = workflowInfo();
   assertWorkflowEnvelope(info.workflowId, info.taskQueue, envelope.executionId, envelope);
-  if (info.parent?.workflowId !== envelope.input.parentExecutionId) {
-    throw new Error(
-      `Temporal parent "${info.parent?.workflowId ?? "none"}" does not match "${envelope.input.parentExecutionId}".`,
-    );
-  }
+  if (info.parent === undefined) throw new Error("Temporal turn Workflow has no parent.");
 
   const backend = new TemporalLoopBackend({
+    checkpoint: envelope.checkpoint,
     executionId: envelope.executionId,
     kind: "turn",
     parentWorkflowId: info.parent.workflowId,
+    sessionId: envelope.input.state.sessionId,
+    streamLogId: envelope.streamLogId,
     taskQueue: envelope.taskQueue,
   });
   return await runTurn(backend, envelope.input);

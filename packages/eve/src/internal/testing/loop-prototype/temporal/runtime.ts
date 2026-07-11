@@ -10,12 +10,11 @@ import { ApplicationFailure, Context } from "@temporalio/activity";
 import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { Worker } from "@temporalio/worker";
 
-import { executionId } from "../ids.js";
+import { eventLogId, executionId } from "../ids.js";
 import { DeclaredEffectFailure, EffectProtocolError, SqlitePrototypeService } from "../service.js";
 import type {
   Delivery,
   EffectCall,
-  EffectName,
   EffectResult,
   EventLogId,
   EventRecord,
@@ -23,7 +22,7 @@ import type {
   PrototypeRun,
   PrototypeRuntime,
   SessionId,
-  SessionProgramInput,
+  PrototypeStartInput,
   TerminalOutcome,
 } from "../types.js";
 import {
@@ -150,20 +149,22 @@ export class TemporalPrototypeRuntime implements PrototypeRuntime {
     };
   }
 
-  async start(input: SessionProgramInput): Promise<TemporalPrototypeRun> {
+  async start(input: PrototypeStartInput): Promise<TemporalPrototypeRun> {
     if (this.#closed) throw new Error("Temporal prototype runtime is closed.");
 
     const workflowExecutionId = executionId(`${input.sessionId}:execution`);
     const workflowId = workflowExecutionId;
+    const logId = eventLogId(`${input.sessionId}:events`);
     const handle = await this.#environment.client.workflow.start<TemporalSessionWorkflow>(
       TEMPORAL_SESSION_WORKFLOW,
       {
         args: [
           {
             executionId: workflowExecutionId,
-            input,
+            input: sessionProgramInput(input),
             kind: "session",
             routingIntent: "pinned",
+            streamLogId: logId,
             taskQueue: this.taskQueue,
           },
         ],
@@ -172,12 +173,7 @@ export class TemporalPrototypeRuntime implements PrototypeRuntime {
         workflowId,
       },
     );
-    const run = new TemporalPrototypeRunState(
-      handle,
-      input.eventLogId,
-      input.sessionId,
-      this.#service,
-    );
+    const run = new TemporalPrototypeRunState(handle, logId, input.sessionId, this.#service);
     this.#runs.add(run);
     void run.result.finally(() => this.#runs.delete(run)).catch(() => {});
     return run;
@@ -268,10 +264,10 @@ export async function createTemporalPrototypeRuntime(): Promise<TemporalPrototyp
 
 function createActivities(service: SqlitePrototypeService): TemporalActivities {
   return {
-    async appendEvents(events): Promise<void> {
-      await service.append(events);
+    async appendEvent(logId, event): Promise<void> {
+      await service.append(logId, event);
     },
-    async effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectResult<K>> {
+    async effect(call: EffectCall): Promise<EffectResult> {
       try {
         return { kind: "succeeded", output: await service.effect(call) };
       } catch (error) {
@@ -289,6 +285,18 @@ function createActivities(service: SqlitePrototypeService): TemporalActivities {
         throw error;
       }
     },
+    async finish(sessionId, outcome): Promise<void> {
+      service.finish(sessionId, outcome);
+    },
+  };
+}
+
+function sessionProgramInput(input: PrototypeStartInput) {
+  return {
+    initialDelivery: input.initialDelivery,
+    mode: input.mode,
+    scenario: input.scenario,
+    sessionId: input.sessionId,
   };
 }
 

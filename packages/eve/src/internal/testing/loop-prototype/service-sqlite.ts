@@ -2,18 +2,18 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { PrototypeService } from "./service-contract.js";
 import {
-  type AnyEffectCall,
   type EffectLedger,
   EffectProtocolError,
   executeScriptedEffect,
 } from "./service-effects.js";
 import type {
   EffectCall,
-  EffectName,
-  EffectOutput,
   EventLogId,
   EventRecord,
+  SessionId,
+  StreamEvent,
   TerminalOutcome,
+  WireValue,
 } from "./types.js";
 import { parseJsonWireValue, stringifyWireValue } from "./wire.js";
 
@@ -57,11 +57,12 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
     `);
   }
 
-  async append(events: readonly EventRecord[]): Promise<void> {
+  async append(logId: EventLogId, event: StreamEvent): Promise<EventRecord> {
     this.#database.exec("BEGIN IMMEDIATE");
     try {
-      for (const event of events) this.#appendEvent(event);
+      const record = this.#appendEvent(logId, event);
       this.#database.exec("COMMIT");
+      return record;
     } catch (error) {
       this.#database.exec("ROLLBACK");
       throw error;
@@ -82,7 +83,7 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
     return row === undefined ? null : parseTerminalOutcome(row.outcome);
   }
 
-  commitResult(call: AnyEffectCall, result: string): string {
+  commitResult(call: EffectCall, result: string): string {
     this.#database
       .prepare("INSERT OR IGNORE INTO effect_results (operation_id, result) VALUES (?, ?)")
       .run(call.id, result);
@@ -96,7 +97,7 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
     return committed;
   }
 
-  committedResult(call: AnyEffectCall): string | null {
+  committedResult(call: EffectCall): string | null {
     const row = this.#database
       .prepare("SELECT result FROM effect_results WHERE operation_id = ?")
       .get(call.id) as { readonly result: string } | undefined;
@@ -107,7 +108,7 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
     this.#database.close();
   }
 
-  async effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectOutput<K>> {
+  async effect(call: EffectCall): Promise<WireValue> {
     return await executeScriptedEffect(this, call);
   }
 
@@ -118,7 +119,11 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
     return row?.count ?? 0;
   }
 
-  recordAttempt(call: AnyEffectCall): number {
+  finish(sessionId: SessionId, outcome: TerminalOutcome): void {
+    this.recordCallback(sessionId, outcome);
+  }
+
+  recordAttempt(call: EffectCall): number {
     this.#database
       .prepare(
         `INSERT INTO attempts (operation_id, count) VALUES (?, 1)
@@ -141,7 +146,7 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
       .run(sessionId, value);
   }
 
-  recordExecution(call: AnyEffectCall): void {
+  recordExecution(call: EffectCall): void {
     this.#database
       .prepare(
         `INSERT INTO effect_executions (operation_id, count) VALUES (?, 1)
@@ -150,7 +155,7 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
       .run(call.id);
   }
 
-  recordVisibleEffect(call: AnyEffectCall): void {
+  recordVisibleEffect(call: EffectCall): void {
     const value = JSON.stringify({ input: call.input, name: call.name });
     const existing = this.#database
       .prepare("SELECT value FROM visible_effects WHERE operation_id = ?")
@@ -181,7 +186,7 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
     return row.count;
   }
 
-  #appendEvent(event: EventRecord): void {
+  #appendEvent(logId: EventLogId, event: StreamEvent): EventRecord {
     const payload = stringifyWireValue(event.payload);
     const existing = this.#database
       .prepare(`SELECT log_id, sequence, operation_id, payload FROM events WHERE event_id = ?`)
@@ -196,22 +201,31 @@ export class SqlitePrototypeService implements PrototypeService, EffectLedger {
 
     if (existing !== undefined) {
       if (
-        existing.log_id !== event.logId ||
-        existing.sequence !== event.sequence ||
+        existing.log_id !== logId ||
         existing.operation_id !== event.operationId ||
         existing.payload !== payload
       ) {
         throw new Error(`Event "${event.id}" was retried with different bytes.`);
       }
-      return;
+      return {
+        ...event,
+        logId,
+        sequence: existing.sequence,
+      };
     }
+
+    const sequenceRow = this.#database
+      .prepare("SELECT COALESCE(MAX(sequence), -1) + 1 AS sequence FROM events WHERE log_id = ?")
+      .get(logId) as { readonly sequence: number };
+    const record: EventRecord = { ...event, logId, sequence: sequenceRow.sequence };
 
     this.#database
       .prepare(
         `INSERT INTO events (event_id, log_id, sequence, operation_id, payload)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .run(event.id, event.logId, event.sequence, event.operationId, payload);
+      .run(record.id, record.logId, record.sequence, record.operationId, payload);
+    return record;
   }
 }
 

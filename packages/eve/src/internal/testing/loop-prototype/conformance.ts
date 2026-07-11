@@ -1,12 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { childSessionId, eventLogId, operationId, sessionId } from "./ids.js";
+import { generateOperationId } from "./effect-definitions.js";
+import { childSessionId, eventLogId, sessionId } from "./ids.js";
 import type {
   EventRecord,
   MessageDelivery,
   PrototypeRun,
   PrototypeRuntime,
-  SessionProgramInput,
+  PrototypeStartInput,
   WireValue,
 } from "./types.js";
 
@@ -157,7 +158,11 @@ export function defineLoopPrototypeConformance(
       const run = await runtime.start(
         taskInput(runtime, "retry", { kind: "retry-once" }, "eventual"),
       );
-      const generateId = operationId(run.sessionId, 0, "generate:0");
+      const generateId = generateOperationId({
+        generationOrdinal: 0,
+        sessionId: run.sessionId,
+        turnOrdinal: 0,
+      });
 
       if (options.automaticRetries) {
         const outcome = await run.result;
@@ -220,18 +225,18 @@ export function defineLoopPrototypeConformance(
 function taskInput(
   runtime: PrototypeRuntime,
   suffix: string,
-  scenario: SessionProgramInput["scenario"],
+  scenario: PrototypeStartInput["scenario"],
   message: string,
-): SessionProgramInput {
+): PrototypeStartInput {
   return input(runtime, suffix, "task", scenario, message);
 }
 
 function conversationInput(
   runtime: PrototypeRuntime,
   suffix: string,
-  scenario: SessionProgramInput["scenario"],
+  scenario: PrototypeStartInput["scenario"],
   message: string,
-): SessionProgramInput {
+): PrototypeStartInput {
   return input(runtime, suffix, "conversation", scenario, message);
 }
 
@@ -239,9 +244,9 @@ function input(
   runtime: PrototypeRuntime,
   suffix: string,
   mode: "conversation" | "task",
-  scenario: SessionProgramInput["scenario"],
+  scenario: PrototypeStartInput["scenario"],
   message: string,
-): SessionProgramInput {
+): PrototypeStartInput {
   const id = sessionId(`${runtime.kind}:${suffix}`);
   const initialDelivery: MessageDelivery = {
     deliveryId: `${id}:initial`,
@@ -250,7 +255,6 @@ function input(
   };
   return {
     continuationToken: `${id}:input`,
-    eventLogId: eventLogId(`${id}:events`),
     initialDelivery,
     mode,
     scenario,

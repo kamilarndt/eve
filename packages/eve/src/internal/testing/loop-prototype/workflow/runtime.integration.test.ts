@@ -23,7 +23,6 @@ describe("workflow loop prototype mechanics", () => {
     try {
       const run = await runtime.start({
         continuationToken: `${rootSessionId}:input`,
-        eventLogId: eventLogId(`${rootSessionId}:events`),
         initialDelivery: {
           deliveryId: `${rootSessionId}:initial`,
           kind: "message",
@@ -139,7 +138,15 @@ async function waitForRunCompleted(runId: string): Promise<void> {
     const status = await run.status;
     if (status === "completed") return;
     if (status === "cancelled" || status === "failed") {
-      throw new Error(`Workflow child run "${runId}" ended with status "${status}".`);
+      let failure: unknown;
+      try {
+        await run.returnValue;
+      } catch (error) {
+        failure = error;
+      }
+      throw new Error(`Workflow child run "${runId}" ended with status "${status}".`, {
+        cause: failure,
+      });
     }
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
   }

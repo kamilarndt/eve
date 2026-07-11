@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { defineLoopPrototypeConformance } from "../conformance.js";
-import { childId, eventLogId, executionId, sessionId } from "../ids.js";
+import { childId, executionId, sessionId } from "../ids.js";
 import type { EventRecord, WireValue } from "../types.js";
 import {
   TEMPORAL_CHILD_ACKNOWLEDGED_SIGNAL,
@@ -21,7 +21,6 @@ describe("Temporal loop mechanisms", () => {
       const id = sessionId("temporal:mechanisms");
       const run = await runtime.start({
         continuationToken: `${id}:input`,
-        eventLogId: eventLogId(`${id}:events`),
         initialDelivery: {
           deliveryId: `${id}:initial`,
           kind: "message",
@@ -55,7 +54,6 @@ describe("Temporal loop mechanisms", () => {
       const terminalId = sessionId("temporal:mechanisms-terminal");
       const terminalRun = await runtime.start({
         continuationToken: `${terminalId}:input`,
-        eventLogId: eventLogId(`${terminalId}:events`),
         initialDelivery: {
           deliveryId: `${terminalId}:initial`,
           kind: "message",

@@ -1,17 +1,17 @@
 import type { PrototypeService } from "./service-contract.js";
 import {
-  type AnyEffectCall,
   type EffectLedger,
   EffectProtocolError,
   executeScriptedEffect,
 } from "./service-effects.js";
 import type {
   EffectCall,
-  EffectName,
-  EffectOutput,
   EventLogId,
   EventRecord,
+  SessionId,
+  StreamEvent,
   TerminalOutcome,
+  WireValue,
 } from "./types.js";
 
 export class MemoryPrototypeService implements PrototypeService, EffectLedger {
@@ -22,8 +22,8 @@ export class MemoryPrototypeService implements PrototypeService, EffectLedger {
   readonly #executions = new Map<string, number>();
   readonly #visibleEffects = new Map<string, string>();
 
-  async append(events: readonly EventRecord[]): Promise<void> {
-    for (const event of events) appendEvent(this.#events, event);
+  async append(logId: EventLogId, event: StreamEvent): Promise<EventRecord> {
+    return appendEvent(this.#events, logId, event);
   }
 
   attemptCount(operationId: string): number {
@@ -34,7 +34,7 @@ export class MemoryPrototypeService implements PrototypeService, EffectLedger {
     return this.#callbacks.get(sessionId) ?? null;
   }
 
-  commitResult(call: AnyEffectCall, result: string): string {
+  commitResult(call: EffectCall, result: string): string {
     const committed = this.#effectResults.get(call.id);
     if (committed !== undefined) {
       if (committed !== result) {
@@ -48,13 +48,13 @@ export class MemoryPrototypeService implements PrototypeService, EffectLedger {
     return result;
   }
 
-  committedResult(call: AnyEffectCall): string | null {
+  committedResult(call: EffectCall): string | null {
     return this.#effectResults.get(call.id) ?? null;
   }
 
   async close(): Promise<void> {}
 
-  async effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectOutput<K>> {
+  async effect(call: EffectCall): Promise<WireValue> {
     return await executeScriptedEffect(this, call);
   }
 
@@ -62,13 +62,7 @@ export class MemoryPrototypeService implements PrototypeService, EffectLedger {
     return this.#executions.get(operationId) ?? 0;
   }
 
-  recordAttempt(call: AnyEffectCall): number {
-    const count = (this.#attempts.get(call.id) ?? 0) + 1;
-    this.#attempts.set(call.id, count);
-    return count;
-  }
-
-  recordCallback(sessionId: string, outcome: TerminalOutcome): void {
+  finish(sessionId: SessionId, outcome: TerminalOutcome): void {
     const existing = this.#callbacks.get(sessionId);
     if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(outcome)) {
       throw new EffectProtocolError(`Conflicting callback for session "${sessionId}".`);
@@ -76,11 +70,17 @@ export class MemoryPrototypeService implements PrototypeService, EffectLedger {
     this.#callbacks.set(sessionId, outcome);
   }
 
-  recordExecution(call: AnyEffectCall): void {
+  recordAttempt(call: EffectCall): number {
+    const count = (this.#attempts.get(call.id) ?? 0) + 1;
+    this.#attempts.set(call.id, count);
+    return count;
+  }
+
+  recordExecution(call: EffectCall): void {
     this.#executions.set(call.id, this.executionCount(call.id) + 1);
   }
 
-  recordVisibleEffect(call: AnyEffectCall): void {
+  recordVisibleEffect(call: EffectCall): void {
     const value = JSON.stringify({ input: call.input, name: call.name });
     const existing = this.#visibleEffects.get(call.id);
     if (existing !== undefined && existing !== value) {
@@ -100,21 +100,25 @@ export class MemoryPrototypeService implements PrototypeService, EffectLedger {
   }
 }
 
-function appendEvent(events: Map<string, EventRecord>, event: EventRecord): void {
+function appendEvent(
+  events: Map<string, EventRecord>,
+  logId: EventLogId,
+  event: StreamEvent,
+): EventRecord {
   const existing = events.get(event.id);
   if (existing !== undefined) {
-    if (JSON.stringify(existing) !== JSON.stringify(event)) {
+    if (
+      existing.logId !== logId ||
+      existing.operationId !== event.operationId ||
+      JSON.stringify(existing.payload) !== JSON.stringify(event.payload)
+    ) {
       throw new Error(`Event "${event.id}" was retried with different bytes.`);
     }
-    return;
+    return existing;
   }
 
-  for (const current of events.values()) {
-    if (current.logId === event.logId && current.sequence === event.sequence) {
-      throw new Error(
-        `Event log "${event.logId}" already contains sequence ${String(event.sequence)}.`,
-      );
-    }
-  }
-  events.set(event.id, event);
+  const sequence = [...events.values()].filter((current) => current.logId === logId).length;
+  const record = { ...event, logId, sequence };
+  events.set(event.id, record);
+  return record;
 }

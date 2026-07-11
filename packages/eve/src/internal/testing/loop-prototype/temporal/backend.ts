@@ -7,25 +7,39 @@ import {
   startChild,
 } from "@temporalio/workflow";
 
-import { executionId } from "../ids.js";
+import {
+  checkpointOwnedState,
+  delegateCheckpoint,
+  initialCheckpoint,
+  TurnCheckpointProtocol,
+} from "../checkpoint-protocol.js";
+import {
+  createExecuteToolEffect,
+  createGenerateEffect,
+  readExecuteToolResult,
+  readGenerateResult,
+} from "../effect-definitions.js";
+import { childId, eventId, eventLogId, executionId, operationId, requestChildId } from "../ids.js";
 import type {
-  AnyChildHandle,
+  ApprovalRequest,
   ChildHandle,
-  ChildKind,
-  ChildNotice,
-  ChildOutput,
+  DelegatedSessionInput,
   Delivery,
-  DriverUpdate,
-  EffectCall,
-  EffectName,
-  EffectResult,
-  EventRecord,
+  EventLogId,
   ExecutionId,
+  GenerateInput,
+  GeneratedTurn,
   LoopBackend,
-  ReceiveWait,
-  SessionChildSpec,
+  RequestResult,
+  SessionCheckpoint,
+  SessionId,
+  SessionState,
+  Stream,
+  StreamEvent,
   TerminalOutcome,
-  TurnChildSpec,
+  ToolRequest,
+  TurnHandle,
+  TurnProgramInput,
 } from "../types.js";
 import {
   TEMPORAL_SESSION_WORKFLOW,
@@ -44,12 +58,17 @@ type TemporalBackendContext =
   | {
       readonly executionId: ExecutionId;
       readonly kind: "session";
+      readonly sessionId: SessionId;
+      readonly streamLogId: EventLogId;
       readonly taskQueue: string;
     }
   | {
+      readonly checkpoint: SessionCheckpoint;
       readonly executionId: ExecutionId;
       readonly kind: "turn";
       readonly parentWorkflowId: string;
+      readonly sessionId: SessionId;
+      readonly streamLogId: EventLogId;
       readonly taskQueue: string;
     };
 
@@ -57,8 +76,6 @@ type ChildTerminalState<Output> =
   | { readonly kind: "pending" }
   | { readonly kind: "resolved"; readonly output: Output }
   | { readonly error: unknown; readonly kind: "rejected" };
-
-const temporalChildTracker: unique symbol = Symbol("temporal-child-tracker");
 
 type TrackedChildWorkflow<Output> = ChildWorkflowHandle<() => Promise<Output>>;
 
@@ -94,27 +111,49 @@ class TemporalChildTracker<Output> {
   }
 }
 
-interface TemporalChildHandle<Kind extends ChildKind> extends ChildHandle<Kind> {
-  readonly [temporalChildTracker]: TemporalChildTracker<ChildOutput<Kind>>;
+class TemporalStream implements Stream {
+  readonly #activities: TemporalActivities;
+  readonly #beforeAppend: () => Promise<void>;
+  readonly #logId: EventLogId;
+
+  constructor(taskQueue: string, logId: EventLogId, beforeAppend: () => Promise<void>) {
+    this.#activities = activities(taskQueue, 2);
+    this.#beforeAppend = beforeAppend;
+    this.#logId = logId;
+  }
+
+  async append(event: StreamEvent): Promise<void> {
+    await this.#beforeAppend();
+    await this.#activities.appendEvent(this.#logId, event);
+  }
 }
 
 export class TemporalLoopBackend implements LoopBackend {
+  readonly executionId: ExecutionId;
+  readonly stream: Stream;
   readonly #acknowledgedRevisions = new Set<number>();
-  readonly #childUpdates = new Map<string, DriverUpdate[]>();
+  readonly #childUpdates = new Map<string, SessionCheckpoint[]>();
   readonly #context: TemporalBackendContext;
   readonly #deliveries: Delivery[] = [];
-  readonly executionId: ExecutionId;
+  readonly #pendingChildStarts = new Set<Promise<unknown>>();
+  #checkpoint: SessionCheckpoint | null;
 
   constructor(context: TemporalBackendContext) {
     this.#context = context;
+    this.#checkpoint = context.kind === "turn" ? context.checkpoint : null;
     this.executionId = context.executionId;
+    this.stream = new TemporalStream(
+      context.taskQueue,
+      context.streamLogId,
+      async () => await this.#flushChildStarts(),
+    );
 
     setHandler(temporalDeliverySignal, (delivery) => {
       this.#deliveries.push(delivery);
     });
-    setHandler(temporalChildUpdateSignal, ({ childWorkflowId, update }) => {
+    setHandler(temporalChildUpdateSignal, ({ checkpoint, childWorkflowId }) => {
       const updates = this.#childUpdates.get(childWorkflowId) ?? [];
-      updates.push(update);
+      updates.push(checkpoint);
       this.#childUpdates.set(childWorkflowId, updates);
     });
     setHandler(temporalChildAcknowledgedSignal, (revision) => {
@@ -122,127 +161,166 @@ export class TemporalLoopBackend implements LoopBackend {
     });
   }
 
-  async acknowledgeChildUpdate(handle: ChildHandle<"turn">, revision: number): Promise<void> {
-    if (!isTemporalChildHandle(handle)) {
-      throw new TypeError(`Child "${handle.id}" is not a Temporal child.`);
-    }
-    await handle[temporalChildTracker].workflow.signal(temporalChildAcknowledgedSignal, revision);
-  }
-
-  async appendEvents(events: readonly EventRecord[]): Promise<void> {
-    await this.#activities(2).appendEvents(events);
-  }
-
-  async checkpoint(checkpoint: Parameters<LoopBackend["checkpoint"]>[0]): Promise<void> {
+  async checkpoint(state: SessionState): Promise<void> {
+    const next =
+      this.#checkpoint === null
+        ? initialCheckpoint(this.executionId, state)
+        : checkpointOwnedState(this.#checkpoint, this.executionId, state);
+    this.#checkpoint = next;
     if (this.#context.kind === "session") return;
 
     const parent = getExternalWorkflowHandle(this.#context.parentWorkflowId);
     await parent.signal(temporalChildUpdateSignal, {
+      checkpoint: next,
       childWorkflowId: this.executionId,
-      update: { checkpoint, kind: "checkpoint" },
     });
-    await condition(() => this.#acknowledgedRevisions.has(checkpoint.revision));
-    this.#acknowledgedRevisions.delete(checkpoint.revision);
+    await condition(() => this.#acknowledgedRevisions.has(next.revision));
+    this.#acknowledgedRevisions.delete(next.revision);
   }
 
-  async effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectResult<K>> {
-    return await this.#activities(call.retry.maxAttempts).effect(call);
+  async executeTool(request: ApprovalRequest | ToolRequest): Promise<RequestResult> {
+    const call = createExecuteToolEffect(request);
+    return readExecuteToolResult(
+      call,
+      await activities(this.#context.taskQueue, call.retry.maxAttempts).effect(call),
+    );
   }
 
-  async finish(_outcome: TerminalOutcome): Promise<void> {}
+  async finish(outcome: TerminalOutcome): Promise<void> {
+    if (this.#checkpoint?.state.phase !== "terminal") {
+      throw new Error("Temporal session finished without a terminal checkpoint.");
+    }
+    await activities(this.#context.taskQueue, 2).finish(this.#context.sessionId, outcome);
+    const terminalOperation = operationId(
+      this.#context.sessionId,
+      this.#checkpoint.state.nextTurnOrdinal,
+      "finalize",
+    );
+    await this.stream.append({
+      id: eventId(terminalOperation, 0),
+      operationId: terminalOperation,
+      payload: { outcome: outcome.kind, type: "session.terminal" },
+    });
+  }
 
-  async receive(_wait: ReceiveWait): Promise<Delivery> {
+  async generate(input: GenerateInput): Promise<GeneratedTurn> {
+    const call = createGenerateEffect(input);
+    return readGenerateResult(
+      call,
+      await activities(this.#context.taskQueue, call.retry.maxAttempts).effect(call),
+    );
+  }
+
+  async receive(): Promise<Delivery> {
     await condition(() => this.#deliveries.length > 0);
     const delivery = this.#deliveries.shift();
     if (delivery === undefined) throw new Error("Temporal delivery disappeared.");
     return delivery;
   }
 
-  async startSessionChild(spec: SessionChildSpec): Promise<ChildHandle<"session">> {
-    const workflow = await startChild<TemporalSessionWorkflow>(TEMPORAL_SESSION_WORKFLOW, {
-      args: [
-        {
-          executionId: executionId(spec.id),
-          input: { ...spec.input, eventLogId: spec.eventLog.id },
-          kind: "session",
-          routingIntent: spec.version,
-          taskQueue: this.#context.taskQueue,
-        },
-      ],
-      memo: { eveRoutingIntent: spec.version },
-      taskQueue: this.#context.taskQueue,
-      workflowId: spec.id,
-    });
-    return createTemporalChildHandle("session", spec.id, workflow);
-  }
-
-  async startTurnChild(spec: TurnChildSpec): Promise<ChildHandle<"turn">> {
-    const workflow = await startChild<TemporalTurnWorkflow>(TEMPORAL_TURN_WORKFLOW, {
-      args: [
-        {
-          executionId: executionId(spec.id),
-          input: spec.input,
-          kind: "turn",
-          routingIntent: spec.version,
-          taskQueue: this.#context.taskQueue,
-        },
-      ],
-      memo: { eveRoutingIntent: spec.version },
-      taskQueue: this.#context.taskQueue,
-      workflowId: spec.id,
-    });
-    return createTemporalChildHandle("turn", spec.id, workflow);
-  }
-
-  async waitForChild(handle: ChildHandle<"session">): Promise<ChildNotice<"session">>;
-  async waitForChild(handle: ChildHandle<"turn">): Promise<ChildNotice<"turn">>;
-  async waitForChild(
-    handle: AnyChildHandle,
-  ): Promise<ChildNotice<"session"> | ChildNotice<"turn">> {
-    if (handle.kind === "turn") return await this.#waitForTurnChild(handle);
-    return await this.#waitForSessionChild(handle);
-  }
-
-  async #waitForTurnChild(handle: ChildHandle<"turn">): Promise<ChildNotice<"turn">> {
-    if (!isTemporalChildHandle(handle)) {
-      throw new TypeError(`Child "${handle.id}" is not a Temporal child.`);
+  spawnChild(input: DelegatedSessionInput): ChildHandle {
+    if (this.#context.kind !== "turn") {
+      throw new Error("Only a turn Workflow can start a delegated session.");
     }
-
-    await condition(() => this.#hasChildUpdate(handle.id) || handle[temporalChildTracker].settled);
-    const update = this.#takeChildUpdate(handle.id);
-    if (update !== null) return { kind: "update", update };
-    return { kind: "terminal", output: handle[temporalChildTracker].result() };
-  }
-
-  async #waitForSessionChild(handle: ChildHandle<"session">): Promise<ChildNotice<"session">> {
-    if (!isTemporalChildHandle(handle)) {
-      throw new TypeError(`Child "${handle.id}" is not a Temporal child.`);
-    }
-
-    await condition(() => this.#hasChildUpdate(handle.id) || handle[temporalChildTracker].settled);
-    if (this.#takeChildUpdate(handle.id) !== null) {
-      throw new Error(`Session child "${handle.id}" reported a borrowed checkpoint.`);
-    }
-    return { kind: "terminal", output: handle[temporalChildTracker].result() };
-  }
-
-  #activities(maximumAttempts: number): TemporalActivities {
-    return proxyActivities<TemporalActivities>({
-      retry: {
-        backoffCoefficient: 1,
-        initialInterval: "1 millisecond",
-        maximumAttempts,
+    const id = requestChildId(this.executionId, input.requestId);
+    const workflow = this.#trackChildStart(
+      startChild<TemporalSessionWorkflow>(TEMPORAL_SESSION_WORKFLOW, {
+        args: [
+          {
+            executionId: executionId(id),
+            input: sessionProgramInput(input),
+            kind: "session",
+            routingIntent: "pinned",
+            streamLogId: eventLogId(`${input.sessionId}:events`),
+            taskQueue: this.#context.taskQueue,
+          },
+        ],
+        memo: { eveRoutingIntent: "pinned" },
+        taskQueue: this.#context.taskQueue,
+        workflowId: id,
+      }),
+    );
+    return {
+      id,
+      wait: async () => {
+        const tracker = new TemporalChildTracker(await workflow);
+        await condition(() => tracker.settled);
+        return tracker.result();
       },
-      startToCloseTimeout: "30 seconds",
-      taskQueue: this.#context.taskQueue,
+    };
+  }
+
+  spawnTurn(input: TurnProgramInput): TurnHandle {
+    if (this.#context.kind !== "session") {
+      throw new Error("A turn Workflow cannot start another turn Workflow.");
+    }
+    if (this.#checkpoint === null) throw new Error("Turn spawned before session initialization.");
+    const id = childId(this.executionId, input.state.nextTurnOrdinal - 1, "turn");
+    const childExecutionId = executionId(id);
+    const delegated = delegateCheckpoint(this.#checkpoint, this.executionId, childExecutionId);
+    this.#checkpoint = delegated;
+    const protocol = new TurnCheckpointProtocol({
+      child: childExecutionId,
+      delegated,
+      parent: this.executionId,
+      persist: async (checkpoint) => {
+        this.#checkpoint = checkpoint;
+      },
     });
+    const workflow = this.#trackChildStart(
+      startChild<TemporalTurnWorkflow>(TEMPORAL_TURN_WORKFLOW, {
+        args: [
+          {
+            checkpoint: delegated,
+            executionId: childExecutionId,
+            input,
+            kind: "turn",
+            routingIntent: "latest-compatible",
+            streamLogId: this.#context.streamLogId,
+            taskQueue: this.#context.taskQueue,
+          },
+        ],
+        memo: { eveRoutingIntent: "latest-compatible" },
+        taskQueue: this.#context.taskQueue,
+        workflowId: id,
+      }),
+    );
+    return {
+      id,
+      wait: async () => {
+        const tracker = new TemporalChildTracker(await workflow);
+        while (true) {
+          await condition(() => this.#hasChildUpdate(id) || tracker.settled);
+          const update = this.#takeChildUpdate(id);
+          if (update !== null) {
+            const revision = await protocol.accept(update);
+            await tracker.workflow.signal(temporalChildAcknowledgedSignal, revision);
+            continue;
+          }
+          const outcome = tracker.result();
+          await protocol.complete(outcome.state);
+          return outcome;
+        }
+      },
+    };
   }
 
   #hasChildUpdate(childWorkflowId: string): boolean {
     return (this.#childUpdates.get(childWorkflowId)?.length ?? 0) > 0;
   }
 
-  #takeChildUpdate(childWorkflowId: string): DriverUpdate | null {
+  async #flushChildStarts(): Promise<void> {
+    const pending = [...this.#pendingChildStarts];
+    await Promise.all(pending);
+    for (const started of pending) this.#pendingChildStarts.delete(started);
+  }
+
+  #trackChildStart<Value>(started: Promise<Value>): Promise<Value> {
+    this.#pendingChildStarts.add(started);
+    return started;
+  }
+
+  #takeChildUpdate(childWorkflowId: string): SessionCheckpoint | null {
     const updates = this.#childUpdates.get(childWorkflowId);
     if (updates === undefined) return null;
     const update = updates.shift() ?? null;
@@ -251,21 +329,23 @@ export class TemporalLoopBackend implements LoopBackend {
   }
 }
 
-function createTemporalChildHandle<Kind extends ChildKind>(
-  kind: Kind,
-  id: ChildHandle<Kind>["id"],
-  workflow: TrackedChildWorkflow<ChildOutput<Kind>>,
-): TemporalChildHandle<Kind> {
-  return {
-    [temporalChildTracker]: new TemporalChildTracker(workflow),
-    backendRunId: workflow.firstExecutionRunId,
-    id,
-    kind,
-  };
+function activities(taskQueue: string, maximumAttempts: number): TemporalActivities {
+  return proxyActivities<TemporalActivities>({
+    retry: {
+      backoffCoefficient: 1,
+      initialInterval: "1 millisecond",
+      maximumAttempts,
+    },
+    startToCloseTimeout: "30 seconds",
+    taskQueue,
+  });
 }
 
-function isTemporalChildHandle<Kind extends ChildKind>(
-  handle: ChildHandle<Kind>,
-): handle is TemporalChildHandle<Kind> {
-  return temporalChildTracker in handle;
+function sessionProgramInput(input: DelegatedSessionInput) {
+  return {
+    initialDelivery: input.initialDelivery,
+    mode: input.mode,
+    scenario: input.scenario,
+    sessionId: input.sessionId,
+  };
 }

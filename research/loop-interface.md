@@ -9,8 +9,8 @@ status: proposed
 ## Decision
 
 Adopt two eve-owned domain programs, `runSession` and `runTurn`, over one
-internal `LoopBackend` execution port. Reject the earlier generic
-`Loop.spawn(): Promise<O>` proposal.
+internal `LoopBackend` execution port. The port has typed generation and tool
+methods, handle-returning turn and session spawns, and an owned event stream.
 
 Three executable adapters validate this boundary: inline JavaScript, Workflow
 DevKit, and Temporal. All run the same programs and nine-test conformance
@@ -54,19 +54,23 @@ explicit commit rule, not another layer that keeps the two cursors implicit.
 ```text
 PrototypeRuntime                 test-facing run controller
   -> adapter                     engine mechanics
-     -> runSession / runTurn     eve domain transitions
-        -> LoopBackend           closed execution port
-           -> effects, events, input, children, checkpoints
+     -> runSession               session domain transitions
+        -> spawnTurn().wait()
+           -> runTurn            turn domain transitions
+              -> parent Stream   borrowed handle
+              -> spawnChild()    fresh child Stream
+     -> checkpoint protocol      revisions, lease, relay, acknowledgement
 ```
 
 - `runSession` owns session lifetime, public input, turn dispatch, buffering,
-  callback finalization, and the public terminal result.
+  and the public terminal result.
 - `runTurn` owns generation, eve-executed tools, approvals, subagents, balanced
   history, and the logical result of one turn.
 - `LoopBackend` exposes only the execution operations those programs require.
   It contains no `step`, `Activity`, `Hook`, or `Signal` vocabulary.
-- An adapter owns engine-specific child startup, suspension, acknowledgement,
-  retry, stream binding, and serialization.
+- An adapter owns engine-specific child startup, suspension, checkpoint relay,
+  acknowledgement, retry, stream binding, lifecycle persistence, and
+  serialization.
 - The prototype service supplies scripted effects and the canonical event
   store. It is test infrastructure, not part of the proposed public API.
 
@@ -76,37 +80,46 @@ The executable contract is the source of truth in
 
 ## Contract decisions
 
-### One checkpoint, one logical owner
+### Checkpoint relay is below the port
 
-`SessionCheckpoint` is the complete immutable program state plus a monotonic
-revision and an execution owner. The parent transfers ownership to a turn. A
-turn reports revised checkpoints; the parent persists and acknowledges each
-one before the child may finish. Intermediate checkpoints retain child
-ownership; the terminal checkpoint returns it to the parent. Exact redelivery
-is re-acknowledged, while changed state after lease return is rejected.
+The programs call `checkpoint(state)` and never exchange revisions, leases, or
+acknowledgements. Each turn handle owns a shared `TurnCheckpointProtocol` that
+validates parent-owned identity, monotonic revisions, exact redelivery, lease
+return, and terminal byte equality. The adapter persists each accepted update
+before acknowledging it and completes the lease return before `wait()`
+resolves.
 
-This is a program invariant, not a distributed lease: the prototype has no
-expiry, lock service, or compare-and-swap store. Workflow and Temporal history
-record program progress; inline retains it only in memory.
+This remains a protocol lease, not a distributed lock. The prototype has no
+expiry or compare-and-swap store. Workflow and Temporal history record program
+progress; inline retains it only in memory.
 
-### Child kinds are explicit
+### Spawns return typed handles
 
-A turn child borrows the parent session's event log and runs with
-latest-compatible intent. A delegated session owns a new event log and runs
-with pinned intent. The core mints a logical child ID before the adapter starts
-the engine child; the adapter separately reports its backend run ID.
+`spawnTurn(input)` returns a `TurnHandle`; `spawnChild(input)` returns a
+`ChildHandle`. Both expose the logical child ID immediately and put completion
+behind `wait()`. Backend run identity stays inside the adapter. The distinct
+handle types preserve child kind without a generic notice union or overloaded
+wait operation.
 
-There is no generic `spawn()` because it erased four required facts: immediate
-identity, event-log ownership, child kind, and mid-child checkpoint updates.
+Stream ownership is structural. A turn backend receives the same `Stream`
+handle as its parent. A delegated session backend receives a new stream. The
+programs no longer pass `borrow-parent` or `own` descriptors, log IDs, or event
+sequences. Each stream binds its log identity, and the event store assigns the
+next sequence while deduplicating by event ID.
 
-### Effects are closed and retry-aware
+### Effects are typed and retry-aware
 
-Model generation, eve-executed tools, input delivery, session initialization,
-and finalization are a closed effect union. Every effect has a logical
-operation ID and an explicit retry policy. A retry reuses the operation ID.
-The backend returns either a typed success or declared exhaustion; it throws
-ledger, codec, and engine failures. This keeps a known agent failure separate
-from corruption or unavailable infrastructure.
+The loop-visible effects are `generate(input): Promise<GeneratedTurn>` and
+`executeTool(request): Promise<RequestResult>`. Their definitions declare the
+operation-ID rule and retry/idempotency policy once. The adapters may translate
+those calls into a wire `EffectCall`, but the programs never construct transport
+names, operation IDs, or retry policies.
+
+Input delivery is `receive()`, not an effect. Session initialization happens
+when the adapter starts the session. `finish(outcome)` verifies terminal state,
+records the callback, and publishes the terminal event. Declared effect
+exhaustion becomes a typed turn failure; ledger, codec, and engine failures
+still throw.
 
 The ambiguous-completion test commits an effect result before injecting
 response loss. Durable adapters make a second attempt but return the committed
@@ -122,7 +135,7 @@ the next turn rather than treated as denial.
 
 ### Domain status is not engine status
 
-When terminal publication succeeds, one `TerminalOutcome` value drives eve's
+When `finish(outcome)` succeeds, one `TerminalOutcome` value drives eve's
 terminal event, callback, parent result, and public result. A domain-level
 failed outcome may be returned by a successfully completed Workflow or Temporal
 execution. Protocol and infrastructure errors throw and fail the engine

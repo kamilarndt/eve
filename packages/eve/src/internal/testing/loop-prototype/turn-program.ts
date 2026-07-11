@@ -1,20 +1,19 @@
-import { childSessionId, eventLogId, operationId, requestChildId } from "./ids.js";
-import { EffectExhaustedError, runEffect } from "./effects.js";
-import { appendEvent, idempotentRetry, replaceCheckpoint } from "./program-support.js";
+import { EffectExhaustedError } from "./effect-definitions.js";
+import { childSessionId, operationId } from "./ids.js";
+import { executeTool as invokeTool, generate as invokeGeneration } from "./program-effects.js";
+import { appendEvent } from "./program-support.js";
 import { appendUser, closeExchange, openExchange, resolveExchangeRequest } from "./transcript.js";
 import type {
   ApprovalDelivery,
   ApprovalRequest,
   ChildHandle,
-  EffectCall,
-  EffectName,
-  EffectOutput,
+  GenerateInput,
   GeneratedTurn,
   LoopBackend,
   LoopRequest,
   OpenExchange,
+  OperationId,
   RequestResult,
-  SessionCheckpoint,
   SessionState,
   SubagentRequest,
   TerminalOutcome,
@@ -24,63 +23,41 @@ import type {
 } from "./types.js";
 
 export async function runTurn(backend: LoopBackend, input: TurnProgramInput): Promise<TurnOutcome> {
-  assertLease(input.checkpoint, backend.executionId);
-
-  let checkpoint = input.checkpoint;
-  let state = checkpoint.state;
+  let state = input.state;
 
   try {
-    const delivery = await runEffectAtState(backend, state, {
-      id: operationId(state.sessionId, state.nextTurnOrdinal - 1, "deliver"),
-      input: input.delivery,
-      name: "deliver-input",
-      retry: idempotentRetry(2),
-    });
-
-    if (delivery.kind === "message") {
+    if (input.delivery.kind === "message") {
       if (state.pending !== null) {
         throw new Error("A message delivery cannot resolve a pending approval.");
       }
-      state = { ...state, history: appendUser(state.history, delivery.message) };
+      state = { ...state, history: appendUser(state.history, input.delivery.message) };
     } else {
-      state = await resolveApproval(backend, state, delivery);
+      state = await resolveApproval(backend, state, input.delivery);
     }
 
     const result = await executeModelLoop(backend, state);
-    state = result.state;
-
-    const returned = replaceCheckpoint(checkpoint, input.parentExecutionId, {
-      ...state,
+    state = {
+      ...result.state,
       phase: result.kind === "terminal" ? "terminal" : "between-turns",
-    });
-    await backend.checkpoint(returned);
+    };
+    await backend.checkpoint(state);
 
     if (result.kind === "waiting-approval") {
-      return {
-        checkpoint: returned,
-        kind: "waiting-approval",
-        requestId: result.requestId,
-      };
+      return { kind: "waiting-approval", requestId: result.requestId, state };
     }
-
     if (result.kind === "terminal") {
-      return { checkpoint: returned, kind: "task-terminal", terminal: result.terminal };
+      return { kind: "task-terminal", state, terminal: result.terminal };
     }
-
-    return {
-      checkpoint: returned,
-      kind: "conversation-replied",
-      output: result.output,
-    };
+    return { kind: "conversation-replied", output: result.output, state };
   } catch (error) {
     if (!(error instanceof TurnEffectExhaustedError)) throw error;
     const terminal: Extract<TerminalOutcome, { readonly kind: "failed" }> = {
       error: error.effectError.failure,
       kind: "failed",
     };
-    const failureEvent = await appendEvent(
+    const failedState = { ...error.state, phase: "terminal" } as const;
+    await appendEvent(
       backend,
-      error.state,
       operationId(error.state.sessionId, error.state.nextTurnOrdinal - 1, "turn-failed"),
       {
         code: terminal.error.code,
@@ -88,12 +65,8 @@ export async function runTurn(backend: LoopBackend, input: TurnProgramInput): Pr
         type: "turn.failed",
       },
     );
-    const returned = replaceCheckpoint(checkpoint, input.parentExecutionId, {
-      ...failureEvent,
-      phase: "terminal",
-    });
-    await backend.checkpoint(returned);
-    return { checkpoint: returned, kind: "task-terminal", terminal };
+    await backend.checkpoint(failedState);
+    return { kind: "task-terminal", state: failedState, terminal };
   }
 }
 
@@ -114,19 +87,18 @@ async function executeModelLoop(
       throw new Error("Pending exchange must be resolved before generation.");
     }
 
-    const generationOperation = operationId(
-      state.sessionId,
-      state.nextTurnOrdinal - 1,
-      `generate:${String(generationOrdinal++)}`,
-    );
-    const generated = await runEffectAtState(backend, state, {
-      id: generationOperation,
-      input: { history: state.history, scenario: state.scenario },
-      name: "generate",
-      retry: idempotentRetry(2),
-    });
+    const generateInput: GenerateInput = {
+      generationOrdinal: generationOrdinal++,
+      history: state.history,
+      scenario: state.scenario,
+      sessionId: state.sessionId,
+      turnOrdinal: state.nextTurnOrdinal - 1,
+    };
+    const generation = await generateAtState(backend, state, generateInput);
+    const generated = generation.output;
+    const generationOperation = generation.operationId;
     let exchange = openGeneratedExchange(generated);
-    state = await appendEvent(backend, state, generationOperation, {
+    await appendEvent(backend, generationOperation, {
       requestCount: generated.requests.length,
       type: "model.generated",
     });
@@ -135,14 +107,11 @@ async function executeModelLoop(
       (request): request is ApprovalRequest => request.kind === "approval",
     );
     if (approval !== undefined) {
-      state = await appendEvent(
+      state = { ...state, pending: exchange };
+      await appendEvent(
         backend,
-        { ...state, pending: exchange },
         generationOperation,
-        {
-          requestId: approval.requestId,
-          type: "approval.requested",
-        },
+        { requestId: approval.requestId, type: "approval.requested" },
         1,
       );
       return { kind: "waiting-approval", requestId: approval.requestId, state };
@@ -157,21 +126,16 @@ async function executeModelLoop(
 
     if (generated.finish === null) continue;
 
-    state = await appendEvent(
+    await appendEvent(
       backend,
-      state,
       generationOperation,
-      {
-        output: generated.finish.output,
-        type: "assistant.reply",
-      },
+      { output: generated.finish.output, type: "assistant.reply" },
       1,
     );
 
     if (state.mode === "conversation") {
       return { kind: "reply", output: generated.finish.output, state };
     }
-
     return {
       kind: "terminal",
       state,
@@ -201,10 +165,7 @@ async function resolveImmediateRequests(
 ): Promise<{ readonly exchange: OpenExchange; readonly state: SessionState }> {
   let state = initialState;
   let exchange = initialExchange;
-  const subagents: {
-    readonly child: ChildHandle<"session">;
-    readonly request: SubagentRequest;
-  }[] = [];
+  const subagents: { readonly child: ChildHandle; readonly request: SubagentRequest }[] = [];
 
   for (const request of exchange.requests) {
     if (request.kind === "approval") continue;
@@ -217,42 +178,29 @@ async function resolveImmediateRequests(
     }
 
     const childSession = childSessionId(state.sessionId, request.requestId);
-    const logicalId = requestChildId(backend.executionId, request.requestId);
-    const child = await backend.startSessionChild({
-      eventLog: { id: eventLogId(`${childSession}:events`), kind: "own" },
-      id: logicalId,
-      input: {
-        continuationToken: `${childSession}:input`,
-        initialDelivery: {
-          deliveryId: `${request.requestId}:delivery`,
-          kind: "message",
-          message: request.message,
-        },
-        mode: "task",
-        scenario: { delayMs: request.delayMs, kind: "echo" },
-        sessionId: childSession,
+    const child = backend.spawnChild({
+      initialDelivery: {
+        deliveryId: `${request.requestId}:delivery`,
+        kind: "message",
+        message: request.message,
       },
-      kind: "session",
-      version: "pinned",
+      mode: "task",
+      requestId: request.requestId,
+      scenario: { delayMs: request.delayMs, kind: "echo" },
+      sessionId: childSession,
     });
-    state = await appendEvent(
+    await appendEvent(
       backend,
-      state,
       operationId(state.sessionId, state.nextTurnOrdinal - 1, `child-started:${request.requestId}`),
-      {
-        childId: child.id,
-        requestId: request.requestId,
-        type: "child.started",
-      },
+      { childId: child.id, requestId: request.requestId, type: "child.started" },
     );
     subagents.push({ child, request });
   }
 
   for (const { child, request } of subagents) {
-    const terminal = await waitForTerminal(backend, child);
-    state = await appendEvent(
+    const terminal = await child.wait();
+    await appendEvent(
       backend,
-      state,
       operationId(state.sessionId, state.nextTurnOrdinal - 1, `child-result:${request.requestId}`),
       {
         childId: child.id,
@@ -276,22 +224,19 @@ async function executeTool(
   state: SessionState,
   request: ApprovalRequest | Extract<LoopRequest, { readonly kind: "tool" }>,
 ): Promise<{ readonly result: RequestResult; readonly state: SessionState }> {
-  const operation = operationId(
-    state.sessionId,
-    state.nextTurnOrdinal - 1,
-    `tool:${request.requestId}`,
-  );
-  const result = await runEffectAtState(backend, state, {
-    id: operation,
-    input: { request },
-    name: "execute-tool",
-    retry: idempotentRetry(2),
-  });
-  const nextState = await appendEvent(backend, state, operation, {
-    requestId: request.requestId,
-    type: "tool.completed",
-  });
-  return { result, state: nextState };
+  let result: RequestResult;
+  try {
+    const executed = await invokeTool(backend, request);
+    result = executed.output;
+    await appendEvent(backend, executed.operationId, {
+      requestId: request.requestId,
+      type: "tool.completed",
+    });
+  } catch (error) {
+    if (!(error instanceof EffectExhaustedError)) throw error;
+    throw new TurnEffectExhaustedError(state, error);
+  }
+  return { result, state };
 }
 
 async function resolveApproval(
@@ -316,27 +261,26 @@ async function resolveApproval(
         result: { isError: true, requestId: request.requestId, value: "denied" as const },
         state,
       };
-  const result = executed.result;
-  const resolved = resolveExchangeRequest(exchange, result);
+  const resolved = resolveExchangeRequest(exchange, executed.result);
   const history = closeExchange(executed.state.history, resolved);
   if (history === null) throw new Error("Approval did not close its exchange.");
 
   return { ...executed.state, history, pending: null };
 }
 
-async function waitForTerminal(
+async function generateAtState(
   backend: LoopBackend,
-  child: ChildHandle<"session">,
-): Promise<TerminalOutcome> {
-  return (await backend.waitForChild(child)).output;
-}
-
-function assertLease(
-  checkpoint: SessionCheckpoint,
-  expected: SessionCheckpoint["leaseOwner"],
-): void {
-  if (checkpoint.leaseOwner !== expected) {
-    throw new Error(`Checkpoint lease belongs to "${checkpoint.leaseOwner}", not "${expected}".`);
+  state: SessionState,
+  input: GenerateInput,
+): Promise<{
+  readonly operationId: OperationId;
+  readonly output: GeneratedTurn;
+}> {
+  try {
+    return await invokeGeneration(backend, input);
+  } catch (error) {
+    if (!(error instanceof EffectExhaustedError)) throw error;
+    throw new TurnEffectExhaustedError(state, error);
   }
 }
 
@@ -349,18 +293,5 @@ class TurnEffectExhaustedError extends Error {
     this.effectError = effectError;
     this.name = "TurnEffectExhaustedError";
     this.state = state;
-  }
-}
-
-async function runEffectAtState<K extends EffectName>(
-  backend: LoopBackend,
-  state: SessionState,
-  call: EffectCall<K>,
-): Promise<EffectOutput<K>> {
-  try {
-    return await runEffect(backend, call);
-  } catch (error) {
-    if (!(error instanceof EffectExhaustedError)) throw error;
-    throw new TurnEffectExhaustedError(state, error);
   }
 }

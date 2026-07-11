@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { resumeHook, start, type Run } from "#internal/workflow/runtime.js";
 
-import { executionId } from "../ids.js";
+import { eventLogId, executionId } from "../ids.js";
 import { SqlitePrototypeService } from "../service.js";
 import type {
   Delivery,
@@ -14,10 +14,10 @@ import type {
   PrototypeRun,
   PrototypeRuntime,
   SessionId,
-  SessionProgramInput,
+  PrototypeStartInput,
   TerminalOutcome,
 } from "../types.js";
-import { workflowSession } from "./workflows.js";
+import { workflowProgramInput, workflowSession } from "./workflows.js";
 
 export type { WorkflowEventEnvelope } from "./workflows.js";
 
@@ -78,22 +78,25 @@ export class WorkflowPrototypeRuntime implements PrototypeRuntime {
     return this.#service.executionCount(operation);
   }
 
-  async start(input: SessionProgramInput): Promise<PrototypeRun> {
+  async start(input: PrototypeStartInput): Promise<PrototypeRun> {
     if (this.#closed) throw new Error("Workflow prototype runtime is closed.");
 
     const rootExecutionId = executionId(`${input.sessionId}:root-execution`);
+    const logId = eventLogId(`${input.sessionId}:events`);
     const run = await start(workflowSession, [
       {
+        continuationToken: input.continuationToken,
         databasePath: this.#databasePath,
         executionId: rootExecutionId,
         parent: { kind: "root" },
-        programInput: input,
+        programInput: workflowProgramInput(input),
         routingIntent: "pinned",
+        streamLogId: logId,
       },
     ]);
     const result = run.returnValue;
     const prototypeRun = new WorkflowPrototypeRun({
-      eventLogId: input.eventLogId,
+      eventLogId: logId,
       result,
       run,
       runtime: this,

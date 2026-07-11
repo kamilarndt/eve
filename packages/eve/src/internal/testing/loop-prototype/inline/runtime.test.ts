@@ -19,7 +19,6 @@ describe("inline loop prototype boundaries", () => {
     try {
       const run = await runtime.start({
         continuationToken: "parked:input",
-        eventLogId: eventLogId("parked:events"),
         initialDelivery: {
           deliveryId: "parked:initial",
           kind: "message",
@@ -53,7 +52,6 @@ describe("inline loop prototype boundaries", () => {
     const first = new InlinePrototypeRuntime();
     const run = await first.start({
       continuationToken: "volatile:input",
-      eventLogId: logId,
       initialDelivery: {
         deliveryId: "volatile:initial",
         kind: "message",
@@ -82,7 +80,6 @@ describe("inline loop prototype boundaries", () => {
     try {
       const run = await runtime.start({
         continuationToken: "terminal:input",
-        eventLogId: eventLogId("terminal:events"),
         initialDelivery: {
           deliveryId: "terminal:initial",
           kind: "message",

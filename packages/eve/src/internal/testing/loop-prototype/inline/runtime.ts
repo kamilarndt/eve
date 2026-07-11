@@ -1,37 +1,49 @@
-import { executionId } from "../ids.js";
+import {
+  checkpointOwnedState,
+  delegateCheckpoint,
+  initialCheckpoint,
+  TurnCheckpointProtocol,
+} from "../checkpoint-protocol.js";
+import {
+  createExecuteToolEffect,
+  createGenerateEffect,
+  readExecuteToolResult,
+  readGenerateResult,
+} from "../effect-definitions.js";
+import { childId, eventId, eventLogId, executionId, operationId, requestChildId } from "../ids.js";
 import { runSession, runTurn } from "../programs.js";
 import { DeclaredEffectFailure, MemoryPrototypeService } from "../service.js";
 import type {
-  AnyChildHandle,
+  ApprovalRequest,
   ChildHandle,
-  ChildKind,
-  ChildNotice,
+  DelegatedSessionInput,
   Delivery,
   EffectCall,
-  EffectName,
   EffectResult,
   EventLogId,
-  EventRecord,
   ExecutionId,
+  GenerateInput,
+  GeneratedTurn,
   LoopBackend,
   OperationId,
   PrototypeRun,
   PrototypeRuntime,
-  ReceiveWait,
+  PrototypeStartInput,
+  RequestResult,
   SessionCheckpoint,
-  SessionChildSpec,
   SessionId,
   SessionProgramInput,
+  SessionState,
+  Stream,
+  StreamEvent,
   TerminalOutcome,
-  TurnChildSpec,
+  ToolRequest,
+  TurnHandle,
+  TurnProgramInput,
 } from "../types.js";
 import { AsyncQueue, InlineRunStoppedError } from "./async-queue.js";
 
 export { InlineRunStoppedError } from "./async-queue.js";
-
-type ParentControl =
-  | { readonly kind: "root" }
-  | { readonly handle: InlineChildHandle<"turn">; readonly kind: "turn" };
 
 interface StoppableQueue {
   stop(error: Error): void;
@@ -40,6 +52,7 @@ interface StoppableQueue {
 class InlineRunScope {
   readonly error = new InlineRunStoppedError();
   readonly #queues = new Set<StoppableQueue>();
+  readonly #stopListeners = new Set<() => void>();
   #stopped = false;
 
   assertRunning(): void {
@@ -58,7 +71,6 @@ class InlineRunScope {
 
   async run<Value>(operation: () => Promise<Value>): Promise<Value> {
     this.assertRunning();
-
     return await new Promise<Value>((resolve, reject) => {
       let settled = false;
       const finish = (complete: () => void): void => {
@@ -86,219 +98,185 @@ class InlineRunScope {
 
   stop(): void {
     if (this.#stopped) return;
-
     this.#stopped = true;
     for (const queue of this.#queues) queue.stop(this.error);
     this.#queues.clear();
     for (const stop of this.#stopListeners) stop();
     this.#stopListeners.clear();
   }
-
-  readonly #stopListeners = new Set<() => void>();
 }
 
-class InlineChildHandle<Kind extends ChildKind> implements ChildHandle<Kind> {
-  readonly backendRunId: string;
-  readonly id: ChildHandle<Kind>["id"];
-  readonly kind: Kind;
-  readonly #acknowledgements: AsyncQueue<number>;
-  readonly #notices: AsyncQueue<ChildNotice<Kind>>;
-  readonly #ownerExecutionId: ExecutionId;
+class InlineStream implements Stream {
+  readonly #logId: EventLogId;
   readonly #scope: InlineRunScope;
+  readonly #service: MemoryPrototypeService;
 
-  constructor(input: {
-    readonly backendRunId: string;
-    readonly id: ChildHandle<Kind>["id"];
-    readonly kind: Kind;
-    readonly ownerExecutionId: ExecutionId;
-    readonly scope: InlineRunScope;
-  }) {
-    this.backendRunId = input.backendRunId;
-    this.id = input.id;
-    this.kind = input.kind;
-    this.#ownerExecutionId = input.ownerExecutionId;
-    this.#scope = input.scope;
-    this.#acknowledgements = input.scope.queue();
-    this.#notices = input.scope.queue();
+  constructor(service: MemoryPrototypeService, scope: InlineRunScope, logId: EventLogId) {
+    this.#logId = logId;
+    this.#scope = scope;
+    this.#service = service;
   }
 
-  acknowledge(revision: number): void {
-    this.#acknowledgements.push(revision);
-  }
-
-  assertOwner(execution: ExecutionId): void {
-    if (this.#ownerExecutionId !== execution) {
-      throw new Error(`Child "${this.id}" does not belong to execution "${execution}".`);
-    }
-  }
-
-  complete(notice: ChildNotice<Kind>): void {
-    this.#notices.push(notice);
-  }
-
-  fail(error: unknown): void {
-    this.#notices.stop(toError(error));
-  }
-
-  release(): void {
-    this.#scope.release(this.#acknowledgements);
-    this.#scope.release(this.#notices);
-  }
-
-  async nextNotice(): Promise<ChildNotice<Kind>> {
-    return await this.#notices.shift();
-  }
-
-  async publishCheckpoint(
-    this: InlineChildHandle<"turn">,
-    checkpoint: SessionCheckpoint,
-  ): Promise<void> {
-    this.#notices.push({ kind: "update", update: { checkpoint, kind: "checkpoint" } });
-    const acknowledgedRevision = await this.#acknowledgements.shift();
-    if (acknowledgedRevision !== checkpoint.revision) {
-      throw new Error(
-        `Child "${this.id}" checkpoint ${String(checkpoint.revision)} was acknowledged as ${String(acknowledgedRevision)}.`,
-      );
-    }
+  async append(event: StreamEvent): Promise<void> {
+    await this.#scope.run(async () => {
+      await this.#service.append(this.#logId, event);
+    });
   }
 }
 
 class InlineLoopBackend implements LoopBackend {
   readonly executionId: ExecutionId;
+  readonly stream: Stream;
   readonly #deliveries: AsyncQueue<Delivery>;
   readonly #nextBackendRunId: () => string;
-  readonly #parent: ParentControl;
   readonly #scope: InlineRunScope;
   readonly #service: MemoryPrototypeService;
-  #checkpoint: SessionCheckpoint | null = null;
+  readonly #sessionId: SessionId;
+  readonly #turnProtocol: TurnCheckpointProtocol | null;
+  #checkpoint: SessionCheckpoint | null;
 
   constructor(input: {
+    readonly checkpoint?: SessionCheckpoint;
     readonly executionId: ExecutionId;
     readonly nextBackendRunId: () => string;
-    readonly parent: ParentControl;
     readonly scope: InlineRunScope;
     readonly service: MemoryPrototypeService;
+    readonly sessionId: SessionId;
+    readonly stream: Stream;
+    readonly turnProtocol?: TurnCheckpointProtocol;
   }) {
+    this.#checkpoint = input.checkpoint ?? null;
     this.executionId = input.executionId;
     this.#deliveries = input.scope.queue();
     this.#nextBackendRunId = input.nextBackendRunId;
-    this.#parent = input.parent;
     this.#scope = input.scope;
     this.#service = input.service;
+    this.#sessionId = input.sessionId;
+    this.stream = input.stream;
+    this.#turnProtocol = input.turnProtocol ?? null;
   }
 
-  async acknowledgeChildUpdate(handle: ChildHandle<"turn">, revision: number): Promise<void> {
-    const child = inlineChildHandle(handle);
-    child.assertOwner(this.executionId);
+  async checkpoint(state: SessionState): Promise<void> {
     this.#scope.assertRunning();
-    child.acknowledge(revision);
-  }
-
-  async appendEvents(events: readonly EventRecord[]): Promise<void> {
-    await this.#scope.run(async () => {
-      await this.#service.append(events);
-    });
-  }
-
-  async checkpoint(checkpoint: SessionCheckpoint): Promise<void> {
-    this.#scope.assertRunning();
-
-    if (this.#parent.kind === "turn") {
-      await this.#parent.handle.publishCheckpoint(checkpoint);
+    if (this.#checkpoint === null) {
+      this.#checkpoint = initialCheckpoint(this.executionId, state);
       return;
     }
-
-    this.#checkpoint = checkpoint;
+    const next = checkpointOwnedState(this.#checkpoint, this.executionId, state);
+    if (this.#turnProtocol !== null) await this.#turnProtocol.accept(next);
+    this.#checkpoint = next;
   }
 
-  async effect<K extends EffectName>(call: EffectCall<K>): Promise<EffectResult<K>> {
-    return await this.#scope.run(async () => {
-      try {
-        return { kind: "succeeded", output: await this.#service.effect(call) };
-      } catch (error) {
-        if (error instanceof DeclaredEffectFailure) {
-          return { error: effectFailure(error), kind: "exhausted" };
-        }
-        throw error;
-      }
-    });
+  async executeTool(request: ApprovalRequest | ToolRequest): Promise<RequestResult> {
+    const call = createExecuteToolEffect(request);
+    const result = await this.#effect(call);
+    return readExecuteToolResult(call, result);
   }
 
-  async finish(_outcome: TerminalOutcome): Promise<void> {
+  async finish(outcome: TerminalOutcome): Promise<void> {
     this.#scope.assertRunning();
     if (this.#checkpoint?.state.phase !== "terminal") {
       throw new Error("Inline session finished without a terminal checkpoint.");
     }
+    this.#service.finish(this.#sessionId, outcome);
+    const terminalOperation = operationId(
+      this.#sessionId,
+      this.#checkpoint.state.nextTurnOrdinal,
+      "finalize",
+    );
+    await this.stream.append({
+      id: eventId(terminalOperation, 0),
+      operationId: terminalOperation,
+      payload: { outcome: outcome.kind, type: "session.terminal" },
+    });
   }
 
-  async receive(_wait: ReceiveWait): Promise<Delivery> {
+  async generate(input: GenerateInput): Promise<GeneratedTurn> {
+    const call = createGenerateEffect(input);
+    const result = await this.#effect(call);
+    return readGenerateResult(call, result);
+  }
+
+  async receive(): Promise<Delivery> {
     this.#scope.assertRunning();
     return await this.#deliveries.shift();
   }
 
-  async startSessionChild(spec: SessionChildSpec): Promise<ChildHandle<"session">> {
+  spawnChild(input: DelegatedSessionInput): ChildHandle {
     this.#scope.assertRunning();
-    const handle = new InlineChildHandle<"session">({
-      backendRunId: this.#nextBackendRunId(),
-      id: spec.id,
-      kind: "session",
-      ownerExecutionId: this.executionId,
+    const id = requestChildId(this.executionId, input.requestId);
+    const backendRunId = this.#nextBackendRunId();
+    const childStream = new InlineStream(
+      this.#service,
+      this.#scope,
+      eventLogId(`${input.sessionId}:events`),
+    );
+    const backend = new InlineLoopBackend({
+      executionId: executionId(id),
+      nextBackendRunId: this.#nextBackendRunId,
       scope: this.#scope,
+      service: this.#service,
+      sessionId: input.sessionId,
+      stream: childStream,
     });
-    const backend = this.#childBackend(executionId(spec.id), { kind: "root" });
-
-    void runSession(backend, { ...spec.input, eventLogId: spec.eventLog.id })
-      .then(
-        (output) => handle.complete({ kind: "terminal", output }),
-        (error: unknown) => handle.fail(error),
-      )
+    const result = this.#scope
+      .run(async () => await runSession(backend, sessionProgramInput(input)))
       .finally(() => backend.dispose());
-    return handle;
+    return {
+      id,
+      wait: async () => {
+        try {
+          return await result;
+        } catch (error) {
+          throw childError(backendRunId, error);
+        }
+      },
+    };
   }
 
-  async startTurnChild(spec: TurnChildSpec): Promise<ChildHandle<"turn">> {
+  spawnTurn(input: TurnProgramInput): TurnHandle {
     this.#scope.assertRunning();
-    const handle = new InlineChildHandle<"turn">({
-      backendRunId: this.#nextBackendRunId(),
-      id: spec.id,
-      kind: "turn",
-      ownerExecutionId: this.executionId,
+    if (this.#checkpoint === null) throw new Error("Turn spawned before session initialization.");
+    const id = childId(this.executionId, input.state.nextTurnOrdinal - 1, "turn");
+    const childExecutionId = executionId(id);
+    const delegated = delegateCheckpoint(this.#checkpoint, this.executionId, childExecutionId);
+    this.#checkpoint = delegated;
+    const protocol = new TurnCheckpointProtocol({
+      child: childExecutionId,
+      delegated,
+      parent: this.executionId,
+      persist: async (checkpoint) => {
+        this.#checkpoint = checkpoint;
+      },
+    });
+    const backend = new InlineLoopBackend({
+      checkpoint: delegated,
+      executionId: childExecutionId,
+      nextBackendRunId: this.#nextBackendRunId,
       scope: this.#scope,
+      service: this.#service,
+      sessionId: input.state.sessionId,
+      stream: this.stream,
+      turnProtocol: protocol,
     });
-    const backend = this.#childBackend(executionId(spec.id), { handle, kind: "turn" });
-
-    void runTurn(backend, spec.input)
-      .then(
-        (output) => handle.complete({ kind: "terminal", output }),
-        (error: unknown) => handle.fail(error),
-      )
+    const backendRunId = this.#nextBackendRunId();
+    const result = this.#scope
+      .run(async () => {
+        const outcome = await runTurn(backend, input);
+        await protocol.complete(outcome.state);
+        return outcome;
+      })
       .finally(() => backend.dispose());
-    return handle;
-  }
-
-  async waitForChild(handle: ChildHandle<"session">): Promise<ChildNotice<"session">>;
-  async waitForChild(handle: ChildHandle<"turn">): Promise<ChildNotice<"turn">>;
-  async waitForChild(
-    handle: AnyChildHandle,
-  ): Promise<ChildNotice<"session"> | ChildNotice<"turn">> {
-    if (handle.kind === "turn") return await this.#waitForChild(handle);
-    return await this.#waitForChild(handle);
-  }
-
-  async #waitForChild<Kind extends ChildKind>(
-    handle: ChildHandle<Kind>,
-  ): Promise<ChildNotice<Kind>> {
-    const child = inlineChildHandle(handle);
-    child.assertOwner(this.executionId);
-    this.#scope.assertRunning();
-    try {
-      const notice = await child.nextNotice();
-      if (notice.kind === "terminal") child.release();
-      return notice;
-    } catch (error) {
-      child.release();
-      throw error;
-    }
+    return {
+      id,
+      wait: async () => {
+        try {
+          return await result;
+        } catch (error) {
+          throw childError(backendRunId, error);
+        }
+      },
+    };
   }
 
   deliver(delivery: Delivery): void {
@@ -310,13 +288,16 @@ class InlineLoopBackend implements LoopBackend {
     this.#scope.release(this.#deliveries);
   }
 
-  #childBackend(execution: ExecutionId, parent: ParentControl): InlineLoopBackend {
-    return new InlineLoopBackend({
-      executionId: execution,
-      nextBackendRunId: this.#nextBackendRunId,
-      parent,
-      scope: this.#scope,
-      service: this.#service,
+  async #effect(call: EffectCall): Promise<EffectResult> {
+    return await this.#scope.run(async () => {
+      try {
+        return { kind: "succeeded", output: await this.#service.effect(call) };
+      } catch (error) {
+        if (error instanceof DeclaredEffectFailure) {
+          return { error: effectFailure(error), kind: "exhausted" };
+        }
+        throw error;
+      }
     });
   }
 }
@@ -359,7 +340,7 @@ class InlinePrototypeRun implements PrototypeRun {
     this.#backend.deliver(delivery);
   }
 
-  async events(): Promise<readonly EventRecord[]> {
+  async events() {
     return await this.#service.read(this.#eventLogId);
   }
 
@@ -391,13 +372,12 @@ export class InlinePrototypeRuntime implements PrototypeRuntime {
 
   async close(): Promise<void> {
     if (this.#closed) return;
-
     this.#closed = true;
     await Promise.all([...this.#runs].map(async (run) => await run.stop()));
     await this.#service.close();
   }
 
-  async events(logId: EventLogId): Promise<readonly EventRecord[]> {
+  async events(logId: EventLogId) {
     return await this.#service.read(logId);
   }
 
@@ -405,24 +385,26 @@ export class InlinePrototypeRuntime implements PrototypeRuntime {
     return this.#service.executionCount(id);
   }
 
-  async start(input: SessionProgramInput): Promise<PrototypeRun> {
+  async start(input: PrototypeStartInput): Promise<PrototypeRun> {
     if (this.#closed) throw new Error("Inline prototype runtime is closed.");
 
     const ordinal = this.#nextRunOrdinal++;
     const backendRunId = `inline:${String(ordinal)}`;
     const scope = new InlineRunScope();
+    const logId = eventLogId(`${input.sessionId}:events`);
     const backend = new InlineLoopBackend({
       executionId: executionId(`${input.sessionId}:execution:${String(ordinal)}`),
       nextBackendRunId: () => `inline:${String(this.#nextRunOrdinal++)}`,
-      parent: { kind: "root" },
       scope,
       service: this.#service,
+      sessionId: input.sessionId,
+      stream: new InlineStream(this.#service, scope, logId),
     });
-    const result = runSession(backend, input);
+    const result = runSession(backend, sessionProgramInput(input));
     const run = new InlinePrototypeRun({
       backend,
       backendRunId,
-      eventLogId: input.eventLogId,
+      eventLogId: logId,
       result,
       scope,
       service: this.#service,
@@ -445,6 +427,15 @@ export function createInlinePrototypeRuntime(): Promise<PrototypeRuntime> {
   return Promise.resolve(new InlinePrototypeRuntime());
 }
 
+function sessionProgramInput(input: SessionProgramInput): SessionProgramInput {
+  return {
+    initialDelivery: input.initialDelivery,
+    mode: input.mode,
+    scenario: input.scenario,
+    sessionId: input.sessionId,
+  };
+}
+
 function effectFailure(error: unknown): { readonly code: string; readonly message: string } {
   return {
     code: "EFFECT_FAILED",
@@ -452,21 +443,7 @@ function effectFailure(error: unknown): { readonly code: string; readonly messag
   };
 }
 
-function inlineChildHandle<Kind extends ChildKind>(
-  handle: ChildHandle<Kind>,
-): InlineChildHandle<Kind> {
-  if (!isInlineChildHandle(handle)) {
-    throw new Error(`Child "${handle.id}" was not created by the inline backend.`);
-  }
-  return handle;
-}
-
-function isInlineChildHandle<Kind extends ChildKind>(
-  handle: ChildHandle<Kind>,
-): handle is InlineChildHandle<Kind> {
-  return handle instanceof InlineChildHandle;
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
+function childError(backendRunId: string, error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(`Inline child run "${backendRunId}" failed: ${String(error)}`);
 }

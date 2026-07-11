@@ -14,12 +14,12 @@ This is a dated evidence record for the decision in
 The experiment runs one pair of eve-owned programs through three actual
 adapters:
 
-| Surface  | Implementation                                                                                                                                                                                                                                                                                               | Mechanism test                                                                                                                     |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Shared   | [`runSession`](../packages/eve/src/internal/testing/loop-prototype/session-program.ts), [`runTurn`](../packages/eve/src/internal/testing/loop-prototype/turn-program.ts), and [`LoopBackend`](../packages/eve/src/internal/testing/loop-prototype/types.ts)                                                  | [`conformance.ts`](../packages/eve/src/internal/testing/loop-prototype/conformance.ts)                                             |
-| Inline   | [`inline/runtime.ts`](../packages/eve/src/internal/testing/loop-prototype/inline/runtime.ts)                                                                                                                                                                                                                 | [`inline/runtime.test.ts`](../packages/eve/src/internal/testing/loop-prototype/inline/runtime.test.ts)                             |
-| Workflow | [`workflow/workflows.ts`](../packages/eve/src/internal/testing/loop-prototype/workflow/workflows.ts) and [`workflow/runtime.ts`](../packages/eve/src/internal/testing/loop-prototype/workflow/runtime.ts)                                                                                                    | [`workflow/runtime.integration.test.ts`](../packages/eve/src/internal/testing/loop-prototype/workflow/runtime.integration.test.ts) |
-| Temporal | [`temporal/workflows.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/workflows.ts), [`temporal/backend.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/backend.ts), and [`temporal/runtime.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/runtime.ts) | [`temporal/runtime.scenario.test.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/runtime.scenario.test.ts)       |
+| Surface  | Implementation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Mechanism test                                                                                                                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Shared   | [`runSession`](../packages/eve/src/internal/testing/loop-prototype/session-program.ts), [`runTurn`](../packages/eve/src/internal/testing/loop-prototype/turn-program.ts), [`LoopBackend`](../packages/eve/src/internal/testing/loop-prototype/types.ts), [`program-effects.ts`](../packages/eve/src/internal/testing/loop-prototype/program-effects.ts), [`effect-definitions.ts`](../packages/eve/src/internal/testing/loop-prototype/effect-definitions.ts), and [`checkpoint-protocol.ts`](../packages/eve/src/internal/testing/loop-prototype/checkpoint-protocol.ts) | [`conformance.ts`](../packages/eve/src/internal/testing/loop-prototype/conformance.ts) and [`checkpoint-protocol.test.ts`](../packages/eve/src/internal/testing/loop-prototype/checkpoint-protocol.test.ts) |
+| Inline   | [`inline/runtime.ts`](../packages/eve/src/internal/testing/loop-prototype/inline/runtime.ts)                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | [`inline/runtime.test.ts`](../packages/eve/src/internal/testing/loop-prototype/inline/runtime.test.ts)                                                                                                      |
+| Workflow | [`workflow/workflows.ts`](../packages/eve/src/internal/testing/loop-prototype/workflow/workflows.ts) and [`workflow/runtime.ts`](../packages/eve/src/internal/testing/loop-prototype/workflow/runtime.ts)                                                                                                                                                                                                                                                                                                                                                                 | [`workflow/runtime.integration.test.ts`](../packages/eve/src/internal/testing/loop-prototype/workflow/runtime.integration.test.ts)                                                                          |
+| Temporal | [`temporal/workflows.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/workflows.ts), [`temporal/backend.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/backend.ts), and [`temporal/runtime.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/runtime.ts)                                                                                                                                                                                                                                                              | [`temporal/runtime.scenario.test.ts`](../packages/eve/src/internal/testing/loop-prototype/temporal/runtime.scenario.test.ts)                                                                                |
 
 The Temporal prototype uses exact TypeScript SDK 1.20.1 development
 dependencies. Version 1.20.2 was current during the experiment but was still
@@ -36,10 +36,11 @@ adapter:
 3. a tool failure after generation preserves prior events and advances their
    sequence before terminal failure;
 4. approval waits preserve unrelated input for the next turn;
-5. child identity is visible before completion, results retain request order,
-   turns borrow the parent log, and subagents own their logs;
-6. post-commit response loss reuses the operation ID and does not re-execute the
-   effect under a durable retry;
+5. spawn handles expose child identity before completion, results retain request
+   order, turn streams retain the parent log, and delegated sessions get new
+   logs;
+6. post-commit response loss reuses the operation ID derived by the shared
+   effect definition and does not re-execute the effect under a durable retry;
 7. an exhausted generation effect becomes one typed eve-level failed outcome;
 8. a thrown effect-infrastructure failure rejects the engine run without a
    callback;
@@ -55,13 +56,14 @@ nine shared tests:
 | Workflow |      9 |                 1 |    10 |
 | Temporal |      9 |                 1 |    10 |
 
-Core unit tests separately cover checkpoint protocol failures, transcript
-construction, semantic ID encoding, idempotent event append, effect result
-caching and validation, and versioned JSON envelope rejection. They also prove
-that a child cannot replace its parent's session identity and that protocol
-failures reject program execution instead of becoming domain failures. The
-shared infrastructure case separately proves rejection through each actual
-adapter. Those tests are not counted as adapter conformance.
+Core unit tests separately cover the adapter-composed checkpoint protocol,
+transcript construction, semantic ID encoding, stream-owned sequence
+assignment, idempotent event append, effect result caching and validation, and
+versioned JSON envelope rejection. The protocol tests prove exact checkpoint
+redelivery, parent-owned identity protection, terminal byte equality, and
+rejection after lease return. Program tests prove that checkpoint and effect
+protocol failures reject execution instead of becoming domain failures. Those
+tests are not counted as adapter conformance.
 
 ## Observed engine evidence
 
@@ -82,8 +84,10 @@ This is deliberate non-durability, not best-effort durability.
 The integration test runs through the repository's real
 `@workflow/world-local` harness. Effects and event append execute as `"use
 step"` functions; public and private waits use Hooks; turns and subagents are
-separate workflow runs. A settlement Hook wakes the parent, but the actual child
-run result is authoritative. The test observes child IDs before results,
+separate workflow runs. Handle internals relay and acknowledge checkpoints; the
+actual child run result is authoritative. The adapter joins each eager child
+start before publishing `child.started`, which keeps replay from duplicating an
+unawaited start. The test observes child IDs before results,
 inspects child completion, and checks fault-free equality between native stream
 envelopes and the authoritative SQLite event records.
 
@@ -146,16 +150,18 @@ The sixth correction now records attempts separately from executions, commits
 the exact result by operation ID, injects failure after that commit, and proves
 that a retry reads the committed result. Program, checkpoint, and effect-ledger
 protocol errors reject program execution. Backend-reported declared exhaustion
-becomes a typed eve-level turn failure; initialization and finalization remain
-session-program effects, so their exhaustion rejects the session run.
+becomes a typed eve-level turn failure. Initialization now belongs to adapter
+startup, delivery is no longer a ledger effect, and `finish(outcome)` owns
+callback recording plus terminal publication.
 The seventh introduced one real `BalancedHistory` constructor and runtime
 parsing for SQLite event rows instead of suppressing type errors at those
 boundaries. The eighth carries the latest immutable state snapshot with each
-turn effect; a later failure now appends after all prior successful events.
+declared effect failure; a later failure now appends after all prior successful
+events.
 The ninth makes the Workflow Hook a wake-up only and the actual child run result
 authoritative. The tenth surfaces cancellation failure, consumes exact Temporal
 acknowledgements, and removes settled roots. The remaining corrections validate
-checkpoint identity and cursors, correlate cached results with their calls,
+checkpoint identity, correlate cached results with their calls,
 preserve declared failure codes, reject infrastructure at the engine boundary,
 make exact checkpoint redelivery idempotent, and make `runSession` the only
 owner of the returned terminal value.
@@ -175,6 +181,7 @@ event logs; it does not independently observe engine-completion order.
 
 ```sh
 pnpm --filter eve exec vitest run --config vitest.unit.config.ts \
+  src/internal/testing/loop-prototype/checkpoint-protocol.test.ts \
   src/internal/testing/loop-prototype/programs.test.ts \
   src/internal/testing/loop-prototype/transcript.test.ts \
   src/internal/testing/loop-prototype/service.test.ts \
@@ -191,17 +198,17 @@ pnpm --filter eve exec vitest run --config vitest.scenario.config.ts \
 The final focused runs were:
 
 ```text
-focused unit:    40/40, 0.31s total
-Workflow local:  10/10, 42.28s total, 38.27s tests
-Temporal local:  10/10, 26.69s total, 18.03s tests
+focused unit:    39/39, 0.34s total
+Workflow local:  10/10, 43.05s total, 39.20s tests
+Temporal local:  10/10, 25.27s total, 15.21s tests
 ```
 
 These are harness startup and bundling receipts, not request-latency
-benchmarks. Temporal produced a 1.63 MiB Workflow bundle in the observed run.
+benchmarks. Temporal produced a 1.65 MiB Workflow bundle in the observed run.
 
-The final repository-wide gates passed: 21/21 typecheck and build tasks; 420 eve
-unit-test files with 4,378 passed and one skipped test; invariant, lint,
-documentation, and frozen-lock checks.
+The refactor validation passed `pnpm fmt`, `pnpm lint`, all 22 workspace
+typecheck tasks, the 39 focused unit tests, the 10 Workflow integration tests,
+and the 10 Temporal scenario tests.
 
 The five direct Temporal dependencies add 1,180 lines to `pnpm-lock.yaml` in
 this branch. They are development-only in the prototype, but the transitive
