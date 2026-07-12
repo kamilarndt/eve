@@ -136,6 +136,7 @@ function createPreparedHost(): PreparedApplicationHost {
     } as unknown as PreparedApplicationHost["compileResult"],
     compiledArtifacts: {
       bootstrapPath: `${appRoot}/.eve/bootstrap.mjs`,
+      instrumentationPluginPath: `${appRoot}/.eve/instrumentation.mjs`,
       workflowWorldPluginPath: `${appRoot}/.eve/workflow-world.mjs`,
     } as PreparedApplicationHost["compiledArtifacts"],
     scheduleRegistrations: [],
@@ -168,6 +169,46 @@ describe("createApplicationNitro", () => {
     expect(plugins.indexOf(preparedHost.compiledArtifacts.bootstrapPath)).toBeLessThan(
       plugins.indexOf(preparedHost.compiledArtifacts.workflowWorldPluginPath),
     );
+    expect(plugins).toContain(preparedHost.compiledArtifacts.instrumentationPluginPath);
+  });
+
+  it("preserves side effects for every authored instrumentation module extension", async () => {
+    const nitroStub = createNitroStub();
+    createNitroMock.mockResolvedValueOnce(nitroStub.nitro);
+
+    const { createApplicationNitro } =
+      await import("#internal/nitro/host/create-application-nitro.js");
+    const preparedHost = createPreparedHost();
+    await createApplicationNitro(preparedHost, true);
+
+    const rollupBeforeHooks = nitroStub.hookHandlers.get("rollup:before") ?? [];
+    const config = { plugins: [] as unknown[] };
+    for (const hook of rollupBeforeHooks) {
+      await hook(nitroStub.nitro, config);
+    }
+    const sideEffectsPlugin = (
+      config.plugins as Array<{
+        name?: string;
+        resolveId?: (source: string) => unknown;
+      }>
+    ).find((plugin) => plugin.name === "eve:instrumentation-module-side-effects");
+
+    if (sideEffectsPlugin?.resolveId === undefined) {
+      throw new Error("Expected instrumentation side-effects plugin to be registered.");
+    }
+
+    for (const extension of [".ts", ".mts", ".js", ".mjs"]) {
+      expect(
+        sideEffectsPlugin.resolveId(
+          join(preparedHost.compileResult.project.agentRoot, `instrumentation${extension}`),
+        ),
+      ).toMatchObject({ moduleSideEffects: "no-treeshake" });
+    }
+    expect(
+      sideEffectsPlugin.resolveId(
+        join(preparedHost.compileResult.project.agentRoot, "instructions.md"),
+      ),
+    ).toBeNull();
   });
 
   it("preserves workflow bundle side effects and skips workflow transform for cached bundles", async () => {

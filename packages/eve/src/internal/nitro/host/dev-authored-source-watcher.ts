@@ -5,6 +5,7 @@ import type { Nitro } from "nitro/types";
 import { clearCompiledRuntimeAgentBundleCache } from "#runtime/sessions/compiled-agent-cache.js";
 import { toErrorMessage } from "#shared/errors.js";
 import { resolveTsConfigDependencyPaths } from "#internal/application/tsconfig-dependencies.js";
+import { isInstrumentationModulePath } from "#internal/application/instrumentation-module.js";
 import { createNitroArtifactsConfig } from "#internal/nitro/host/artifacts-config.js";
 import { resolveDevelopmentSourceSnapshotWatchPaths } from "#internal/nitro/dev-runtime-source-snapshot.js";
 import { pruneDevelopmentRuntimeArtifactsSnapshotsInBackground } from "#internal/nitro/dev-runtime-artifacts.js";
@@ -133,6 +134,9 @@ export async function startAuthoredSourceWatcher(input: {
           previousHost.appRoot,
           changedPaths,
         );
+        const hasInstrumentationChange = changedPaths.some((path) =>
+          isInstrumentationModulePath(previousHost.compileResult.project.agentRoot, path),
+        );
         if (changeEvents.length > 0) {
           console.log(formatChangeDetectedLogLine(previousHost.appRoot, changeEvents));
         }
@@ -173,7 +177,8 @@ export async function startAuthoredSourceWatcher(input: {
           // `POST /eve/v1/dev/schedules/:scheduleId` route, which reads
           // compiled registrations from disk on every request without
           // needing Nitro wiring.
-          const hasStructuralChange = hasChannelRouteChanged || hasEnvironmentChange;
+          const hasStructuralChange =
+            hasChannelRouteChanged || hasEnvironmentChange || hasInstrumentationChange;
 
           if (hasStructuralChange) {
             console.log(STRUCTURAL_RELOAD_LOG_LINE);

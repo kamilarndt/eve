@@ -16,6 +16,7 @@ import {
   writeEveVersionedCacheMetadata,
 } from "#internal/application/cache-metadata.js";
 import { resolveNitroBuildDirectory } from "#internal/application/paths.js";
+import { resolveInstrumentationModulePaths } from "#internal/application/instrumentation-module.js";
 import {
   createNitroArtifactsConfig,
   type NitroArtifactsConfigInput,
@@ -564,11 +565,10 @@ function addDynamicToolTransformPlugin(nitro: Nitro): void {
  * Rollup/Rolldown pass preserves its eager evaluation from the generated
  * instrumentation plugin.
  */
-function addInstrumentationModuleSideEffectsPlugin(
-  nitro: Nitro,
-  instrumentationModulePath: string,
-): void {
-  const normalizedInstrumentationModulePath = normalizePath(instrumentationModulePath);
+function addInstrumentationModuleSideEffectsPlugin(nitro: Nitro, agentRoot: string): void {
+  const normalizedInstrumentationModulePaths = new Set(
+    resolveInstrumentationModulePaths(agentRoot).map((path) => normalizePath(path)),
+  );
 
   nitro.hooks.hook("rollup:before", (_nitro, config) => {
     if (!Array.isArray(config.plugins)) {
@@ -578,7 +578,7 @@ function addInstrumentationModuleSideEffectsPlugin(
     config.plugins.unshift({
       name: "eve:instrumentation-module-side-effects",
       resolveId(source: string) {
-        if (normalizePath(source) !== normalizedInstrumentationModulePath) {
+        if (!normalizedInstrumentationModulePaths.has(normalizePath(source))) {
           return null;
         }
 
@@ -712,6 +712,7 @@ export async function createApplicationNitro(
   const nitroPlugins: string[] = [];
   nitroPlugins.push(preparedHost.compiledArtifacts.bootstrapPath);
   nitroPlugins.push(preparedHost.compiledArtifacts.workflowWorldPluginPath);
+  nitroPlugins.push(preparedHost.compiledArtifacts.instrumentationPluginPath);
   if (!dev) {
     // Stops all tracked sandboxes when the production server shuts
     // down. Dev servers are excluded: the dev CLI parent already stops
@@ -724,9 +725,6 @@ export async function createApplicationNitro(
     nitroPlugins.push(
       resolvePackageSourceFilePath("src/internal/nitro/host/workflow-sandbox-runtime-plugin.ts"),
     );
-  }
-  if (preparedHost.compiledArtifacts.instrumentationPluginPath !== undefined) {
-    nitroPlugins.push(preparedHost.compiledArtifacts.instrumentationPluginPath);
   }
   await prepareEveVersionedCacheDirectory(nitroBuildDir);
   const nitro = await createNitro(
@@ -798,12 +796,7 @@ export async function createApplicationNitro(
   // execute functions for all tool files, not just workflow step targets.
   addDynamicToolTransformPlugin(nitro);
 
-  if (preparedHost.compiledArtifacts.instrumentationSourcePath !== undefined) {
-    addInstrumentationModuleSideEffectsPlugin(
-      nitro,
-      preparedHost.compiledArtifacts.instrumentationSourcePath,
-    );
-  }
+  addInstrumentationModuleSideEffectsPlugin(nitro, preparedHost.compileResult.project.agentRoot);
 
   // Prevent Nitro from re-bundling the pre-built workflow bundle in dev
   // mode. `steps.mjs` is now a source entry that Nitro must still bundle

@@ -447,6 +447,30 @@ describe("startAuthoredSourceWatcher", () => {
     }
   });
 
+  it("reloads Nitro when authored instrumentation changes", async () => {
+    const previousHost = createPreparedHost();
+    const nextHost = createPreparedHost();
+    const nitroStub = createNitroStub();
+
+    prepareApplicationHostMock.mockResolvedValueOnce(nextHost);
+
+    const watcher = await startAuthoredSourceWatcher({
+      nitro: nitroStub.nitro,
+      preparedHost: previousHost,
+    });
+
+    try {
+      await triggerChangeEvent(
+        join(previousHost.compileResult.project.agentRoot, "instrumentation.ts"),
+      );
+
+      expect(nitroStub.callHook).toHaveBeenCalledTimes(1);
+      expect(nitroStub.callHook).toHaveBeenCalledWith("rollup:reload");
+    } finally {
+      await watcher.close();
+    }
+  });
+
   it("never registers authored schedules in dev when registrations change", async () => {
     // `eve dev` intentionally does not register Nitro scheduled tasks for
     // authored schedules — production cron firing in dev would invoke every

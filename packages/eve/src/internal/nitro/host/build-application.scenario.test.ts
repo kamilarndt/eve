@@ -116,6 +116,12 @@ function createPreparedHost(appRoot: string): PreparedApplicationHost {
     } as unknown as PreparedApplicationHost["compileResult"],
     compiledArtifacts: {
       bootstrapPath: join(appRoot, ".eve", "compile", "compiled-artifacts-bootstrap.mjs"),
+      instrumentationPluginPath: join(
+        appRoot,
+        ".eve",
+        "compile",
+        "compiled-artifacts-instrumentation.mjs",
+      ),
       workflowWorldPluginPath: join(
         appRoot,
         ".eve",

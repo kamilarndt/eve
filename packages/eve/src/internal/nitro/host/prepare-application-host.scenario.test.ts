@@ -51,6 +51,9 @@ describe("prepareApplicationHost", () => {
     expect(firstHost.compiledArtifacts.workflowWorldPluginPath).toBe(
       join(stableHostDirectory, "compiled-artifacts-workflow-world.mjs"),
     );
+    expect(firstHost.compiledArtifacts.instrumentationPluginPath).toBe(
+      join(stableHostDirectory, "compiled-artifacts-instrumentation.mjs"),
+    );
     expect(firstHost.compiledArtifacts.bootstrapPath).not.toContain("/.eve/dev-runtime/snapshots/");
     expect(await readFile(stableBootstrapPath, "utf8")).toContain(
       normalizeEsmImportSpecifier(agentModulePath),

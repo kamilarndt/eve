@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 
@@ -34,6 +34,18 @@ const DEV_SERVER_AGENT_DESCRIPTOR: ScenarioAppDescriptor = {
       ([path]) => !path.startsWith("agent/channels/"),
     ),
   ),
+};
+const DEV_SERVER_WITH_INSTRUMENTATION_DESCRIPTOR: ScenarioAppDescriptor = {
+  ...DEV_SERVER_AGENT_DESCRIPTOR,
+  files: {
+    ...DEV_SERVER_AGENT_DESCRIPTOR.files,
+    "agent/instrumentation.ts": [
+      'import { defineInstrumentation } from "eve/instrumentation";',
+      "",
+      "export default defineInstrumentation({ events: {} });",
+      "",
+    ].join("\n"),
+  },
 };
 
 interface RunningEveDev {
@@ -260,7 +272,7 @@ describe("eve dev server", () => {
   it(
     "rebuilds after pruning its startup runtime snapshot and completes a streamed turn",
     async () => {
-      const app = await scenarioApp(DEV_SERVER_AGENT_DESCRIPTOR);
+      const app = await scenarioApp(DEV_SERVER_WITH_INSTRUMENTATION_DESCRIPTOR);
       const server = await startEveDev(app.appRoot);
 
       try {
@@ -309,7 +321,7 @@ describe("eve dev server", () => {
         });
         expect(existsSync(startupRuntimeRoot)).toBe(false);
 
-        await writeFile(join(app.appRoot, ".env.local"), "EVE_SCENARIO_RELOAD=1\n");
+        await rm(join(app.appRoot, "agent", "instrumentation.ts"));
         await waitForCondition(
           () => server.stdout().includes(STRUCTURAL_RELOAD_LOG_LINE),
           `Timed out waiting for a structural Nitro reload.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`,
@@ -351,6 +363,45 @@ describe("eve dev server", () => {
 
         const output = `${server.stdout()}\n${server.stderr()}`;
         expect(hasKnownDevBundlingFailure(output)).toBe(false);
+      } finally {
+        await server.stop();
+      }
+    },
+    DEV_SERVER_SCENARIO_TIMEOUT_MS,
+  );
+
+  it(
+    "loads instrumentation added after startup",
+    async () => {
+      const app = await scenarioApp(DEV_SERVER_AGENT_DESCRIPTOR);
+      const markerPath = join(app.appRoot, ".instrumentation-loaded");
+      const server = await startEveDev(app.appRoot);
+
+      try {
+        expect(existsSync(markerPath)).toBe(false);
+
+        await writeFile(
+          join(app.appRoot, "agent", "instrumentation.ts"),
+          [
+            'import { writeFileSync } from "node:fs";',
+            'import { defineInstrumentation } from "eve/instrumentation";',
+            "",
+            "export default defineInstrumentation({",
+            "  setup() {",
+            `    writeFileSync(${JSON.stringify(markerPath)}, "loaded");`,
+            "  },",
+            "});",
+            "",
+          ].join("\n"),
+        );
+
+        await waitForCondition(
+          () => existsSync(markerPath),
+          `Timed out waiting for added instrumentation to load.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`,
+        );
+
+        expect(await readFile(markerPath, "utf8")).toBe("loaded");
+        expect(server.stdout()).toContain(STRUCTURAL_RELOAD_LOG_LINE);
       } finally {
         await server.stop();
       }

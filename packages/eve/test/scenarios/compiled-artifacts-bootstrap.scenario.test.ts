@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -108,6 +108,24 @@ describe("writeCompiledArtifactsFiles", () => {
 
     expect((globalThis as Record<string, unknown>).__eveInstrumentationLoaded).toBe("yes");
     expect(instrumentationPluginModule.default()).toBeUndefined();
+
+    await rm(join(agentRoot, "instrumentation.ts"));
+    await writeCompiledArtifactsFiles({
+      compileResult,
+      outDir,
+    });
+
+    const instrumentationPluginWithoutAuthoredModule = await readFile(
+      instrumentationPluginPath,
+      "utf8",
+    );
+    expect(instrumentationPluginWithoutAuthoredModule).not.toContain("instrumentation.ts");
+    expect(instrumentationPluginWithoutAuthoredModule).not.toContain(
+      "registerInstrumentationConfig",
+    );
+    await expect(
+      import(`${pathToFileURL(instrumentationPluginPath).href}?case=instrumentation-removed`),
+    ).resolves.toMatchObject({ default: expect.any(Function) });
   });
 
   it("surfaces instrumentation import failures when the Nitro plugin module loads", async () => {
