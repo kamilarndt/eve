@@ -82,7 +82,7 @@ export function connectionProtocols(connection: ConnectionIdentity): ConnectionP
  * surface-specific data keyed by {@link IntegrationEntry.slug}.
  *
  * `surfaces.scaffoldable` reflects what the CLI can scaffold today: Slack and
- * eve Web Chat for channels, and every curated connection. The remaining
+ * Web Chat for channels, and every curated connection. The remaining
  * channels are runtime modules that are still configured by hand, so they
  * appear in the gallery but not the CLI picker.
  */
@@ -119,7 +119,7 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
     slug: "twilio",
     name: "Twilio",
     kind: "channel",
-    tagline: "Reach users over SMS and WhatsApp through Twilio.",
+    tagline: "Put your agent on a phone number: SMS and speech-transcribed calls.",
     surfaces: { scaffoldable: false, gallery: true },
   },
   {
@@ -138,7 +138,7 @@ export const INTEGRATIONS: readonly IntegrationEntry[] = [
   },
   {
     slug: "eve",
-    name: "eve Web Chat",
+    name: "Web Chat",
     kind: "channel",
     tagline: "Embed a first-party web chat UI backed by your agent.",
     surfaces: { scaffoldable: true, gallery: true },

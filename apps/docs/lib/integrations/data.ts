@@ -210,24 +210,29 @@ export default telegramChannel({
   twilio: {
     logo: "twilio",
     docsHref: "/docs/channels/twilio",
-    keywords: ["sms", "whatsapp", "messaging", "phone"],
+    keywords: ["sms", "voice", "calls", "phone", "transcription"],
     install: `Install the framework:
 
 \`\`\`bash
 npm install eve@latest
 \`\`\``,
-    quickStart: `Create \`agent/channels/twilio.ts\`:
+    quickStart: `Create \`agent/channels/twilio.ts\`. \`allowFrom\` is required and gates who can reach the inbound hooks:
 
 \`\`\`ts
 // agent/channels/twilio.ts
 import { twilioChannel } from "eve/channels/twilio";
 
 export default twilioChannel({
-  accountSid: () => process.env.TWILIO_ACCOUNT_SID!,
-  authToken: () => process.env.TWILIO_AUTH_TOKEN!,
+  allowFrom: "+15551234567",
+  messaging: { from: "+15557654321" },
 });
+\`\`\`
+
+\`\`\`bash
+TWILIO_ACCOUNT_SID=AC...   # required for default outbound SMS
+TWILIO_AUTH_TOKEN=...      # required for inbound signature verification
 \`\`\``,
-    configure: `In the Twilio console, point your messaging service or phone number webhook at eve's route (\`/eve/v1/twilio\`). Provide the account SID and auth token via environment variables. See the [Twilio channel docs](/docs/channels/twilio) for SMS vs. WhatsApp specifics.`,
+    configure: `In the Twilio console, point your number's Messaging webhook at \`/eve/v1/twilio/messages\` and its Voice webhook at \`/eve/v1/twilio/voice\`. Inbound calls are answered with speech gathering, and the transcript feeds the same session SMS uses. See the [Twilio channel docs](/docs/channels/twilio) for dispatch, streaming, and voice specifics.`,
   },
   github: {
     logo: "github",
@@ -341,7 +346,7 @@ bot.onSubscribedMessage(async (thread, message) => {
 export default channel;
 \`\`\`
 
-Credentials come from the \`createGoogleChatAdapter\` config or the adapter's environment variables; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+Credentials come from the \`createGoogleChatAdapter\` config or the adapter's environment variables; see the [Google Chat adapter docs](https://chat-sdk.dev/adapters/official/gchat).`,
     configure: `The adapter mounts its webhook at \`/eve/v1/gchat\`. Point your Google Chat app's HTTP endpoint at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
   },
   "chat-sdk-whatsapp": {
@@ -382,7 +387,7 @@ bot.onSubscribedMessage(async (thread, message) => {
 export default channel;
 \`\`\`
 
-Credentials come from the \`createWhatsAppAdapter\` config or the adapter's environment variables; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+Credentials come from the \`createWhatsAppAdapter\` config or the adapter's environment variables; see the [WhatsApp adapter docs](https://chat-sdk.dev/adapters/official/whatsapp).`,
     configure: `The adapter mounts its webhook at \`/eve/v1/whatsapp\`. Point your WhatsApp Business Cloud webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
   },
   "chat-sdk-x": {
@@ -423,7 +428,7 @@ bot.onSubscribedMessage(async (thread, message) => {
 export default channel;
 \`\`\`
 
-Credentials come from the \`createXAdapter\` config or the adapter's environment variables; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+Credentials come from the \`createXAdapter\` config or the adapter's environment variables; see the [X adapter docs](https://chat-sdk.dev/adapters/official/x).`,
     configure: `The adapter mounts its webhook at \`/eve/v1/x\`. Point your X account activity webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
   },
   "chat-sdk-messenger": {
@@ -464,7 +469,7 @@ bot.onSubscribedMessage(async (thread, message) => {
 export default channel;
 \`\`\`
 
-Credentials come from the \`createMessengerAdapter\` config or the adapter's environment variables; see the [Chat SDK adapter directory](https://chat-sdk.dev/adapters).`,
+Credentials come from the \`createMessengerAdapter\` config or the adapter's environment variables; see the [Messenger adapter docs](https://chat-sdk.dev/adapters/official/messenger).`,
     configure: `The adapter mounts its webhook at \`/eve/v1/messenger\`. Point your Messenger webhook at it. The adapter owns provider auth, verification, and delivery, while eve owns session dispatch, streaming, typing, and human-in-the-loop. See the [Chat SDK channel docs](/docs/channels/chat-sdk) for routes, streaming, and state options.`,
   },
 };
