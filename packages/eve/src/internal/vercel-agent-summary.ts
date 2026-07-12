@@ -37,7 +37,7 @@ export const VERCEL_EVE_AGENT_SUMMARY_KIND = "vercel-eve-agent-summary" as const
  * making semantic changes consumers must opt into. Adding optional fields
  * does not require a version bump.
  */
-export const VERCEL_EVE_AGENT_SUMMARY_VERSION = 3;
+export const VERCEL_EVE_AGENT_SUMMARY_VERSION = 4;
 
 /**
  * Output path (relative to the agent's `appRoot`) where eve writes the
@@ -140,18 +140,34 @@ export interface VercelEveConnectionEntry {
   };
 }
 
-export interface VercelEveChannelEntry {
-  readonly name: string;
+/**
+ * One HTTP route mounted by a channel.
+ */
+export interface VercelEveChannelRoute {
   readonly method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "WEBSOCKET";
   readonly urlPath: string;
+}
+
+/**
+ * One authored channel, carrying every route it mounts.
+ *
+ * Schema version 4 groups routes under their authored channel: a channel
+ * module like `channels/eve.ts` compiles to one route per `(method,
+ * urlPath)` internally, but reads as a single channel in product UI.
+ * Version 3 emitted one flat entry per route, which made consumers
+ * over-count channels unless they re-grouped by `name` themselves.
+ */
+export interface VercelEveChannelEntry {
+  readonly name: string;
   readonly type: VercelEveChannelType;
   /**
-   * The raw `ChannelAdapter.kind` reported by the route, when present.
+   * The raw `ChannelAdapter.kind` reported by the channel, when present.
    * Useful when `type` is `"unknown"` and a consumer wants to render a
    * disambiguating label.
    */
   readonly adapterKind?: string;
   readonly logicalPath: string;
+  readonly routes: readonly VercelEveChannelRoute[];
 }
 
 export interface VercelEveSandboxEntry {
