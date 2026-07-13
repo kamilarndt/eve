@@ -1,5 +1,5 @@
 ---
-issue: TBD
+issue: https://github.com/vercel/eve/issues/742
 last_updated: "2026-07-02"
 status: proposed
 ---
