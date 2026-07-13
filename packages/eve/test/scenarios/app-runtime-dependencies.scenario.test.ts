@@ -12,6 +12,10 @@ import {
 import { buildApplication } from "../../src/internal/nitro/host.js";
 import { useTemporaryDirectories } from "../../src/internal/testing/use-temporary-app-roots.js";
 
+vi.mock("../../src/internal/nitro/host/vercel-build-prewarm.js", () => ({
+  runVercelBuildPrewarm: async () => true,
+}));
+
 const EVE_PACKAGE_INFO = resolveInstalledPackageInfo();
 const EVE_PACKAGE_ROOT = resolvePackageRoot();
 const createScratchDirectory = useTemporaryDirectories();
@@ -715,7 +719,7 @@ describe("app runtime dependency tracing", () => {
     expect(serverModuleSource).toContain("URL must start with http:// or https://");
   }, 30_000);
 
-  it("does not bundle dev-only watcher handling into hosted Vercel server output", async () => {
+  it("does not bundle local-only runtime infrastructure into hosted Vercel output", async () => {
     vi.stubEnv("VERCEL", "1");
     vi.stubEnv("VERCEL_DEPLOYMENT_ID", "");
 
@@ -754,6 +758,8 @@ describe("app runtime dependency tracing", () => {
     expect(vercelFunctionsSource).not.toContain("chokidar");
     expect(vercelFunctionsSource).not.toContain("[eve:dev]");
     expect(vercelFunctionsSource).not.toContain("rollup:reload");
+    expect(vercelFunctionsSource).not.toContain("WORKFLOW_LOCAL_DATA_DIR");
+    expect(vercelFunctionsSource).not.toContain("DataDirAccessError");
   }, 30_000);
 
   it("loads instrumentation runtime dependencies from hosted Vercel output", async () => {
