@@ -1,0 +1,26 @@
+import { SessionRecord } from \"./";
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+
+const SESSIONS_FILE = path.join(os.homedir(), ".eve", "sessions.jsonl");
+
+// Dodaj do konstruktora EveTUIRunner
+async function loadSessions() {
+  try {
+    await fs.mkdir(path.dirname(SESSIONS_FILE), { recursive: true });
+    const data = await fs.readFile(SESSIONS_FILE, "utf8");
+    const lines = data.split("\n").filter(line => line.trim() !== "");
+    return lines.map(line => JSON.parse(line) as SessionRecord);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+// Dodaj do #startNewSession() przed finalizacją
+async function saveSession(session: SessionRecord) {
+  const line = JSON.stringify(session) + "\n";
+  await fs.appendFile(SESSIONS_FILE, line, "utf8");
+}
+
