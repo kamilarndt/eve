@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
 
@@ -12,7 +13,10 @@ import {
   readDevelopmentRuntimeArtifactsSnapshotRoot,
   resolveDevelopmentRuntimeArtifactsPointerPath,
 } from "../../src/internal/nitro/dev-runtime-artifacts.js";
-import { STRUCTURAL_RELOAD_LOG_LINE } from "../../src/internal/nitro/host/dev-watcher-log.js";
+import {
+  AUTHORED_ARTIFACTS_UPDATED_LOG_LINE,
+  STRUCTURAL_RELOAD_LOG_LINE,
+} from "../../src/internal/nitro/host/dev-watcher-log.js";
 import { WEATHER_AGENT_DESCRIPTOR } from "../../src/internal/testing/scenario-apps/weather-agent.js";
 import {
   type ScenarioAppDescriptor,
@@ -35,6 +39,15 @@ const DEV_SERVER_AGENT_DESCRIPTOR: ScenarioAppDescriptor = {
     ),
   ),
 };
+
+const STABLE_DEV_NITRO_INPUT_PATHS = [
+  [".eve", "host", "compiled-artifacts-bootstrap.mjs"],
+  [".eve", "host", "compiled-artifacts-workflow-bootstrap.mjs"],
+  [".eve", "host", "compiled-artifacts-workflow-world.mjs"],
+  [".eve", "nitro", "workflow", "steps.mjs"],
+  [".eve", "nitro", "workflow", "workflows.mjs"],
+  [".eve", "nitro", "workflow", "workflows-handler.mjs"],
+] as const;
 
 interface RunningEveDev {
   readonly stderr: () => string;
@@ -97,6 +110,44 @@ async function waitForCondition(
     }
     await wait(100);
   }
+}
+
+async function readStableDevNitroInputs(appRoot: string): Promise<Record<string, string>> {
+  return Object.fromEntries(
+    await Promise.all(
+      STABLE_DEV_NITRO_INPUT_PATHS.map(async (segments) => {
+        const relativePath = segments.join("/");
+        return [relativePath, await readFile(join(appRoot, ...segments), "utf8")] as const;
+      }),
+    ),
+  );
+}
+
+function assertNitroImportEdgesDoNotReferenceRuntimeSnapshots(
+  sources: Readonly<Record<string, string>>,
+): void {
+  for (const [relativePath, source] of Object.entries(sources)) {
+    const importLines = source.split("\n").filter((line) => line.startsWith("import "));
+    const snapshotImport = importLines.find(
+      (line) =>
+        line.includes("/.eve/dev-runtime/snapshots/") ||
+        line.includes("\\.eve\\dev-runtime\\snapshots\\"),
+    );
+    expect(snapshotImport, `${relativePath} imports a prunable runtime snapshot`).toBeUndefined();
+  }
+
+  expect(sources[".eve/nitro/workflow/workflows-handler.mjs"]).toContain(
+    "../../host/compiled-artifacts-workflow-world.mjs",
+  );
+}
+
+function hashDevNitroInputs(sources: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(sources).map(([relativePath, source]) => [
+      relativePath,
+      createHash("sha256").update(source).digest("hex"),
+    ]),
+  );
 }
 
 async function waitForServerUrl(input: {
@@ -256,7 +307,160 @@ async function startEveDev(appRoot: string): Promise<RunningEveDev> {
   };
 }
 
+async function runEveBuild(appRoot: string): Promise<{ stderr: string; stdout: string }> {
+  const eveBinPath = join(appRoot, "node_modules", "eve", "bin", "eve.js");
+  const child = spawn(process.execPath, [eveBinPath, "build"], {
+    cwd: appRoot,
+    env: {
+      ...process.env,
+      NODE_ENV: "test",
+      VERCEL: "",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  let stdout = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  await new Promise<void>((resolvePromise, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(
+        new Error(`Timed out waiting for eve build.\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`),
+      );
+    }, 240_000);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      reject(
+        new Error(
+          `eve build failed (code ${String(code)}, signal ${String(signal)}).\n\nstdout:\n${stdout}\n\nstderr:\n${stderr}`,
+        ),
+      );
+    });
+  });
+
+  return { stderr, stdout };
+}
+
 describe("eve dev server", () => {
+  it(
+    "stays healthy while an isolated production build runs and a tool is deleted",
+    async () => {
+      const app = await scenarioApp(DEV_SERVER_AGENT_DESCRIPTOR);
+      const server = await startEveDev(app.appRoot);
+      const workflowHandlerPath = join(
+        app.appRoot,
+        ".eve",
+        "nitro",
+        "workflow",
+        "workflows-handler.mjs",
+      );
+
+      try {
+        const workflowHandlerBeforeBuild = await readFile(workflowHandlerPath, "utf8");
+        const pointerPath = resolveDevelopmentRuntimeArtifactsPointerPath(app.appRoot);
+        const pointerBeforeDelete = readDevelopmentRuntimeArtifactsSnapshotRoot(pointerPath);
+
+        let buildSettled = false;
+        const buildPromise = runEveBuild(app.appRoot).then(
+          (output) => {
+            buildSettled = true;
+            return output;
+          },
+          (error: unknown) => {
+            buildSettled = true;
+            throw error;
+          },
+        );
+
+        let healthChecksDuringOverlap = 0;
+        const assertHealthyDuringOverlap = async () => {
+          const response = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url), {
+            signal: AbortSignal.timeout(5_000),
+          });
+          const responseText = await response.text();
+          expect(
+            response.status,
+            [
+              "Expected eve dev to remain healthy while build and authored rebuild overlap.",
+              `response:\n${responseText}`,
+              `stdout:\n${server.stdout()}`,
+              `stderr:\n${server.stderr()}`,
+            ].join("\n\n"),
+          ).toBe(200);
+          healthChecksDuringOverlap += 1;
+        };
+
+        await assertHealthyDuringOverlap();
+        await rm(join(app.appRoot, "agent", "tools", "get_weather.ts"));
+        while (!buildSettled) {
+          await wait(100);
+          await assertHealthyDuringOverlap();
+        }
+        const buildOutput = await buildPromise;
+        expect(healthChecksDuringOverlap).toBeGreaterThan(0);
+
+        await expect(readFile(workflowHandlerPath, "utf8")).resolves.toBe(
+          workflowHandlerBeforeBuild,
+        );
+        expect(existsSync(join(app.appRoot, ".output", "server", "index.mjs"))).toBe(true);
+        const healthAfterBuild = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url));
+        expect(healthAfterBuild.status).toBe(200);
+
+        await waitForCondition(
+          () => server.stdout().includes(AUTHORED_ARTIFACTS_UPDATED_LOG_LINE),
+          `Timed out waiting for tool deletion rebuild.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`,
+        );
+        await waitForCondition(() => {
+          const currentPointer = readDevelopmentRuntimeArtifactsSnapshotRoot(pointerPath);
+          return currentPointer !== undefined && currentPointer !== pointerBeforeDelete;
+        }, `Timed out waiting for the deletion runtime snapshot.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`);
+        await wait(1_000);
+
+        const healthAfterDelete = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url));
+        const healthAfterDeleteText = await healthAfterDelete.text();
+        expect(
+          healthAfterDelete.status,
+          [
+            `Expected health after tool deletion to return 200, received ${healthAfterDelete.status}.`,
+            `response:\n${healthAfterDeleteText}`,
+            `stdout:\n${server.stdout()}`,
+            `stderr:\n${server.stderr()}`,
+          ].join("\n\n"),
+        ).toBe(200);
+        const combinedOutput = [
+          server.stdout(),
+          server.stderr(),
+          buildOutput.stdout,
+          buildOutput.stderr,
+        ].join("\n");
+        expect(hasKnownDevBundlingFailure(combinedOutput)).toBe(false);
+        expect(combinedOutput).not.toContain("Dev worker failed after 3 retries");
+        expect(combinedOutput).not.toContain("UNRESOLVED_IMPORT");
+        expect(combinedOutput).not.toContain("ERR_MODULE_NOT_FOUND");
+        expect(server.stdout()).not.toContain(STRUCTURAL_RELOAD_LOG_LINE);
+      } finally {
+        await server.stop();
+      }
+    },
+    DEV_SERVER_SCENARIO_TIMEOUT_MS,
+  );
+
   it(
     "rebuilds after pruning its startup runtime snapshot and completes a streamed turn",
     async () => {
@@ -286,6 +490,8 @@ describe("eve dev server", () => {
         if (startupRuntimeRoot === undefined) {
           throw new Error("Expected eve dev to publish an initial runtime snapshot.");
         }
+        const startupNitroInputs = await readStableDevNitroInputs(app.appRoot);
+        assertNitroImportEdgesDoNotReferenceRuntimeSnapshots(startupNitroInputs);
 
         await writeFile(
           join(app.appRoot, "agent", "instructions.md"),
@@ -300,6 +506,9 @@ describe("eve dev server", () => {
         if (authoredRuntimeRoot === undefined) {
           throw new Error("Expected authored HMR to publish a runtime snapshot.");
         }
+        const stableNitroInputsBeforePrune = await readStableDevNitroInputs(app.appRoot);
+        assertNitroImportEdgesDoNotReferenceRuntimeSnapshots(stableNitroInputsBeforePrune);
+        const stableNitroInputHashesBeforePrune = hashDevNitroInputs(stableNitroInputsBeforePrune);
 
         await pruneDevelopmentRuntimeArtifactsSnapshots({
           appRoot: app.appRoot,
@@ -308,6 +517,52 @@ describe("eve dev server", () => {
           retainCount: 0,
         });
         expect(existsSync(startupRuntimeRoot)).toBe(false);
+        expect(existsSync(authoredRuntimeRoot)).toBe(true);
+        expect(readDevelopmentRuntimeArtifactsSnapshotRoot(pointerPath)).toBe(authoredRuntimeRoot);
+        expect(hashDevNitroInputs(await readStableDevNitroInputs(app.appRoot))).toEqual(
+          stableNitroInputHashesBeforePrune,
+        );
+
+        const healthAfterPrune = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url));
+        expect(
+          healthAfterPrune.status,
+          [
+            "Expected pruning an obsolete runtime snapshot not to break the live Nitro worker.",
+            `stdout:\n${server.stdout()}`,
+            `stderr:\n${server.stderr()}`,
+          ].join("\n\n"),
+        ).toBe(200);
+
+        let messageResult: Awaited<ReturnType<typeof sendDevelopmentMessage>>;
+        try {
+          messageResult = await sendDevelopmentMessage({
+            message: "hello world",
+            session: createDevelopmentSessionState(),
+            serverUrl: server.url,
+          });
+        } catch (error) {
+          throw new Error(
+            [
+              "Expected a streamed turn to complete immediately after pruning.",
+              `startup snapshot: ${startupRuntimeRoot}`,
+              `authored snapshot: ${authoredRuntimeRoot}`,
+              `current snapshot: ${String(readDevelopmentRuntimeArtifactsSnapshotRoot(pointerPath))}`,
+              `stdout:\n${server.stdout()}`,
+              `stderr:\n${server.stderr()}`,
+            ].join("\n\n"),
+            { cause: error },
+          );
+        }
+
+        expect(
+          messageResult.events.some((event) => event.type === "message.completed"),
+          [
+            "Expected dev message route to complete a streamed turn after pruning.",
+            `events:\n${JSON.stringify(messageResult.events, null, 2)}`,
+            `stdout:\n${server.stdout()}`,
+            `stderr:\n${server.stderr()}`,
+          ].join("\n\n"),
+        ).toBe(true);
 
         await writeFile(join(app.appRoot, ".env.local"), "EVE_SCENARIO_RELOAD=1\n");
         await waitForCondition(
@@ -320,34 +575,15 @@ describe("eve dev server", () => {
         }, `Timed out waiting for the structural reload snapshot.\n\nstdout:\n${server.stdout()}\n\nstderr:\n${server.stderr()}`);
         await wait(2_000);
 
-        let messageResult: Awaited<ReturnType<typeof sendDevelopmentMessage>>;
-        try {
-          messageResult = await sendDevelopmentMessage({
-            message: "hello world",
-            session: createDevelopmentSessionState(),
-            serverUrl: server.url,
-          });
-        } catch (error) {
-          throw new Error(
-            [
-              `Expected dev message route to complete without throwing: ${String(error)}`,
-              `stdout:\n${server.stdout()}`,
-              `stderr:\n${server.stderr()}`,
-            ].join("\n\n"),
-            { cause: error },
-          );
-        }
-
+        const healthAfterStructuralReload = await fetch(new URL(EVE_HEALTH_ROUTE_PATH, server.url));
         expect(
-          messageResult.events.some((event) => event.type === "message.completed"),
+          healthAfterStructuralReload.status,
           [
-            "Expected dev message route to complete a streamed turn.",
-            `events:\n${JSON.stringify(messageResult.events, null, 2)}`,
+            "Expected Nitro's structural reload to remain healthy after pruning.",
             `stdout:\n${server.stdout()}`,
             `stderr:\n${server.stderr()}`,
           ].join("\n\n"),
-        ).toBe(true);
-        await wait(1_000);
+        ).toBe(200);
 
         const output = `${server.stdout()}\n${server.stderr()}`;
         expect(hasKnownDevBundlingFailure(output)).toBe(false);

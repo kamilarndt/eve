@@ -183,10 +183,13 @@ export async function prewarmAppSandboxes(input: {
  */
 export async function prewarmBuiltAppSandboxes(input: {
   readonly appRoot: string;
+  readonly artifactsRoot?: string;
   readonly log?: (message: string) => void;
   readonly dispatch?: SandboxBackendPrewarmDispatch;
 }): Promise<void> {
-  const authoredSource = createAuthoredSourceRuntimeCompiledArtifactsSource(input.appRoot);
+  const authoredSource = createAuthoredSourceRuntimeCompiledArtifactsSource(input.appRoot, {
+    artifactsRoot: input.artifactsRoot,
+  });
   const [metadata, manifest, moduleMap] = await Promise.all([
     loadCompileMetadata({
       compiledArtifactsSource: authoredSource,
@@ -229,9 +232,13 @@ async function collectPrewarmTargets(input: {
   readonly compiledArtifactsSource: RuntimeCompiledArtifactsSource;
   readonly graph: ResolvedAgentGraphBundle;
 }): Promise<readonly PrewarmTarget[]> {
-  const compileDirectoryPath = resolveRuntimeCompilerArtifactPaths(
-    input.appRoot,
-  ).compileDirectoryPath;
+  const compileDirectoryPath =
+    input.compiledArtifactsSource.kind === "disk"
+      ? resolveRuntimeCompilerArtifactPaths(
+          input.compiledArtifactsSource.appRoot,
+          input.compiledArtifactsSource.artifactsRoot,
+        ).compileDirectoryPath
+      : resolveRuntimeCompilerArtifactPaths(input.appRoot).compileDirectoryPath;
   const runtimeContext = { appRoot: input.appRoot };
 
   const targets: PrewarmTarget[] = [];

@@ -54,7 +54,10 @@ async function resolveCompileMetadataMtimeMs(
   }
 
   const { stat } = await import("node:fs/promises");
-  const { compileMetadataPath } = resolveRuntimeCompilerArtifactPaths(source.appRoot);
+  const { compileMetadataPath } = resolveRuntimeCompilerArtifactPaths(
+    source.appRoot,
+    source.artifactsRoot,
+  );
 
   try {
     return (await stat(compileMetadataPath)).mtimeMs;

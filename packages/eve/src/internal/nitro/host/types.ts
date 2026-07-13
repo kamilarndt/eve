@@ -59,8 +59,12 @@ export interface ProductionServerHandle {
 
 export interface PreparedApplicationHost {
   appRoot: string;
+  artifactsRoot: string;
   compileResult: CompileAgentResult;
   compiledArtifacts: GeneratedCompiledArtifactsFiles;
+  hostArtifactsDir: string;
+  nitroBuildDir: string;
+  nitroOutputDir: string;
   scheduleRegistrations: readonly ScheduleRegistration[];
   schedules: readonly ResolvedScheduleDefinition[];
   workflowBuildDir: string;

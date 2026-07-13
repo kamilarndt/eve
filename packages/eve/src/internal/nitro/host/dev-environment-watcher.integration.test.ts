@@ -216,6 +216,7 @@ function createPreparedHost(appRoot: string): PreparedApplicationHost {
 
   return {
     appRoot,
+    artifactsRoot: join(appRoot, ".eve"),
     compileResult: {
       diagnostics: [],
       manifest: createCompiledAgentManifest({
@@ -238,6 +239,9 @@ function createPreparedHost(appRoot: string): PreparedApplicationHost {
       },
     },
     compiledArtifacts: {} as PreparedApplicationHost["compiledArtifacts"],
+    hostArtifactsDir: join(appRoot, ".eve", "host"),
+    nitroBuildDir: join(appRoot, ".eve", "nitro"),
+    nitroOutputDir: join(appRoot, ".eve", "nitro-output"),
     scheduleRegistrations: [],
     schedules: [],
     workflowBuildDir: join(appRoot, ".workflow-build"),

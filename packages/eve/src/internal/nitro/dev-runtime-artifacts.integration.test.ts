@@ -310,6 +310,38 @@ describe("development runtime artifact snapshots", () => {
     expect(existsSync(staleSnapshotRoot)).toBe(false);
   });
 
+  it("preserves the active snapshot when the app root uses a filesystem alias", async () => {
+    const fixtureRoot = await createScratchDirectory("eve-dev-runtime-artifacts-alias-");
+    const realAppRoot = join(fixtureRoot, "real-app");
+    const aliasedAppRoot = join(fixtureRoot, "aliased-app");
+    const snapshotsRoot = join(realAppRoot, ".eve", "dev-runtime", "snapshots");
+    const activeSnapshotRoot = join(snapshotsRoot, "active");
+    const staleSnapshotRoot = join(snapshotsRoot, "stale");
+    await Promise.all([
+      mkdir(activeSnapshotRoot, { recursive: true }),
+      mkdir(staleSnapshotRoot, { recursive: true }),
+    ]);
+    await symlink(realAppRoot, aliasedAppRoot, "junction");
+
+    await activateDevelopmentRuntimeArtifactsSnapshot({
+      appRoot: aliasedAppRoot,
+      snapshot: {
+        runtimeAppRoot: join(activeSnapshotRoot, "source", "app"),
+        snapshotRoot: activeSnapshotRoot,
+        snapshotSourceRoot: join(activeSnapshotRoot, "source"),
+      },
+    });
+    await pruneDevelopmentRuntimeArtifactsSnapshots({
+      appRoot: aliasedAppRoot,
+      now: Date.now() + 1_000,
+      recentWindowMs: 0,
+      retainCount: 0,
+    });
+
+    expect(existsSync(activeSnapshotRoot)).toBe(true);
+    expect(existsSync(staleSnapshotRoot)).toBe(false);
+  });
+
   it("preserves snapshots referenced by active durable workflow data", async () => {
     const appRoot = await createScratchDirectory("eve-dev-runtime-artifacts-prune-durable-");
     const snapshotsRoot = join(appRoot, ".eve", "dev-runtime", "snapshots");

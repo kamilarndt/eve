@@ -885,6 +885,7 @@ function createPreparedHost(input: PreparedHostInput = {}): PreparedApplicationH
 
   return {
     appRoot,
+    artifactsRoot: `${appRoot}/.eve`,
     compileResult: {
       manifest: {
         channels: input.channels ?? [
@@ -901,6 +902,9 @@ function createPreparedHost(input: PreparedHostInput = {}): PreparedApplicationH
       },
     } as unknown as PreparedApplicationHost["compileResult"],
     compiledArtifacts: {} as PreparedApplicationHost["compiledArtifacts"],
+    hostArtifactsDir: `${appRoot}/.eve/host`,
+    nitroBuildDir: `${appRoot}/.eve/nitro`,
+    nitroOutputDir: `${appRoot}/.eve/nitro-output`,
     scheduleRegistrations: input.scheduleRegistrations ?? [],
     schedules: [],
     workflowBuildDir: `${appRoot}/.workflow-build`,

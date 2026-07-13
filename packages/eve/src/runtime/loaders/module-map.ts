@@ -38,7 +38,10 @@ export async function loadCompiledModuleMap(
 ): Promise<CompiledModuleMap> {
   const moduleMapPath =
     input.compiledArtifactsSource.kind === "disk"
-      ? resolveRuntimeCompilerArtifactPaths(input.compiledArtifactsSource.appRoot).moduleMapPath
+      ? resolveRuntimeCompilerArtifactPaths(
+          input.compiledArtifactsSource.appRoot,
+          input.compiledArtifactsSource.artifactsRoot,
+        ).moduleMapPath
       : undefined;
 
   if (moduleMapPath !== undefined) {

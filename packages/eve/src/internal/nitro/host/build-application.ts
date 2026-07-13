@@ -9,7 +9,13 @@ import {
   prepareEveVersionedCacheDirectory,
   writeEveVersionedCacheMetadata,
 } from "#internal/application/cache-metadata.js";
-import { resolveNitroSurfaceOutputDirectory } from "#internal/application/paths.js";
+import {
+  createApplicationBuildWorkspace,
+  removeApplicationBuildWorkspace,
+  type ApplicationBuildWorkspace,
+} from "#internal/application/build-workspace.js";
+import { publishApplicationBuildArtifacts } from "#internal/application/output-publication.js";
+import { createAuthoredSourceRuntimeCompiledArtifactsSource } from "#internal/application/runtime-compiled-artifacts-source.js";
 import { WorkflowBundleBuilder } from "#internal/workflow-bundle/builder.js";
 import { normalizeEveVercelFunctionOutput } from "#internal/workflow-bundle/vercel-workflow-output.js";
 import { createApplicationNitro } from "#internal/nitro/host/create-application-nitro.js";
@@ -19,6 +25,7 @@ import { prepareApplicationHost } from "#internal/nitro/host/prepare-application
 import { runVercelBuildPrewarm } from "#internal/nitro/host/vercel-build-prewarm.js";
 import type { NitroBuildSurface, PreparedApplicationHost } from "#internal/nitro/host/types.js";
 import { findClosestVercelOutputDirectory } from "#shared/vercel-output-directory.js";
+import { resolveDiscoveryProject } from "#discover/project.js";
 
 function trimTrailingSlash(path: string): string {
   return path.replace(/[\\/]+$/, "");
@@ -277,7 +284,7 @@ async function buildVercelNitroSurface(
   surface: Exclude<NitroBuildSurface, "all">,
 ): Promise<string> {
   const nitro = await createApplicationNitro(preparedHost, false, {
-    outputDir: resolveNitroSurfaceOutputDirectory(preparedHost.appRoot, surface),
+    outputDir: join(preparedHost.nitroOutputDir, surface),
     surface,
   });
 
@@ -301,21 +308,37 @@ export async function buildApplication(rootDir: string): Promise<string> {
     );
   }
 
-  const preparedHost = await prepareApplicationHost(rootDir);
+  const project = await resolveDiscoveryProject(rootDir);
+  const workspace = await createApplicationBuildWorkspace(project.appRoot);
+
+  try {
+    return await buildApplicationInWorkspace(workspace);
+  } finally {
+    await removeApplicationBuildWorkspace(workspace);
+  }
+}
+
+async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace): Promise<string> {
+  const preparedHost = await prepareApplicationHost(workspace.appRoot, { workspace });
 
   if (!process.env.VERCEL) {
-    const nitro = await createApplicationNitro(preparedHost, false);
+    const nitro = await createApplicationNitro(preparedHost, false, {
+      outputDir: workspace.outputDir,
+    });
 
     try {
-      const outputDirectory = await buildNitroOutput(nitro);
+      await buildNitroOutput(nitro);
       await emitVercelAgentSummary({
         manifest: preparedHost.compileResult.manifest,
         appRoot: preparedHost.appRoot,
+        outputPath: workspace.summaryPath,
       });
-      return outputDirectory;
     } finally {
       await nitro.close();
     }
+
+    await publishCompletedApplicationBuild(workspace);
+    return workspace.finalOutputDir;
   }
 
   const servicePrefix = await resolveCoDeployedEveServicePrefixForVercelFunctionOutput(
@@ -323,16 +346,21 @@ export async function buildApplication(rootDir: string): Promise<string> {
     preparedHost.compileResult.project.agentRoot,
   );
   const nitro = await createApplicationNitro(preparedHost, false, {
+    outputDir: workspace.outputDir,
     surface: "app",
   });
 
   try {
-    const outputDirectory = await buildNitroOutput(nitro);
+    await buildNitroOutput(nitro);
     // Run sandbox prewarm before emitting the workflow functions so a
     // prewarm failure aborts the build before we spend time bundling
     // function output that we would never deploy.
     await runVercelBuildPrewarm({
       appRoot: preparedHost.appRoot,
+      compiledArtifactsSource: createAuthoredSourceRuntimeCompiledArtifactsSource(
+        preparedHost.appRoot,
+        { artifactsRoot: preparedHost.artifactsRoot },
+      ),
       log(message) {
         console.log(message);
       },
@@ -341,23 +369,37 @@ export async function buildApplication(rootDir: string): Promise<string> {
     await emitVercelWorkflowFunctions({
       agentName: preparedHost.compileResult.manifest.config.name,
       appRoot: preparedHost.appRoot,
-      compiledArtifactsBootstrapPath: preparedHost.compiledArtifacts.bootstrapPath,
+      compiledArtifactsBootstrapPath: preparedHost.compiledArtifacts.workflowBootstrapPath,
       flowNitroOutputDir,
-      outputDir: outputDirectory,
+      outputDir: workspace.outputDir,
       workflowBuildDir: preparedHost.workflowBuildDir,
     });
     if (servicePrefix !== undefined) {
-      await normalizeEveVercelFunctionOutput(outputDirectory, {
+      await normalizeEveVercelFunctionOutput(workspace.outputDir, {
         servicePrefix,
       });
     }
     await emitVercelAgentSummary({
       manifest: preparedHost.compileResult.manifest,
       appRoot: preparedHost.appRoot,
+      outputPath: workspace.summaryPath,
     });
-
-    return outputDirectory;
   } finally {
     await nitro.close();
   }
+
+  await publishCompletedApplicationBuild(workspace);
+  return workspace.finalOutputDir;
+}
+
+async function publishCompletedApplicationBuild(
+  workspace: ApplicationBuildWorkspace,
+): Promise<void> {
+  await publishApplicationBuildArtifacts({
+    appRoot: workspace.appRoot,
+    finalOutputDir: workspace.finalOutputDir,
+    finalSummaryPath: workspace.finalSummaryPath,
+    stagedOutputDir: workspace.outputDir,
+    stagedSummaryPath: workspace.summaryPath,
+  });
 }

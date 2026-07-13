@@ -73,9 +73,9 @@ export function buildVercelAgentSummary(input: {
  * Writes the agent summary file. Returns the absolute path of the
  * written file.
  *
- * The file is written to {@link VERCEL_EVE_AGENT_SUMMARY_OUTPUT_PATH}
- * relative to {@link input.appRoot} — i.e.
- * `<appRoot>/.eve/agent-summary.json`. Lives outside `.vercel/output/`
+ * By default the file is written to {@link VERCEL_EVE_AGENT_SUMMARY_OUTPUT_PATH}
+ * relative to {@link input.appRoot} — i.e. `<appRoot>/.eve/agent-summary.json`.
+ * Builds can supply `outputPath` to stage it before final publication. It lives outside `.vercel/output/`
  * by design, so it is not part of the Build Output API surface and is
  * never served on the deployment URL.
  *
@@ -96,12 +96,13 @@ export async function emitVercelAgentSummary(input: {
   manifest: CompiledAgentManifest;
   appRoot: string;
   generatorVersion?: string;
+  outputPath?: string;
 }): Promise<string> {
   const summary = buildVercelAgentSummary({
     generatorVersion: input.generatorVersion,
     manifest: input.manifest,
   });
-  const filePath = join(input.appRoot, VERCEL_EVE_AGENT_SUMMARY_OUTPUT_PATH);
+  const filePath = input.outputPath ?? join(input.appRoot, VERCEL_EVE_AGENT_SUMMARY_OUTPUT_PATH);
 
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(summary, null, 2)}\n`);

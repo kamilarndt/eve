@@ -15,6 +15,8 @@ import {
 } from "#internal/workflow-bundle/workflow-builders.js";
 import { WORKFLOW_STEP_EXTERNAL_PACKAGES } from "#internal/workflow-bundle/vercel-workflow-output.js";
 
+export { atomicWriteFile } from "#internal/application/atomic-write.js";
+
 export const WORKFLOW_VIRTUAL_ENTRY_ID = "\0eve-workflow-entry";
 
 export interface WorkflowBundleBuilderOptions {
@@ -308,7 +310,7 @@ export async function bundleWorkflowStepRegistrations(input: {
   projectRoot: string;
   tsconfigPath?: string;
   workingDir: string;
-}): Promise<void> {
+}): Promise<WorkflowManifest> {
   const stepFiles = [...input.discoveredEntries.discoveredSteps].sort();
   const stepFileSet = new Set(stepFiles);
   const serdeOnlyFiles = [...input.discoveredEntries.discoveredSerdeFiles]
@@ -359,6 +361,7 @@ export async function bundleWorkflowStepRegistrations(input: {
   });
   const chunk = getSingleRolldownChunk(output, `step registrations bundle for "${input.outfile}"`);
   await writeWorkflowBundleAtomically(input.outfile, chunk.code);
+  return manifest;
 }
 
 function isWorkflowStepExternalPackage(source: string): boolean {
@@ -549,22 +552,4 @@ function createManifestRelativeFilepath(workingDir: string, absolutePath: string
 
 function isJavaScriptLikePath(path: string): boolean {
   return /\.(?:[cm]?[jt]sx?)$/.test(path);
-}
-
-/*
- * Some generated workflow artifacts (notably `workflows.mjs`) are read by
- * Nitro's Rolldown bundler concurrently with rebuilds during `eve dev`. A
- * plain `writeFile` truncates the target first and streams bytes, so a
- * reader can observe an empty or partial module mid-write and report
- * spurious "missing export" errors. Writing to a sibling temp file and
- * renaming relies on POSIX `rename` atomicity so readers always see
- * either the old or the new contents.
- */
-export async function atomicWriteFile(
-  targetPath: string,
-  contents: string | Buffer | Uint8Array,
-): Promise<void> {
-  const tmpPath = `${targetPath}.tmp-${process.pid}-${Date.now().toString(36)}`;
-  await writeFile(tmpPath, contents);
-  await rename(tmpPath, targetPath);
 }

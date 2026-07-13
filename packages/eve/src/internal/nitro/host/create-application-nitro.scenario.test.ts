@@ -118,6 +118,7 @@ function createPreparedHost(): PreparedApplicationHost {
 
   return {
     appRoot,
+    artifactsRoot: `${appRoot}/.eve`,
     compileResult: {
       diagnostics: [],
       manifest: {
@@ -135,9 +136,12 @@ function createPreparedHost(): PreparedApplicationHost {
       },
     } as unknown as PreparedApplicationHost["compileResult"],
     compiledArtifacts: {
-      bootstrapPath: `${appRoot}/.eve/bootstrap.mjs`,
-      workflowWorldPluginPath: `${appRoot}/.eve/workflow-world.mjs`,
+      bootstrapPath: `${appRoot}/.eve/host/compiled-artifacts-bootstrap.mjs`,
+      workflowWorldPluginPath: `${appRoot}/.eve/host/compiled-artifacts-workflow-world.mjs`,
     } as PreparedApplicationHost["compiledArtifacts"],
+    hostArtifactsDir: `${appRoot}/.eve/host`,
+    nitroBuildDir: `${appRoot}/.eve/nitro`,
+    nitroOutputDir: `${appRoot}/.eve/nitro-output`,
     scheduleRegistrations: [],
     schedules: [],
     workflowBuildDir: `${appRoot}/.eve/nitro/workflow`,
@@ -298,10 +302,24 @@ describe("createApplicationNitro", () => {
 
     expect(createNitroMock).toHaveBeenCalledTimes(1);
     expect(createNitroMock.mock.calls[0]?.[0]).toMatchObject({
+      rolldownConfig: {
+        watch: {
+          exclude: expect.arrayContaining([expect.any(RegExp)]),
+        },
+      },
       watchOptions: {
         ignored: [preparedHost.appRoot, join(preparedHost.appRoot, "**")],
       },
     });
+
+    const exclusions = createNitroMock.mock.calls[0]?.[0].rolldownConfig.watch.exclude as RegExp[];
+    const isExcluded = (path: string) => exclusions.some((pattern) => pattern.test(path));
+
+    expect(isExcluded(preparedHost.compiledArtifacts.bootstrapPath)).toBe(true);
+    expect(isExcluded(join(preparedHost.workflowBuildDir, "workflows.mjs"))).toBe(true);
+    expect(isExcluded(join(preparedHost.appRoot, ".eve", "nitro", "workflow", "steps.mjs"))).toBe(
+      true,
+    );
   });
 
   it("sets the eve framework version on Vercel app-surface build output config", async () => {
@@ -382,9 +400,13 @@ describe("createApplicationNitro", () => {
 
       const preparedHost = createPreparedHost();
       preparedHost.appRoot = tempRoot;
+      preparedHost.artifactsRoot = join(tempRoot, ".eve");
       preparedHost.compileResult.project.appRoot = tempRoot;
       preparedHost.compileResult.project.agentRoot = join(tempRoot, "agent");
       const nitroBuildDir = resolveNitroBuildDirectory(tempRoot);
+      preparedHost.hostArtifactsDir = join(tempRoot, ".eve", "host");
+      preparedHost.nitroBuildDir = nitroBuildDir;
+      preparedHost.nitroOutputDir = join(tempRoot, ".eve", "nitro-output");
       const staleBuildOutputPath = join(nitroBuildDir, "stale-build-output.txt");
 
       await mkdir(nitroBuildDir, { recursive: true });

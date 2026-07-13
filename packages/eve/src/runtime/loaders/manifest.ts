@@ -38,8 +38,10 @@ export async function loadCompiledManifest(
 ): Promise<CompiledAgentManifest> {
   const manifestPath =
     input.compiledArtifactsSource.kind === "disk"
-      ? resolveRuntimeCompilerArtifactPaths(input.compiledArtifactsSource.appRoot)
-          .compiledManifestPath
+      ? resolveRuntimeCompilerArtifactPaths(
+          input.compiledArtifactsSource.appRoot,
+          input.compiledArtifactsSource.artifactsRoot,
+        ).compiledManifestPath
       : undefined;
 
   if (manifestPath !== undefined) {

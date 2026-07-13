@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 
 import type { DiscoverDiagnostic, DiscoverDiagnosticsSummary } from "#discover/diagnostics.js";
@@ -15,6 +15,7 @@ import type { CompiledAgentManifest } from "#compiler/manifest.js";
 import { createCompiledModuleMapSource } from "#compiler/module-map.js";
 import { compileAgentManifest } from "#compiler/normalize-manifest.js";
 import { materializeWorkspaceResources } from "#compiler/workspace-resources.js";
+import { atomicWriteFiles } from "#internal/application/atomic-write.js";
 
 /**
  * Stable diagnostics artifact kind emitted by the compiler.
@@ -96,6 +97,7 @@ export interface CompileMetadata {
  */
 interface WriteCompilerArtifactsInput {
   appRoot: string;
+  artifactsRoot?: string;
   diagnostics: readonly DiscoverDiagnostic[];
   manifest: AgentSourceManifest;
 }
@@ -112,12 +114,17 @@ interface WriteCompilerArtifactsResult {
 }
 
 /**
- * Resolves the compiler-owned artifact paths for one application root.
+ * Resolves compiler-owned artifact paths under the app's stable `.eve` root
+ * or an invocation-owned artifact root supplied by a build.
  */
-export function resolveCompilerArtifactPaths(appRoot: string): CompilerArtifactPaths {
+export function resolveCompilerArtifactPaths(
+  appRoot: string,
+  artifactsRoot: string = join(resolve(appRoot), ".eve"),
+): CompilerArtifactPaths {
   const resolvedAppRoot = resolve(appRoot);
-  const discoveryDirectoryPath = join(resolvedAppRoot, ".eve", "discovery");
-  const compileDirectoryPath = join(resolvedAppRoot, ".eve", "compile");
+  const resolvedArtifactsRoot = resolve(artifactsRoot);
+  const discoveryDirectoryPath = join(resolvedArtifactsRoot, "discovery");
+  const compileDirectoryPath = join(resolvedArtifactsRoot, "compile");
 
   return {
     appRoot: resolvedAppRoot,
@@ -201,7 +208,7 @@ export function createCompileMetadata(input: {
 export async function writeCompilerArtifacts(
   input: WriteCompilerArtifactsInput,
 ): Promise<WriteCompilerArtifactsResult> {
-  const paths = resolveCompilerArtifactPaths(input.appRoot);
+  const paths = resolveCompilerArtifactPaths(input.appRoot, input.artifactsRoot);
   const diagnosticsArtifact = createDiscoveryDiagnosticsArtifact(input.diagnostics);
   const compiledManifest = await materializeWorkspaceResources({
     compileDirectoryPath: paths.compileDirectoryPath,
@@ -234,13 +241,16 @@ export async function writeCompilerArtifacts(
   await mkdir(paths.compileDirectoryPath, {
     recursive: true,
   });
-  await Promise.all([
-    writeFile(paths.compiledManifestPath, compiledManifestJson),
-    writeFile(paths.diagnosticsPath, diagnosticsArtifactJson),
-    writeFile(paths.discoveryManifestPath, discoveryManifestJson),
-    writeFile(paths.channelInstrumentationTypesPath, channelInstrumentationTypesSource),
-    writeFile(paths.moduleMapPath, moduleMapSource),
-    writeFile(paths.compileMetadataPath, metadataJson),
+  await atomicWriteFiles([
+    { contents: compiledManifestJson, path: paths.compiledManifestPath },
+    { contents: diagnosticsArtifactJson, path: paths.diagnosticsPath },
+    { contents: discoveryManifestJson, path: paths.discoveryManifestPath },
+    {
+      contents: channelInstrumentationTypesSource,
+      path: paths.channelInstrumentationTypesPath,
+    },
+    { contents: moduleMapSource, path: paths.moduleMapPath },
+    { contents: metadataJson, path: paths.compileMetadataPath },
   ]);
 
   return {

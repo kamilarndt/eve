@@ -35,7 +35,10 @@ import {
   buildWithNitroRolldown,
   getSingleRolldownChunk,
 } from "#internal/bundler/nitro-rolldown.js";
-import { writeNitroStepEntrypoint } from "#internal/workflow-bundle/nitro-step-entry.js";
+import {
+  writeNitroWorkflowStepRegistrations,
+  writeWorkflowStepRegistrations,
+} from "#internal/workflow-bundle/write-step-registrations.js";
 import {
   copyNitroFunctionDirectory,
   createWorkflowFunctionEnvironment,
@@ -126,23 +129,24 @@ export class WorkflowBundleBuilder {
       tsconfigPath,
     });
     const stepsOutfile = join(this.#outDir, "steps.mjs");
-    const stepsManifest = await writeNitroStepEntrypoint({
+    const stepsManifest = await writeWorkflowStepRegistrations({
       builtinsPath: resolveWorkflowModulePath("workflow/internal/builtins"),
       discoveredEntries,
       outfile: stepsOutfile,
-      preferAbsoluteFileImports: true,
       projectRoot: this.config.projectRoot ?? this.config.workingDir,
+      watch: this.config.watch,
       workingDir: this.config.workingDir,
     });
     const nitroStepOutfile = options.nitroStepOutfile;
 
     if (nitroStepOutfile !== undefined && nitroStepOutfile !== stepsOutfile) {
-      await writeNitroStepEntrypoint({
+      await writeNitroWorkflowStepRegistrations({
         builtinsPath: resolveWorkflowModulePath("workflow/internal/builtins"),
         discoveredEntries,
         outfile: nitroStepOutfile,
-        preferAbsoluteFileImports: true,
         projectRoot: this.config.projectRoot ?? this.config.workingDir,
+        sourceOutfile: stepsOutfile,
+        watch: this.config.watch,
         workingDir: this.config.workingDir,
       });
     }

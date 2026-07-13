@@ -82,8 +82,10 @@ export async function loadCompileMetadata(
 ): Promise<CompileMetadata | null> {
   const metadataPath =
     input.compiledArtifactsSource.kind === "disk"
-      ? resolveRuntimeCompilerArtifactPaths(input.compiledArtifactsSource.appRoot)
-          .compileMetadataPath
+      ? resolveRuntimeCompilerArtifactPaths(
+          input.compiledArtifactsSource.appRoot,
+          input.compiledArtifactsSource.artifactsRoot,
+        ).compileMetadataPath
       : undefined;
 
   if (metadataPath !== undefined) {

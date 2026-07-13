@@ -10,8 +10,10 @@ import { resolvePackageSourceFilePath } from "#internal/application/package.js";
  */
 export function createAuthoredSourceRuntimeCompiledArtifactsSource(
   appRoot: string,
+  options: { readonly artifactsRoot?: string } = {},
 ): RuntimeDiskCompiledArtifactsSource {
   return createDiskRuntimeCompiledArtifactsSource(appRoot, {
+    artifactsRoot: options.artifactsRoot,
     moduleMapLoaderPath: resolvePackageSourceFilePath("src/internal/authored-module-map-loader.ts"),
   });
 }

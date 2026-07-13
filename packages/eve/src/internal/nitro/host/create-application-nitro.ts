@@ -15,7 +15,6 @@ import {
   prepareEveVersionedCacheDirectory,
   writeEveVersionedCacheMetadata,
 } from "#internal/application/cache-metadata.js";
-import { resolveNitroBuildDirectory } from "#internal/application/paths.js";
 import {
   createNitroArtifactsConfig,
   type NitroArtifactsConfigInput,
@@ -26,6 +25,8 @@ import { configureNitroRoutes } from "#internal/nitro/host/configure-nitro-route
 import { applyEveCronHandlerRoute } from "#internal/nitro/host/cron-handler-route.js";
 import { createNitroBundlerConfig } from "#internal/nitro/host/nitro-bundler-config.js";
 import { captureDevLiveVirtualModules } from "#internal/nitro/host/dev-live-virtual-modules.js";
+import { createDevelopmentRolldownWatchExclusions } from "#internal/nitro/host/dev-rolldown-watch.js";
+import { resolveDevelopmentSourceSnapshotWatchPaths } from "#internal/nitro/dev-runtime-source-snapshot.js";
 import {
   createOptionalEngineDependencyPlugin,
   OPTIONAL_ENGINE_PACKAGES_BY_BACKEND_NAME,
@@ -705,7 +706,24 @@ export async function createApplicationNitro(
     preparedHost,
     configuredOptionalEnginePackages,
   );
-  const nitroBuildDir = resolveNitroBuildDirectory(preparedHost.appRoot, surface);
+  const nitroBuildDir =
+    surface === "all" ? preparedHost.nitroBuildDir : join(preparedHost.nitroBuildDir, surface);
+  let developmentRolldownWatchExclusions: RegExp[] | undefined;
+  if (dev) {
+    const authoredWatchPaths = await resolveDevelopmentSourceSnapshotWatchPaths(
+      preparedHost.appRoot,
+    );
+    developmentRolldownWatchExclusions = createDevelopmentRolldownWatchExclusions(
+      [
+        ...authoredWatchPaths,
+        preparedHost.hostArtifactsDir,
+        join(nitroBuildDir, "workflow"),
+        preparedHost.workflowBuildDir,
+      ],
+      preparedHost.appRoot,
+    );
+    nitroRolldownConfig.watch = { exclude: developmentRolldownWatchExclusions };
+  }
   const websocketEnabled =
     includesApplicationSurface(surface) &&
     (dev || manifestHasWebSocketChannel(preparedHost.compileResult.manifest));
@@ -767,6 +785,24 @@ export async function createApplicationNitro(
       : undefined,
   );
   await writeEveVersionedCacheMetadata(nitroBuildDir);
+
+  if (developmentRolldownWatchExclusions !== undefined) {
+    nitro.hooks.hook("rollup:before", (_nitro, config) => {
+      const watchConfig = config.watch === false ? {} : (config.watch ?? {});
+      const existingExclude = watchConfig.exclude;
+      config.watch = {
+        ...watchConfig,
+        exclude: [
+          ...(Array.isArray(existingExclude)
+            ? existingExclude
+            : existingExclude === undefined
+              ? []
+              : [existingExclude]),
+          ...developmentRolldownWatchExclusions,
+        ],
+      };
+    });
+  }
 
   addNitroRoutingImportSpecifierPlugin(nitro);
   if (dev) {

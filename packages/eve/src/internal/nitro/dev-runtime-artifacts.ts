@@ -1,5 +1,15 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { existsSync, readFileSync, type Dirent } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 
@@ -182,10 +192,12 @@ export async function pruneDevelopmentRuntimeArtifactsSnapshots(input: {
   const pointer = readDevelopmentRuntimeArtifactsPointer(
     resolveDevelopmentRuntimeArtifactsPointerPath(input.appRoot),
   );
-  const protectedPaths = [
-    ...collectProtectedSnapshotPaths(pointer),
-    ...(await collectWorkflowDataSnapshotPaths({ appRoot: input.appRoot, snapshotsDirectory })),
-  ];
+  const protectedPaths = await Promise.all(
+    [
+      ...collectProtectedSnapshotPaths(pointer),
+      ...(await collectWorkflowDataSnapshotPaths({ appRoot: input.appRoot, snapshotsDirectory })),
+    ].map(canonicalizeExistingPath),
+  );
   const now = input.now ?? Date.now();
   const recentWindowMs = input.recentWindowMs ?? DEV_RUNTIME_SNAPSHOT_RECENT_WINDOW_MS;
   const retainCount = input.retainCount ?? DEV_RUNTIME_SNAPSHOT_RETAIN_COUNT;
@@ -207,6 +219,7 @@ export async function pruneDevelopmentRuntimeArtifactsSnapshots(input: {
         .map(async (entry) => {
           const path = join(snapshotsDirectory, entry.name);
           return {
+            canonicalPath: await canonicalizeExistingPath(path),
             path,
             mtimeMs: (await stat(path)).mtimeMs,
           };
@@ -219,7 +232,7 @@ export async function pruneDevelopmentRuntimeArtifactsSnapshots(input: {
       if (
         index < retainCount ||
         now - snapshot.mtimeMs <= recentWindowMs ||
-        protectedPaths.some((protectedPath) => pathsOverlap(snapshot.path, protectedPath))
+        protectedPaths.some((protectedPath) => pathsOverlap(snapshot.canonicalPath, protectedPath))
       ) {
         return;
       }
@@ -227,6 +240,17 @@ export async function pruneDevelopmentRuntimeArtifactsSnapshots(input: {
       await rm(snapshot.path, { force: true, recursive: true });
     }),
   );
+}
+
+async function canonicalizeExistingPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+      return resolve(path);
+    }
+    throw error;
+  }
 }
 
 function readDevelopmentRuntimeArtifactsPointer(

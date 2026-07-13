@@ -280,7 +280,7 @@ export async function configureNitroRoutes(
     const builder = new WorkflowBundleBuilder({
       agentName: preparedHost.compileResult.manifest.config.name,
       appRoot: preparedHost.appRoot,
-      compiledArtifactsBootstrapPath: preparedHost.compiledArtifacts.bootstrapPath,
+      compiledArtifactsBootstrapPath: preparedHost.compiledArtifacts.workflowBootstrapPath,
       outDir: preparedHost.workflowBuildDir,
       rootDir: packageRoot,
       watch: nitro.options.dev,

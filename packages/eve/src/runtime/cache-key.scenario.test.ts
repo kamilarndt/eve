@@ -82,13 +82,34 @@ describe("resolveRuntimeCompiledArtifactsVersionedCacheKey", () => {
       ),
     ).resolves.toEqual(`disk:${appRoot}:authored-source:${moduleMapLoaderPath}`);
   });
+
+  it("loads and fingerprints compiler metadata from an isolated artifact root", async () => {
+    const appRoot = await createScratchDirectory("eve-cache-key-isolated-");
+    const artifactsRoot = `${appRoot}/.eve/builds/test/artifacts`;
+    await writeCompileMetadata({
+      appRoot,
+      artifactsRoot,
+      sourceGraphHash: "isolated-source-graph-hash",
+    });
+
+    const key = await resolveRuntimeCompiledArtifactsVersionedCacheKey(
+      createDiskRuntimeCompiledArtifactsSource(appRoot, { artifactsRoot }),
+    );
+
+    expect(key).toContain(`artifacts:${artifactsRoot}`);
+    expect(key).toContain("isolated-source-graph-hash");
+  });
 });
 
 async function writeCompileMetadata(input: {
   appRoot: string;
+  artifactsRoot?: string;
   sourceGraphHash: string;
 }): Promise<string> {
-  const { compileMetadataPath } = resolveRuntimeCompilerArtifactPaths(input.appRoot);
+  const { compileMetadataPath } = resolveRuntimeCompilerArtifactPaths(
+    input.appRoot,
+    input.artifactsRoot,
+  );
 
   await mkdir(dirname(compileMetadataPath), {
     recursive: true,

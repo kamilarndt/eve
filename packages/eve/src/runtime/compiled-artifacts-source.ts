@@ -18,6 +18,8 @@ export interface RuntimeBundledCompiledArtifactsSource {
  */
 export interface RuntimeDiskCompiledArtifactsSource {
   readonly appRoot: string;
+  /** Alternate root containing `compile/` and `discovery/` artifacts. */
+  readonly artifactsRoot?: string;
   readonly kind: "disk";
   /**
    * Native filesystem path to the package-owned authored-source module map
@@ -50,13 +52,19 @@ export function createBundledRuntimeCompiledArtifactsSource(): RuntimeBundledCom
 export function createDiskRuntimeCompiledArtifactsSource(
   appRoot: string,
   options: {
+    readonly artifactsRoot?: string;
     readonly moduleMapLoaderPath?: string;
     readonly sandboxAppRoot?: string;
   } = {},
 ): RuntimeDiskCompiledArtifactsSource {
-  if (options.moduleMapLoaderPath !== undefined || options.sandboxAppRoot !== undefined) {
+  if (
+    options.artifactsRoot !== undefined ||
+    options.moduleMapLoaderPath !== undefined ||
+    options.sandboxAppRoot !== undefined
+  ) {
     return {
       appRoot,
+      artifactsRoot: options.artifactsRoot,
       kind: "disk",
       moduleMapLoaderPath: options.moduleMapLoaderPath,
       sandboxAppRoot: options.sandboxAppRoot,
@@ -98,8 +106,12 @@ export function getRuntimeCompiledArtifactsCacheKey(
   }
 
   if (source.moduleMapLoaderPath !== undefined) {
-    return `disk:${source.appRoot}:authored-source:${source.moduleMapLoaderPath}`;
+    return source.artifactsRoot === undefined
+      ? `disk:${source.appRoot}:authored-source:${source.moduleMapLoaderPath}`
+      : `disk:${source.appRoot}:artifacts:${source.artifactsRoot}:authored-source:${source.moduleMapLoaderPath}`;
   }
 
-  return `disk:${source.appRoot}`;
+  return source.artifactsRoot === undefined
+    ? `disk:${source.appRoot}`
+    : `disk:${source.appRoot}:artifacts:${source.artifactsRoot}`;
 }

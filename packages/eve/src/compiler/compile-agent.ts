@@ -16,6 +16,8 @@ import type { CompiledAgentManifest } from "#compiler/manifest.js";
  * discovery artifacts.
  */
 export interface CompileAgentInput {
+  /** Alternate root for compiler artifacts owned by an isolated build. */
+  artifactsRoot?: string;
   /**
    * Optional {@link ProjectSource} used for discovery reads. Defaults to a
    * disk-backed source so production callers keep their current behaviour.
@@ -65,6 +67,7 @@ export async function compileAgent(input: CompileAgentInput = {}): Promise<Compi
   const discoveryResult = await discoverAgent({ ...project, source });
   const writtenArtifacts = await writeCompilerArtifacts({
     appRoot: project.appRoot,
+    artifactsRoot: input.artifactsRoot,
     diagnostics: discoveryResult.diagnostics,
     manifest: discoveryResult.manifest,
   });

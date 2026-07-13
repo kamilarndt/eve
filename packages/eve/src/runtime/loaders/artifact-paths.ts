@@ -16,10 +16,14 @@ export interface RuntimeCompilerArtifactPaths {
  * Resolves the stable eve artifact paths for one application root without
  * depending on Node path helpers.
  */
-export function resolveRuntimeCompilerArtifactPaths(appRoot: string): RuntimeCompilerArtifactPaths {
+export function resolveRuntimeCompilerArtifactPaths(
+  appRoot: string,
+  artifactsRoot: string = `${normalizeFilesystemPath(appRoot)}/.eve`,
+): RuntimeCompilerArtifactPaths {
   const normalizedAppRoot = normalizeFilesystemPath(appRoot);
-  const discoveryDirectoryPath = `${normalizedAppRoot}/.eve/discovery`;
-  const compileDirectoryPath = `${normalizedAppRoot}/.eve/compile`;
+  const normalizedArtifactsRoot = normalizeFilesystemPath(artifactsRoot);
+  const discoveryDirectoryPath = `${normalizedArtifactsRoot}/discovery`;
+  const compileDirectoryPath = `${normalizedArtifactsRoot}/compile`;
 
   return {
     appRoot: normalizedAppRoot,
