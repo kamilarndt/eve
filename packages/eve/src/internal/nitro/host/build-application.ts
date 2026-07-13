@@ -21,7 +21,7 @@ import { normalizeEveVercelFunctionOutput } from "#internal/workflow-bundle/verc
 import { createApplicationNitro } from "#internal/nitro/host/create-application-nitro.js";
 import { emitVercelAgentSummary } from "#internal/nitro/host/build-vercel-agent-summary.js";
 import { tryReadExtensionBuildConfig } from "#internal/nitro/host/build-extension.js";
-import { prepareApplicationHost } from "#internal/nitro/host/prepare-application-host.js";
+import { prepareProductionApplicationHost } from "#internal/nitro/host/prepare-application-host.js";
 import { runVercelBuildPrewarm } from "#internal/nitro/host/vercel-build-prewarm.js";
 import type { NitroBuildSurface, PreparedApplicationHost } from "#internal/nitro/host/types.js";
 import { findClosestVercelOutputDirectory } from "#shared/vercel-output-directory.js";
@@ -322,7 +322,7 @@ export async function buildApplication(rootDir: string): Promise<string> {
 }
 
 async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace): Promise<string> {
-  const preparedHost = await prepareApplicationHost(workspace.appRoot, { workspace });
+  const preparedHost = await prepareProductionApplicationHost(workspace);
 
   if (!process.env.VERCEL) {
     const nitro = await createApplicationNitro(preparedHost, false, {
@@ -334,7 +334,6 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
       await buildNitroOutput(nitro);
       await emitVercelAgentSummary({
         manifest: preparedHost.compileResult.manifest,
-        appRoot: preparedHost.appRoot,
         outputPath: workspace.summaryPath,
       });
       await stageProductionStartArtifacts({
@@ -366,7 +365,6 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
     // function output that we would never deploy.
     await runVercelBuildPrewarm({
       appRoot: preparedHost.appRoot,
-      compileDirectoryPath: preparedHost.compileResult.paths.compileDirectoryPath,
       compiledArtifactsSource: createDiskRuntimeCompiledArtifactsSource(workspace.compilerAppRoot, {
         moduleMapLoaderPath: resolvePackageSourceFilePath(
           "src/internal/authored-module-map-loader.ts",
@@ -393,7 +391,6 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
     }
     await emitVercelAgentSummary({
       manifest: preparedHost.compileResult.manifest,
-      appRoot: preparedHost.appRoot,
       outputPath: workspace.summaryPath,
     });
   } finally {
