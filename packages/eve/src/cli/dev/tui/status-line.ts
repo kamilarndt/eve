@@ -14,6 +14,11 @@ export interface StatusLineInput {
   /** Preformatted token-flow segment (formatTokenFlow output), e.g. `↑ 394.4K ↓ 4.3K`. */
   tokens?: string;
   /**
+   * Currently executing tool call name, e.g. "get_weather".
+   * Shown dimmed in the status line while the tool is running.
+   */
+  currentTool?: string;
+  /**
    * Transient dev-TUI log-display mode shown after a Ctrl+L cycle, e.g.
    * `sandbox`. Rendered as a prominent leading `logs: <mode>` segment that
    * survives width degradation and can stand alone; absent once the hint times
@@ -74,6 +79,8 @@ export function buildStatusLine(input: StatusLineInput): string | undefined {
   const serverPort = renderServerPort(input);
   const model = renderModel(input);
   const tokens = input.tokens === undefined ? undefined : c.dim(input.tokens);
+  const currentTool =
+    input.currentTool === undefined ? undefined : c.cyan(`⚡ ${input.currentTool}`);
   const pending = input.vercel?.pendingDeploy ? c.yellow("/deploy pending") : undefined;
   const remote = input.remote === undefined ? undefined : formatRemoteStatus(input.remote, theme);
   const endpoint = renderEndpoint(input);
@@ -94,8 +101,9 @@ export function buildStatusLine(input: StatusLineInput): string | undefined {
   // leads every variant and gets the final stand-alone fallback. Without one,
   // the logs hint retains its previous priority.
   const variants = [
-    compose(leading, [logLevel, model, tokens, endpoint, pending]),
-    compose(leading, [logLevel, model, tokens, pending]),
+    compose(leading, [logLevel, model, currentTool, tokens, endpoint, pending]),
+    compose(leading, [logLevel, model, currentTool, tokens, pending]),
+    compose(leading, [logLevel, currentTool, tokens, pending]),
     compose(leading, [logLevel, tokens, pending]),
     compose(leading, [logLevel]),
     compose(badge, [logLevel]),

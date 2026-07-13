@@ -18,6 +18,8 @@ import { promptCommandsFor } from "./prompt-commands.js";
 import { formatRemoteAuthChallengeMessage } from "./remote-auth-result.js";
 import { probeMcpConnection } from "./mcp-connection-status.js";
 import { EveTUIRunner, type EveTUIRunnerOptions } from "./runner.js";
+import { TerminalRenderer } from "./terminal-renderer.js";
+import { InspectorPanelOverlay } from "./inspector-panel.js";
 import { remoteHost, type DevelopmentTuiTarget, type RemoteDevelopmentTarget } from "./target.js";
 import type { TuiDisplayOptions } from "./types.js";
 
@@ -118,6 +120,23 @@ export async function runDevelopmentTui(input: RunDevelopmentTuiInput): Promise<
   }
   if (initialInput !== undefined) options.initialInput = initialInput;
   if (onBootProgress !== undefined) options.onBootProgress = onBootProgress;
+
+  // Wrap TerminalRenderer with InspectorPanelOverlay to intercept
+  // tool-call events and render the inspector panel.
+  const terminalRenderer = new TerminalRenderer({
+    tools: options.tools,
+    reasoning: options.reasoning,
+    subagents: options.subagents,
+    connectionAuth: options.connectionAuth,
+    assistantResponseStats: options.assistantResponseStats,
+    contextSize: options.contextSize,
+    logs: options.logs,
+    availablePromptCommands: options.availablePromptCommands,
+    input: options.userInput,
+    output: options.screen,
+  });
+  const overlay = new InspectorPanelOverlay(terminalRenderer, options.screen ?? process.stdout, {});
+  options.renderer = overlay;
 
   await new EveTUIRunner(options).run();
 }

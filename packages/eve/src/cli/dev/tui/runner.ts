@@ -40,6 +40,20 @@ import {
   isInterruptedError,
 } from "./errors.js";
 
+// ── Session tracking ─────────────────────────────────────────
+
+export interface SessionRecord {
+  id: string | undefined;
+  index: number;
+  startedAt: Date;
+  endedAt?: Date;
+  messageCount: number;
+  preview?: string;
+  status: "active" | "completed" | "failed";
+}
+
+const SESSION_PREVIEW_MAX = 80;
+
 import { pickAgentHeaderTip } from "./agent-header.js";
 import { probeAgentInfo } from "./agent-info-probe.js";
 import { parseLogDisplayMode } from "./log-display-mode.js";
@@ -490,6 +504,11 @@ export class EveTUIRunner {
   #sessionFailed = false;
   #unsubscribeDevelopmentSandboxLogs?: () => void;
 
+  /** Session history for this TUI session. */
+  readonly #sessionHistory: SessionRecord[] = [];
+  /** Monotonically increasing session index for display. */
+  #sessionIndex = 0;
+
   constructor(options: EveTUIRunnerOptions) {
     this.#session = options.session;
     if (options.client !== undefined) this.#client = options.client;
@@ -546,6 +565,16 @@ export class EveTUIRunner {
         serverUrl: options.serverUrl,
       });
     }
+
+    // Track the initial session.
+    this.#sessionIndex++;
+    this.#sessionHistory.push({
+      id: options.session.state.sessionId,
+      index: this.#sessionIndex,
+      startedAt: new Date(),
+      messageCount: 0,
+      status: "active",
+    });
   }
 
   /**
@@ -734,6 +763,14 @@ export class EveTUIRunner {
           continue;
         }
 
+        if (command?.type === "sessions") {
+          this.#renderSessionHistory();
+          pendingInputResponses = undefined;
+          streamWithoutPrompt = false;
+          prompt = undefined;
+          continue;
+        }
+
         if (command?.type === "extension") {
           try {
             await this.#executeExtensionCommand(command, title, { trigger: "command" });
@@ -748,6 +785,15 @@ export class EveTUIRunner {
         }
 
         hasRunTurn = true;
+
+        // Track message count and first prompt preview for the active session.
+        const activeSession = this.#sessionHistory.at(-1);
+        if (activeSession?.status === "active" && prompt) {
+          activeSession.messageCount++;
+          if (!activeSession.preview) {
+            activeSession.preview = prompt.replace(/\n/g, " ").slice(0, SESSION_PREVIEW_MAX);
+          }
+        }
       }
 
       let result = await this.#streamTurn({
@@ -830,6 +876,12 @@ export class EveTUIRunner {
 
           if (result.turnState && result.turnState.boundaryEvent === undefined) {
             this.#sessionFailed = true;
+            // Mark the session record as failed.
+            const active = this.#sessionHistory.at(-1);
+            if (active?.status === "active") {
+              active.status = "failed";
+              active.endedAt = new Date();
+            }
           }
           break;
         }
@@ -870,6 +922,14 @@ export class EveTUIRunner {
    * In-flight subagent child-session streams are aborted.
    */
   #startNewSession(): void {
+    // Finalise the current session record before creating a new one.
+    const active = this.#sessionHistory.at(-1);
+    if (active?.status === "active") {
+      active.endedAt = new Date();
+      active.status = "completed";
+      active.id ??= this.#session.state.sessionId;
+    }
+
     this.#abortSubagentChildPumps();
     this.#subagentRuns.clear();
     this.#pendingInputRequests.clear();
@@ -881,6 +941,42 @@ export class EveTUIRunner {
       this.#session = this.#client.session();
     }
     this.#runtimeArtifacts?.clear();
+
+    // Start tracking the new session.
+    this.#sessionIndex++;
+    this.#sessionHistory.push({
+      id: this.#session.state.sessionId,
+      index: this.#sessionIndex,
+      startedAt: new Date(),
+      messageCount: 0,
+      status: "active",
+    });
+  }
+
+  /** Render the session history as a notice block. */
+  #renderSessionHistory(): void {
+    const lines: string[] = [];
+    const active =
+      this.#sessionHistory.at(-1)?.status === "active" ? this.#sessionHistory.at(-1)! : null;
+
+    for (const s of this.#sessionHistory) {
+      const isActive = s === active;
+      const statusIcon = isActive ? "●" : s.status === "failed" ? "✗" : "✓";
+      const time = s.startedAt.toLocaleTimeString();
+      const msgs = s.messageCount;
+      const id = s.id ? s.id.slice(0, 8) : "—";
+      const preview = s.preview ? s.preview.slice(0, SESSION_PREVIEW_MAX) : "";
+      lines.push(
+        `  ${statusIcon} #${s.index} ${time} ${id} · ${msgs} msg${msgs !== 1 ? "s" : ""}${preview ? ` · ${preview}${preview.length >= SESSION_PREVIEW_MAX ? "…" : ""}` : ""}`,
+      );
+    }
+
+    const summary =
+      lines.length > 0
+        ? `Session history (${this.#sessionHistory.length}):\n${lines.join("\n")}`
+        : "No sessions yet.";
+
+    this.#renderer.renderNotice?.(summary);
   }
 
   #abortSubagentChildPumps(): void {

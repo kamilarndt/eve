@@ -13,6 +13,7 @@ export type PromptCommand =
   | { type: "new" }
   | { type: "exit" }
   | { type: "help" }
+  | { type: "sessions" }
   | { type: "loglevel"; argument: string }
   | { type: "extension"; name: PromptCommandExtensionName; argument: string };
 
@@ -120,6 +121,14 @@ const PROMPT_COMMAND_DEFINITIONS = [
     takesArgument: false,
     build: () => ({ type: "extension", name: "deploy", argument: "" }),
     targets: ["local"],
+  },
+  {
+    name: "sessions",
+    aliases: [],
+    description: "Show session history for this TUI session",
+    takesArgument: false,
+    build: () => ({ type: "sessions" }),
+    targets: ["local", "remote"],
   },
   {
     name: "exit",

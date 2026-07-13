@@ -342,6 +342,8 @@ export class TerminalRenderer implements AgentTUIRenderer {
   #vercelStatus?: VercelStatusSnapshot;
   /** Remote target and connection/authentication state; pushed by the runner. */
   #remoteConnection?: RemoteConnectionSnapshot;
+  /** Currently executing tool call name, shown in the status line. */
+  #currentTool?: string;
   #inputText = "";
   #inputCursor = 0;
   readonly #promptHistory = new PromptHistory();
@@ -2350,6 +2352,7 @@ export class TerminalRenderer implements AgentTUIRenderer {
 
       case "tool-call":
         if (displayModes.tools === "hidden") break;
+        this.#currentTool = event.toolName;
         this.#setStreamStatus(STATUS.executingTools);
         this.#upsertNativeTool(
           {
@@ -2404,6 +2407,7 @@ export class TerminalRenderer implements AgentTUIRenderer {
         break;
 
       case "finish":
+        this.#currentTool = undefined;
         this.#applyUsage(event.usage);
         this.#paint();
         break;
@@ -2863,6 +2867,7 @@ export class TerminalRenderer implements AgentTUIRenderer {
     }
     if (this.#vercelStatus !== undefined) input.vercel = this.#vercelStatus;
     if (this.#remoteConnection !== undefined) input.remote = this.#remoteConnection;
+    if (this.#currentTool !== undefined) input.currentTool = this.#currentTool;
     const line = buildStatusLine(input);
     if (line !== undefined) rows.push(clip(`${padding}${line}`, width));
   }
