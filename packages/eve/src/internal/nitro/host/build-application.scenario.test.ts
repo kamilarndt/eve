@@ -164,7 +164,7 @@ function createNitroStub(outputDir: string): Nitro {
 async function prepareHostBuildWorkspace(
   workspace: ApplicationBuildWorkspace,
 ): Promise<PreparedApplicationHost> {
-  await mkdir(join(workspace.compilerArtifactsRoot, "compile"), { recursive: true });
+  await mkdir(join(workspace.compiler.artifactsDir, "compile"), { recursive: true });
   return createPreparedHost(workspace.appRoot);
 }
 

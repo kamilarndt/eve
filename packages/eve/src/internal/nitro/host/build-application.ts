@@ -15,7 +15,7 @@ import {
   type ApplicationBuildWorkspace,
 } from "#internal/application/build-workspace.js";
 import { publishApplicationBuildArtifacts } from "#internal/application/output-publication.js";
-import { stageProductionStartArtifacts } from "#internal/application/production-start-artifacts.js";
+import { stageProductionCompilerArtifacts } from "#internal/application/production-compiler-artifacts.js";
 import { WorkflowBundleBuilder } from "#internal/workflow-bundle/builder.js";
 import { normalizeEveVercelFunctionOutput } from "#internal/workflow-bundle/vercel-workflow-output.js";
 import { createProductionApplicationNitro } from "#internal/nitro/host/create-application-nitro.js";
@@ -286,8 +286,8 @@ async function buildVercelNitroSurface(
   surface: Exclude<NitroBuildSurface, "all">,
 ): Promise<string> {
   const nitro = await createProductionApplicationNitro(preparedHost, {
-    buildDir: join(workspace.nitroBuildDir, surface),
-    outputDir: join(workspace.nitroOutputDir, surface),
+    buildDir: join(workspace.nitro.buildDir, surface),
+    outputDir: join(workspace.nitro.surfaceOutputDir, surface),
     surface,
   });
 
@@ -326,8 +326,8 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
 
   if (!process.env.VERCEL) {
     const nitro = await createProductionApplicationNitro(preparedHost, {
-      buildDir: workspace.nitroBuildDir,
-      outputDir: workspace.outputDir,
+      buildDir: workspace.nitro.buildDir,
+      outputDir: workspace.publication.output.stagedDir,
       surface: "all",
     });
 
@@ -335,18 +335,18 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
       await buildNitroOutput(nitro);
       await emitVercelAgentSummary({
         manifest: preparedHost.compileResult.manifest,
-        outputPath: workspace.summaryPath,
+        outputPath: workspace.publication.summary.stagedPath,
       });
-      await stageProductionStartArtifacts({
-        compilerArtifactsRoot: workspace.compilerArtifactsRoot,
-        outputDir: workspace.outputDir,
+      await stageProductionCompilerArtifacts({
+        compilerArtifactsRoot: workspace.compiler.artifactsDir,
+        outputDir: workspace.publication.output.stagedDir,
       });
     } finally {
       await nitro.close();
     }
 
     await publishCompletedApplicationBuild(workspace);
-    return workspace.finalOutputDir;
+    return workspace.publication.output.finalDir;
   }
 
   const servicePrefix = await resolveCoDeployedEveServicePrefixForVercelFunctionOutput(
@@ -354,8 +354,8 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
     preparedHost.compileResult.project.agentRoot,
   );
   const nitro = await createProductionApplicationNitro(preparedHost, {
-    buildDir: join(workspace.nitroBuildDir, "app"),
-    outputDir: workspace.outputDir,
+    buildDir: join(workspace.nitro.buildDir, "app"),
+    outputDir: workspace.publication.output.stagedDir,
     surface: "app",
   });
 
@@ -366,12 +366,15 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
     // function output that we would never deploy.
     await runVercelBuildPrewarm({
       appRoot: preparedHost.appRoot,
-      compiledArtifactsSource: createDiskRuntimeCompiledArtifactsSource(workspace.compilerAppRoot, {
-        moduleMapLoaderPath: resolvePackageSourceFilePath(
-          "src/internal/authored-module-map-loader.ts",
-        ),
-        sandboxAppRoot: preparedHost.appRoot,
-      }),
+      compiledArtifactsSource: createDiskRuntimeCompiledArtifactsSource(
+        workspace.compiler.rootDir,
+        {
+          moduleMapLoaderPath: resolvePackageSourceFilePath(
+            "src/internal/authored-module-map-loader.ts",
+          ),
+          sandboxAppRoot: preparedHost.appRoot,
+        },
+      ),
       log(message) {
         console.log(message);
       },
@@ -382,24 +385,24 @@ async function buildApplicationInWorkspace(workspace: ApplicationBuildWorkspace)
       appRoot: preparedHost.appRoot,
       compiledArtifactsBootstrapPath: preparedHost.compiledArtifacts.bootstrapPath,
       flowNitroOutputDir,
-      outputDir: workspace.outputDir,
-      workflowBuildDir: preparedHost.workflowBuildDir,
+      outputDir: workspace.publication.output.stagedDir,
+      workflowBuildDir: workspace.workflow.buildDir,
     });
     if (servicePrefix !== undefined) {
-      await normalizeEveVercelFunctionOutput(workspace.outputDir, {
+      await normalizeEveVercelFunctionOutput(workspace.publication.output.stagedDir, {
         servicePrefix,
       });
     }
     await emitVercelAgentSummary({
       manifest: preparedHost.compileResult.manifest,
-      outputPath: workspace.summaryPath,
+      outputPath: workspace.publication.summary.stagedPath,
     });
   } finally {
     await nitro.close();
   }
 
   await publishCompletedApplicationBuild(workspace);
-  return workspace.finalOutputDir;
+  return workspace.publication.output.finalDir;
 }
 
 async function publishCompletedApplicationBuild(
@@ -407,9 +410,9 @@ async function publishCompletedApplicationBuild(
 ): Promise<void> {
   await publishApplicationBuildArtifacts({
     appRoot: workspace.appRoot,
-    finalOutputDir: workspace.finalOutputDir,
-    finalSummaryPath: workspace.finalSummaryPath,
-    stagedOutputDir: workspace.outputDir,
-    stagedSummaryPath: workspace.summaryPath,
+    finalOutputDir: workspace.publication.output.finalDir,
+    finalSummaryPath: workspace.publication.summary.finalPath,
+    stagedOutputDir: workspace.publication.output.stagedDir,
+    stagedSummaryPath: workspace.publication.summary.stagedPath,
   });
 }
